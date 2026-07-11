@@ -1,5 +1,7 @@
 # zotkit 中文速览
 
+[English](README.md) | **简体中文**
+
 **不打开 Zotero,也能管理你的文献库。**
 
 zotkit 是一个命令行工具 + Python 库,直接对接 Zotero Web API:搜索、建条目、打标签、

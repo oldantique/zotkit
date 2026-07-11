@@ -5,7 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **Headless Zotero library management — no desktop app required.**
-[中文速览 →](README.zh-CN.md)
+
+**English** | [简体中文](README.zh-CN.md)
 
 "Headless" simply means zotkit never needs the Zotero app (or any window) open: it is a
 Python library + CLI that talks straight to the
