@@ -50,7 +50,7 @@ def load_env(path: str | os.PathLike | None = None) -> dict[str, str]:
         if not p.is_file():
             continue
         env: dict[str, str] = {}
-        for line in p.read_text().splitlines():
+        for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
@@ -97,7 +97,7 @@ def load_conventions(env_dir: str | os.PathLike | None = None) -> Conventions | 
     cands.append(Path.home() / ".config" / "zotkit" / "conventions.toml")
     for p in cands:
         if p.is_file():
-            return Conventions(tomllib.loads(p.read_text()))
+            return Conventions(tomllib.loads(p.read_text(encoding="utf-8")))
     return None
 
 
@@ -375,5 +375,5 @@ class Zot:
         out = Path(out_dir or (self.home / "backups"))
         out.mkdir(parents=True, exist_ok=True)
         p = out / f"zotero_backup_v{version}.json"
-        p.write_text(json.dumps(backup, ensure_ascii=False, indent=2))
+        p.write_text(json.dumps(backup, ensure_ascii=False, indent=2), encoding="utf-8")
         return p

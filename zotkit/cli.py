@@ -76,7 +76,7 @@ def main(argv=None):
         _print_items(zot.find(a.title, a.tag, a.collection))
 
     elif a.cmd == "create":
-        data = json.load(open(a.file))
+        data = json.load(open(a.file, encoding="utf-8"))
         items = data["items"] if isinstance(data, dict) else data
         if not a.apply:
             for d in items:
@@ -89,7 +89,7 @@ def main(argv=None):
         created = zot.create_items(items, dedup=not a.no_dedup, strict_tags=not a.loose_tags)
         new = [c for c in created if c.get("key")]
         out = Path(a.file).with_suffix(".created.json")
-        json.dump(new, open(out, "w"), ensure_ascii=False, indent=2)
+        json.dump(new, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         print(f"created {len(new)} (skipped {len(created)-len(new)} dup) -> {out}")
         if any(c.get("file_path") for c in new):
             print(f"attach PDFs: zotkit attach --from {out} --all")
@@ -98,7 +98,7 @@ def main(argv=None):
         if a.key and a.pdf:
             print(zot.attach(a.key, a.pdf))
         elif a.src:
-            rows = json.load(open(a.src))
+            rows = json.load(open(a.src, encoding="utf-8"))
             done = 0
             for m in rows:
                 if not m.get("file_path") or not Path(m["file_path"]).exists():
