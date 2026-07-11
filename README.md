@@ -26,6 +26,7 @@ code* so an agent (or a tired human) can't pollute your library with inconsisten
 
 ```bash
 pipx install zotkit        # or: uv tool install zotkit / pip install zotkit
+uvx zotkit --help          # …or try it without installing anything
 ```
 
 ## Configure
