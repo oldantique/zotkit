@@ -94,6 +94,18 @@ z.backup()
 `z.z` is the underlying [pyzotero](https://github.com/urschrei/pyzotero) client for
 anything not wrapped.
 
+## Using zotkit with AI agents
+
+zotkit is designed to be driven by coding agents: dry-run defaults, code-enforced tag
+conventions, and a ready-made **Claude Code skill** in
+[`skills/zotkit/`](skills/zotkit/SKILL.md) — copy it to `~/.claude/skills/zotkit/` and
+any Claude session can search, file, and attach papers for you while respecting your
+taxonomy. (An MCP server is planned.)
+
+```bash
+mkdir -p ~/.claude/skills && cp -r skills/zotkit ~/.claude/skills/
+```
+
 ## Safety model
 
 - `create` is **dry-run by default**; `--apply` to execute.
