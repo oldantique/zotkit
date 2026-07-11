@@ -51,6 +51,7 @@ zotkit status <itemKey> read                   # replaces the status: tag
 zotkit move <itemKey> "Algorithms"             # or "Parent :: Child"; --add for extra home
 
 # safety / hygiene
+zotkit doctor                                  # validate config/API/storage
 zotkit backup
 zotkit lint field:physics topic:new-idea
 ```

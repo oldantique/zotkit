@@ -10,7 +10,8 @@ import json
 import sys
 from pathlib import Path
 
-from .core import Zot, lint_tags, load_conventions
+from . import __version__
+from .core import Zot, lint_tags, load_conventions, load_env
 
 
 def _print_items(rows):
@@ -21,9 +22,57 @@ def _print_items(rows):
     print(f"\n{len(rows)} match(es)")
 
 
+def _doctor() -> int:
+    """Validate the whole setup; each failing check explains how to fix it."""
+    import httpx
+    from urllib.parse import urlsplit
+    print(f"zotkit {__version__}")
+    try:
+        env = load_env()
+    except FileNotFoundError as e:
+        print(f"✗ config: {e}")
+        return 1
+    print(f"✓ config: {env['_env_path']}")
+    conv = load_conventions()
+    print(f"✓ conventions: {'enforced' if conv else 'none configured (tags unrestricted)'}")
+    try:
+        z = Zot()
+        access = z.z.key_info().get("access", {}).get("user", {})
+        n = z.z.count_items()
+        print(f"✓ Zotero API: library {env['ZOTERO_LIBRARY_ID']} reachable, {n} items, "
+              f"write access: {bool(access.get('write'))}")
+    except Exception as e:
+        print(f"✗ Zotero API: {e}\n  check ZOTERO_LIBRARY_ID (numeric userID) and "
+              f"ZOTERO_API_KEY at https://www.zotero.org/settings/keys")
+        return 1
+    if "WEBDAV_URL" in env:
+        base, auth = z._webdav()
+        host = urlsplit(base).netloc
+        try:
+            with httpx.Client(auth=auth, timeout=30) as c:
+                r1 = c.put(f"{base}/zotkit-doctor-probe.txt", content=b"zotkit doctor probe")
+                c.delete(f"{base}/zotkit-doctor-probe.txt")
+            if r1.status_code in (200, 201, 204):
+                print(f"✓ WebDAV: {host} writable — attachments use WebDAV")
+            else:
+                print(f"✗ WebDAV: PUT returned {r1.status_code} — check credentials and "
+                      f"that WEBDAV_URL ends with /zotero/")
+                return 1
+        except Exception as e:
+            print(f"✗ WebDAV: {e}")
+            return 1
+    else:
+        print("✓ attachments: Zotero Storage mode (no WEBDAV_* configured)")
+    print("all good ✓")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="zotkit", description="Headless Zotero library CLI")
+    ap.add_argument("--version", action="version", version=f"zotkit {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("doctor", help="validate setup: config, API access, attachment storage")
 
     p = sub.add_parser("find", help="search items by title/tag/collection")
     p.add_argument("--title"); p.add_argument("--tag"); p.add_argument("--collection")
@@ -59,6 +108,9 @@ def main(argv=None):
     p.add_argument("tags", nargs="+")
 
     a = ap.parse_args(argv)
+
+    if a.cmd == "doctor":
+        return _doctor()
 
     if a.cmd == "lint":
         conv = load_conventions()

@@ -1,6 +1,11 @@
 # zotkit
 
+[![PyPI](https://img.shields.io/pypi/v/zotkit)](https://pypi.org/project/zotkit/)
+[![Python](https://img.shields.io/pypi/pyversions/zotkit)](https://pypi.org/project/zotkit/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Headless Zotero library management — no desktop app required.**
+[中文速览 →](README.zh-CN.md)
 
 "Headless" simply means zotkit never needs the Zotero app (or any window) open: it is a
 Python library + CLI that talks straight to the
@@ -49,6 +54,9 @@ Copy [`.env.example`](.env.example) to `./.env`, `~/.config/zotkit/env`, or any 
 - **Using Zotero Storage instead of WebDAV?** Just leave the `WEBDAV_*` lines out —
   `attach`/`fetch` automatically use Zotero Storage through the Web API's upload/download
   endpoints instead. The storage mode is detected from your `.env`, nothing to configure.
+
+After filling it in, run **`zotkit doctor`** — it validates the config file, API
+access, and attachment storage, and tells you exactly what to fix if anything fails.
 
 Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 `conventions.toml` next to your `.env` to define a namespaced tag taxonomy
@@ -139,6 +147,14 @@ Details in [`docs/webdav-format.md`](docs/webdav-format.md).
 
 The format was determined by interoperability inspection of the author's own library.
 This project is not affiliated with or endorsed by Zotero.
+
+## Limits & roadmap
+
+- `find` currently lists the library client-side — instant for hundreds of items,
+  sluggish for many thousands. Server-side search is planned.
+- Group libraries should work for item operations (untested); WebDAV file sync is
+  personal-libraries-only (a Zotero limitation).
+- Planned: an MCP server wrapper, server-side search, DOI/arXiv one-shot import.
 
 ## License
 

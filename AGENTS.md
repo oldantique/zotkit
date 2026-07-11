@@ -25,6 +25,9 @@ Create the credentials file from [.env.example](.env.example) at `./.env`,
   entirely — `attach`/`fetch` automatically use Zotero Storage instead.)
 - **Never print, cat, echo, or commit the .env or any credential.**
 
+After writing the .env, run `zotkit doctor` — it validates config, API access, and
+attachment storage, and says what to fix. Don't proceed until it prints "all good".
+
 Optionally set up tag conventions from
 [conventions.example.toml](conventions.example.toml) — do this WITH the user; read
 [docs/organizing-with-agents.md](docs/organizing-with-agents.md) first for the design

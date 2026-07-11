@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zotkit"
-version = "0.2.0"
+version = "0.3.0"
 description = "Headless Zotero library management: Web API CRUD plus direct WebDAV attachment upload/download — no desktop app required"
 readme = "README.md"
 license = "MIT"
