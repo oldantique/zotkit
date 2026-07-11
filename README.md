@@ -96,11 +96,15 @@ anything not wrapped.
 
 ## Using zotkit with AI agents
 
-zotkit is designed to be driven by coding agents: dry-run defaults, code-enforced tag
-conventions, and a ready-made **Claude Code skill** in
+zotkit is designed to be driven by coding agents (Claude Code and similar): dry-run
+defaults, code-enforced tag conventions, and a ready-made **Claude Code skill** in
 [`skills/zotkit/`](skills/zotkit/SKILL.md) — copy it to `~/.claude/skills/zotkit/` and
 any Claude session can search, file, and attach papers for you while respecting your
 taxonomy. (An MCP server is planned.)
+
+Want to clean up a messy library, not just maintain one? The battle-tested method —
+taxonomy design, parallel read-only analysis, serial reviewed writes — is written up in
+[`docs/organizing-with-agents.md`](docs/organizing-with-agents.md).
 
 ```bash
 mkdir -p ~/.claude/skills && cp -r skills/zotkit ~/.claude/skills/
