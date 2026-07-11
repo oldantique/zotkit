@@ -45,6 +45,9 @@ Copy [`.env.example`](.env.example) to `./.env`, `~/.config/zotkit/env`, or any 
 - **WebDAV** (only for `attach`/`fetch`): copy the exact values from the Zotero desktop
   app on any of your machines — **Settings → Sync → File Syncing** — and append
   `/zotero/` to the URL (the desktop does this implicitly).
+- **Using Zotero Storage instead of WebDAV?** Leave the `WEBDAV_*` lines out — every
+  feature works except `attach`/`fetch` (the file bytes). Zotero-Storage upload/download
+  is on the roadmap (the Web API supports it).
 
 Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 `conventions.toml` next to your `.env` to define a namespaced tag taxonomy
