@@ -1,6 +1,6 @@
 """zotkit — CLI over zotkit.core.Zot.
 
-Subcommands: find, create, attach, fetch, tag, status, move, backup, lint.
+Subcommands: doctor, find, create, attach, fetch, tag, status, move, backup, lint.
 Write commands print what they did; `create` is dry-run unless --apply.
 """
 from __future__ import annotations
@@ -82,12 +82,12 @@ def main(argv=None):
     p.add_argument("--no-dedup", action="store_true")
     p.add_argument("--loose-tags", action="store_true", help="warn instead of error on tag violations")
 
-    p = sub.add_parser("attach", help="attach a local file (WebDAV) to an item")
+    p = sub.add_parser("attach", help="attach a local file to an item (WebDAV or Zotero Storage)")
     p.add_argument("--key"); p.add_argument("--pdf")
     p.add_argument("--from", dest="src", help="a .created.json list (batch)")
     p.add_argument("--all", action="store_true")
 
-    p = sub.add_parser("fetch", help="download attachment files from WebDAV")
+    p = sub.add_parser("fetch", help="download attachment files (WebDAV or Zotero Storage)")
     p.add_argument("--key"); p.add_argument("--title"); p.add_argument("--collection")
     p.add_argument("--out", default="downloads")
 
