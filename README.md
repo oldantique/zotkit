@@ -11,10 +11,10 @@
 Python library + CLI that talks straight to the
 [Zotero Web API](https://www.zotero.org/support/dev/web_api/v3/start), so you can
 search, create, tag, and organize items from any terminal — macOS, Windows, or Linux,
-your laptop or a remote server. Uniquely, if your attachments sync to a **personal
-WebDAV server**, zotkit can **upload and download the files themselves** by speaking
-Zotero's WebDAV storage format directly — the one capability the Web API does not
-provide, and (as far as we know) not offered by any other headless tool.
+your laptop or a remote server. If your attachments sync to a **personal WebDAV
+server**, zotkit can **upload and download the files themselves** by speaking
+Zotero's WebDAV storage format directly — a capability the Web API itself does not
+provide. The format is documented in [docs/webdav-format.md](docs/webdav-format.md).
 
 Built for servers, scripts, and **LLM agents**: every write is dry-run by default,
 batched, and version-checked, and you can define a tag taxonomy that is *enforced in
