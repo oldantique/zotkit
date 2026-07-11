@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zotkit"
+version = "0.1.0"
+description = "Headless Zotero library management: Web API CRUD plus direct WebDAV attachment upload/download — no desktop app required"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Shawn" }]
+keywords = ["zotero", "reference-manager", "webdav", "bibliography", "cli", "headless"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+]
+dependencies = ["pyzotero", "httpx"]
+
+[project.urls]
+Repository = "https://github.com/oldantique/zotkit"
+Issues = "https://github.com/oldantique/zotkit/issues"
+
+[project.scripts]
+zotkit = "zotkit.cli:main"
+
+[tool.setuptools]
+packages = ["zotkit"]

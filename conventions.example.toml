@@ -1,0 +1,24 @@
+# Optional tag conventions, enforced in code by `zotkit create` / `zotkit tag` /
+# `zotkit lint`. Place as "conventions.toml" next to your .env (or in
+# ~/.config/zotkit/, or point $ZOTKIT_CONVENTIONS at it). Without this file,
+# tags are unrestricted.
+#
+# The design idea (works well with LLM agents managing your library):
+#   - collections = shallow skeleton, ONE primary home per item
+#   - tags = namespaced cross-cutting facets: "namespace:value",
+#     lowercase-hyphenated, one language
+#   - a filter axis (a namespace you filter by) should be exhaustive or absent;
+#     "spotlight" tags may be sparse
+
+# Allowed namespaces; a tag outside these (or with no "ns:" prefix) is rejected.
+namespaces = ["field", "topic", "type", "status", "prio"]
+
+# Every NEW item must carry at least one tag from each of these namespaces.
+require = ["field"]
+
+# Namespaces with a fixed vocabulary — anything else in them is rejected.
+# Namespaces not listed here (e.g. "topic") stay open.
+[closed]
+field = ["physics", "ml", "econ"]
+status = ["to-read", "reading", "read"]
+type = ["thesis", "review"]

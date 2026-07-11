@@ -1,0 +1,16 @@
+# secrets / local config
+.env
+conventions.toml
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# runtime artifacts
+backups/
+downloads/
+*.created.json
