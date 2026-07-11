@@ -2,12 +2,14 @@
 
 **Headless Zotero library management — no desktop app required.**
 
-zotkit is a Python library + CLI that manages a Zotero library entirely through the
-[Zotero Web API](https://www.zotero.org/support/dev/web_api/v3/start): search, create,
-tag, and organize items from a terminal or a server. Uniquely, if your attachments sync
-to a **personal WebDAV server**, zotkit can **upload and download the files themselves**
-by speaking Zotero's WebDAV storage format directly — the one capability the Web API
-does not provide, and (as far as we know) not offered by any other headless tool.
+"Headless" simply means zotkit never needs the Zotero app (or any window) open: it is a
+Python library + CLI that talks straight to the
+[Zotero Web API](https://www.zotero.org/support/dev/web_api/v3/start), so you can
+search, create, tag, and organize items from any terminal — macOS, Windows, or Linux,
+your laptop or a remote server. Uniquely, if your attachments sync to a **personal
+WebDAV server**, zotkit can **upload and download the files themselves** by speaking
+Zotero's WebDAV storage format directly — the one capability the Web API does not
+provide, and (as far as we know) not offered by any other headless tool.
 
 Built for servers, scripts, and **LLM agents**: every write is dry-run by default,
 batched, and version-checked, and you can define a tag taxonomy that is *enforced in
@@ -23,6 +25,9 @@ code* so an agent (or a tired human) can't pollute your library with inconsisten
 | Tag conventions enforced in code | ❌ | ❌ | ✅ optional `conventions.toml` |
 
 ## Install
+
+Pure Python (3.11+), no platform-specific bits — the same package works on macOS,
+Windows, and Linux:
 
 ```bash
 pipx install zotkit        # or: uv tool install zotkit / pip install zotkit
