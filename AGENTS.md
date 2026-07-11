@@ -21,8 +21,8 @@ Create the credentials file from [.env.example](.env.example) at `./.env`,
   shown on that page.
 - If they sync attachment files via WebDAV, ask them to open the Zotero desktop app →
   **Settings → Sync → File Syncing** and read you the WebDAV URL/username/password;
-  append `/zotero/` to the URL. (Skip this if they use Zotero Storage — `attach`/`fetch`
-  won't work, everything else will.)
+  append `/zotero/` to the URL. (If they use Zotero Storage, skip the `WEBDAV_*` lines
+  entirely — `attach`/`fetch` automatically use Zotero Storage instead.)
 - **Never print, cat, echo, or commit the .env or any credential.**
 
 Optionally set up tag conventions from

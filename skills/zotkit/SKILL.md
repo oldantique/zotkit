@@ -37,11 +37,11 @@ zotkit find --collection "Algorithms"
 zotkit create --file x.json
 zotkit create --file x.json --apply
 
-# upload / attach PDFs (bytes go to the user's WebDAV)
+# upload / attach PDFs (WebDAV or Zotero Storage — auto-detected from .env)
 zotkit attach --key <itemKey> --pdf /abs/paper.pdf
 zotkit attach --from x.created.json --all      # batch; skips already-attached
 
-# download / fetch PDFs (from WebDAV; the Web API cannot serve these bytes)
+# download / fetch PDFs (same auto-detection)
 zotkit fetch --key <itemKey> --out downloads
 zotkit fetch --title "size and value"
 

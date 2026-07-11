@@ -305,8 +305,19 @@ class Zot:
                            "need WEBDAV_URL/WEBDAV_USER/WEBDAV_PASS") from None
 
     def attach(self, item_key: str, file_path: str | os.PathLike) -> dict:
-        """Attach a local file to an item; bytes go to WebDAV (<key>.zip + .prop)."""
+        """Attach a local file to an item. Bytes go to WebDAV (<key>.zip + .prop)
+        when WEBDAV_* is configured, otherwise to Zotero Storage via the Web API."""
         f = Path(file_path)
+        if "WEBDAV_URL" not in self.env:
+            resp = self.z.attachment_simple([str(f)], item_key)
+            done = (resp.get("success") or []) + (resp.get("unchanged") or [])
+            if not done:
+                raise RuntimeError(f"Zotero Storage upload failed: {resp}")
+            entry = done[0]
+            key = ""
+            if isinstance(entry, dict):
+                key = entry.get("key") or entry.get("data", {}).get("key", "")
+            return {"attachment_key": key, "filename": f.name, "storage": "zotero"}
         filename, md5 = f.name, _md5_file(f)
         mtime = int(os.path.getmtime(f) * 1000)
         ctype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -329,28 +340,36 @@ class Zot:
         ok = r1.status_code in (200, 201, 204) and r2.status_code in (200, 201, 204)
         if not ok:
             raise RuntimeError(f"WebDAV PUT failed: zip={r1.status_code} prop={r2.status_code}")
-        return {"attachment_key": key, "filename": filename, "webdav_ok": ok}
+        return {"attachment_key": key, "filename": filename, "storage": "webdav"}
 
     def has_attachment(self, item_key: str) -> bool:
         return any(k["data"].get("itemType") == "attachment"
                    for k in self.z.children(item_key))
 
     def fetch(self, item_key: str, out_dir: str | os.PathLike = "downloads") -> list[Path]:
-        """Download an item's attachment files from WebDAV; returns saved paths."""
+        """Download an item's attachment files (from WebDAV when configured,
+        otherwise from Zotero Storage); returns saved paths."""
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        base, auth = self._webdav()
-        saved = []
-        with httpx.Client(auth=auth, timeout=120) as c:
-            for ch in self.z.children(item_key):
-                d = ch["data"]
-                if d.get("itemType") != "attachment" or not d.get("filename"):
+        saved: list[Path] = []
+        atts = [ch for ch in self.z.children(item_key)
+                if ch["data"].get("itemType") == "attachment" and ch["data"].get("filename")]
+        if "WEBDAV_URL" not in self.env:
+            for ch in atts:
+                try:
+                    self.z.dump(ch["key"], ch["data"]["filename"], str(out))
+                    saved.append(out / ch["data"]["filename"])
+                except Exception:
                     continue
+            return saved
+        base, auth = self._webdav()
+        with httpx.Client(auth=auth, timeout=120) as c:
+            for ch in atts:
                 r = c.get(f"{base}/{ch['key']}.zip")
                 if r.status_code != 200:
                     continue
                 zipfile.ZipFile(io.BytesIO(r.content)).extractall(out)
-                saved.append(out / d["filename"])
+                saved.append(out / ch["data"]["filename"])
         return saved
 
     # ---------- backup ----------

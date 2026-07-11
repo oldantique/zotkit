@@ -21,6 +21,7 @@ code* so an agent (or a tired human) can't pollute your library with inconsisten
 |---|---|---|---|
 | Works headless (server, SSH, CI) | ❌ | ✅ read-mostly | ✅ |
 | Write items/tags/collections | ✅ | ⚠️ usually needs the desktop app running | ✅ |
+| Attachment files (Zotero Storage) | ✅ | ⚠️ some | ✅ upload + download |
 | Attachment files on **WebDAV** | ✅ | ⚠️ download at best | ✅ **upload + download** |
 | Tag conventions enforced in code | ❌ | ❌ | ✅ optional `conventions.toml` |
 
@@ -45,9 +46,9 @@ Copy [`.env.example`](.env.example) to `./.env`, `~/.config/zotkit/env`, or any 
 - **WebDAV** (only for `attach`/`fetch`): copy the exact values from the Zotero desktop
   app on any of your machines — **Settings → Sync → File Syncing** — and append
   `/zotero/` to the URL (the desktop does this implicitly).
-- **Using Zotero Storage instead of WebDAV?** Leave the `WEBDAV_*` lines out — every
-  feature works except `attach`/`fetch` (the file bytes). Zotero-Storage upload/download
-  is on the roadmap (the Web API supports it).
+- **Using Zotero Storage instead of WebDAV?** Just leave the `WEBDAV_*` lines out —
+  `attach`/`fetch` automatically use Zotero Storage through the Web API's upload/download
+  endpoints instead. The storage mode is detected from your `.env`, nothing to configure.
 
 Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 `conventions.toml` next to your `.env` to define a namespaced tag taxonomy
@@ -129,11 +130,12 @@ mkdir -p ~/.claude/skills && cp -r skills/zotkit ~/.claude/skills/
 
 ## How WebDAV attachments work
 
-Zotero's WebDAV storage format is undocumented but simple: each attachment item `K` is
-stored as `K.zip` (the file, zipped) plus `K.prop` (its md5 + mtime). zotkit creates the
-attachment item via the Web API and PUTs both objects directly — after which every
-desktop client syncs the file down normally. Details in
-[`docs/webdav-format.md`](docs/webdav-format.md).
+(With Zotero Storage, zotkit simply uses the Web API's official file endpoints — this
+section is about the WebDAV mode.) Zotero's WebDAV storage format is undocumented but
+simple: each attachment item `K` is stored as `K.zip` (the file, zipped) plus `K.prop`
+(its md5 + mtime). zotkit creates the attachment item via the Web API and PUTs both
+objects directly — after which every desktop client syncs the file down normally.
+Details in [`docs/webdav-format.md`](docs/webdav-format.md).
 
 The format was determined by interoperability inspection of the author's own library.
 This project is not affiliated with or endorsed by Zotero.
