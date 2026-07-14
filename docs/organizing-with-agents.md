@@ -9,6 +9,11 @@ similar) that can run `zotkit` and read/write JSON files.
 1. **Collections = a shallow, single-axis skeleton.** Pick ONE axis (by function/topic
    works well) and give every item exactly ONE primary home. Deep trees and multi-filing
    rot fast.
+   Write an explicit **inclusion criterion per collection** — a "belongs here / does NOT
+   belong here" line — plus tie-breakers. The one that resolves most fights: **file by
+   the paper's primary contribution, not the method it uses** ("VQE computes a band
+   structure" → simulation; "a better VQE" → algorithms). Without written criteria,
+   every borderline paper is re-litigated from scratch — by you or by the agent.
 2. **Tags = namespaced cross-cutting facets**: `field:`, `topic:`, `type:`, `status:`,
    `prio:` — lowercase-hyphenated, one language. Cross-cutting questions ("all
    superconducting-hardware papers across every collection") are tag intersections, not
@@ -47,6 +52,54 @@ writes.**
 - Duplicates: trust DOI matches, distrust title matches (two near-identical titles were
   different PhysRev papers). Metadata backfill: CrossRef by title match, then Semantic
   Scholar batch by DOI.
+- The second-pass audit days later (see below) still moved 85 items and cut 73 tags → 63:
+  first passes converge, they don't finish.
+
+## The second pass: auditing a library that is already organized
+
+The first cleanup never gets everything right — you learn what the taxonomy should have
+been by living in it. Rerun this audit occasionally (it found plenty on a library
+organized only days earlier). Same safety rules: backup first, analyze read-only,
+write serially.
+
+**Collection health.** Dump every collection's items (key, title, tags) and look for
+four symptoms:
+
+- **Oversized with a hidden sub-cluster** — one collection holding ~25% of the library,
+  where half its items answer a different question than the other half. Split along the
+  question boundary. (Real case: a 68-item "Readout" hiding a 45-item parametric-amplifier
+  cluster — "how do we amplify?" vs "how do we measure?".)
+- **Catch-all drift** — a "Misc/Fundamentals" collection accumulating things that each
+  belong to a specific collection. Keep only genuinely cross-cutting works there; sink
+  the rest (a single-topic review or thesis files under its topic, not under "Reviews").
+- **One theme split across collections** — the same reading interest scattered because
+  the skeleton followed a textbook's chapter list instead of the owner's actual interests.
+  Merge into one collection named for the theme.
+- **Near-empty collections** (2–4 items) — merge into the nearest neighbor.
+
+**Tag health.** Beyond re-checking axis coverage (principle 3):
+
+- **Near-synonyms** coined over time (`rydberg-atom` + `rydberg-blockade`) — merge.
+- **Tags that duplicate collection membership** (a `simulation` tag on items that all sit
+  in the Simulation collection) — delete; the collection already carries the signal.
+- **Misnamed tags**: when a tag's items don't match its name, don't assume mis-tagging —
+  **ask the owner what they meant**. (Real case: `high-tc-qubit` looked wrongly applied
+  to 18 of 19 items; it actually marked a "hot/high-frequency qubit operation" reading
+  theme and just needed renaming.)
+- **Axes that never reached coverage** — an exhaustive-by-design axis stuck at 15% after
+  months is dead weight; principle 3 says fix it or delete it, and deleting your own
+  failed axis is allowed.
+
+**Invariants to verify after any bulk operation** (cheap, catches real breakage):
+every item has exactly one collection home (list items with 0 or 2+ homes — both lists
+should be empty, or explainable), every required axis at 100%, zero tags outside the
+declared namespaces.
+
+**Division of labor that worked:** the agent executes every unambiguous move autonomously
+and **batches the genuinely ambiguous calls into 2–3 explicit questions** for the owner
+(item-by-item confirmation is as exhausting as doing it manually; silent guessing on
+taxonomy is worse). Judgment calls the agent did make get listed in the final report for
+review.
 
 ## Why this beats letting an agent write freely
 

@@ -33,6 +33,11 @@ Optionally set up tag conventions from
 [docs/organizing-with-agents.md](docs/organizing-with-agents.md) first for the design
 principles (shallow single-axis collections, namespaced facet tags).
 
+If the user asks you to **clean up or reorganize their library** — whether it's a mess
+or already organized — [docs/organizing-with-agents.md](docs/organizing-with-agents.md)
+is the complete playbook: design principles, the backup → read-only proposals → reviewed
+serial writes loop, and the audit checklist for second passes.
+
 ## 3. Operate
 
 Full task recipes live in [skills/zotkit/SKILL.md](skills/zotkit/SKILL.md) — if your
