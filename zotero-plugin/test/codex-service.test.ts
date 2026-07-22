@@ -45,6 +45,7 @@ function paperContext(): ReaderContext {
       context: "/profile/papers/1-ATTACH/context.json",
       currentPage: "/profile/papers/1-ATTACH/current-page.md",
       currentSelection: "/profile/papers/1-ATTACH/current-selection.md",
+      pdfText: "/profile/papers/1-ATTACH/current-pdf-text.txt",
       agents: "/profile/papers/1-ATTACH/AGENTS.md",
       claude: "/profile/papers/1-ATTACH/CLAUDE.md"
     },

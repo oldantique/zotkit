@@ -38,7 +38,7 @@ plugin-native-universal:
 	fi
 	$(NPM) --prefix $(PLUGIN_DIR) run native:universal
 
-plugin-build: plugin-native-universal
+plugin-build:
 	$(NPM) --prefix $(PLUGIN_DIR) run build
 
 verify: plugin-check plugin-test plugin-native-test

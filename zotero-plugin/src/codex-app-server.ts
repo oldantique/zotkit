@@ -919,9 +919,9 @@ export class CodexAppServerClient {
 
   private buildInitializeParams(): InitializeParams {
     const clientInfo: ClientInfo = {
-      name: "zotero_chat",
-      title: "ZoteroChat",
-      version: "0.1.3",
+      name: "zotkit_zotero",
+      title: "Zotkit",
+      version: "0.2.3",
       ...this.options.clientInfo,
     };
     const capabilities = this.options.capabilities === null

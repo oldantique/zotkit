@@ -12,6 +12,7 @@ import {
   searchPageText,
   type AttachmentMetadata,
   type LibraryFileEntry,
+  type PdfTextReference,
   type ReaderAnnotation,
   type ReaderContextHostAdapter,
   type ReaderHook,
@@ -74,6 +75,10 @@ class MemoryHost implements ReaderContextHostAdapter {
         this.workspaceModified.set(workspace, Date.now());
       }
     }
+  }
+
+  async profileTextExists(path: string): Promise<boolean> {
+    return path.startsWith("/profile/zoterochat/reader-context/") && this.files.has(path);
   }
 
   async pruneProfileWorkspaceCache(
@@ -311,6 +316,165 @@ describe("ReaderContextService", () => {
     expect([...host.files.keys()].some((path) => path.endsWith("paper-fulltext.txt"))).toBe(false);
     expect(adapter.readIndexedFullText).not.toHaveBeenCalled();
     expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
+  });
+
+  it("references Zotero indexed text in place for terminal page/search tools", async () => {
+    const indexedPath = "/Users/test/Zotero/storage/ATTACH01/.zotero-ft-cache";
+    const getIndexedFullTextReference = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      path: indexedPath,
+      source: "indexed-fulltext" as const,
+      truncated: false,
+    }));
+    const { adapter, reader, attachment } = makeAdapter({ getIndexedFullTextReference });
+    const service = new ReaderContextService(adapter, host);
+
+    const context = await service.acceptReaderHook({ reader, item: attachment });
+
+    expect(context.pdfText).toMatchObject({
+      path: indexedPath,
+      source: "indexed-fulltext",
+      totalPages: 3,
+      truncated: false,
+    });
+    expect(JSON.parse(host.files.get(context.workspace!.context)!)).toMatchObject({
+      pdfText: { path: indexedPath, source: "indexed-fulltext" },
+    });
+    expect([...host.files.keys()].some((path) => path.endsWith("current-pdf-text.txt")))
+      .toBe(false);
+    expect(adapter.readIndexedFullText).not.toHaveBeenCalled();
+    expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
+  });
+
+  it("creates one bounded private PDFWorker fallback only when no Zotero index reference exists", async () => {
+    const { adapter, reader, attachment } = makeAdapter({
+      getIndexedFullTextReference: vi.fn(async () => null),
+      readIndexedFullText: vi.fn(async () => null),
+      readPdfWorkerText: vi.fn(async () => ({
+        text: "worker page one\fworker page two",
+        extractedPages: 2,
+        totalPages: 2,
+      })),
+    });
+    const service = new ReaderContextService(adapter, host, {
+      maxPdfTextSnapshotCharacters: 250_000,
+    });
+    const context = await service.acceptReaderHook({ reader, item: attachment });
+
+    const reference = await service.ensureCurrentPdfTextReference();
+
+    expect(reference).toMatchObject({
+      path: context.workspace!.pdfText,
+      source: "pdf-worker",
+      totalPages: 2,
+      truncated: false,
+    });
+    expect(host.files.get(context.workspace!.pdfText)).toBe(
+      "worker page one\fworker page two",
+    );
+    expect(JSON.parse(host.files.get(context.workspace!.context)!)).toMatchObject({
+      pdfText: { path: context.workspace!.pdfText, source: "pdf-worker" },
+    });
+  });
+
+  it("evicts a pruned fallback reference and rebuilds it when that paper is reopened", async () => {
+    let nowMs = Date.parse("2026-07-22T10:00:00.000Z");
+    const paperA: MockItem = { id: 17, key: "ATTACH01", kind: "attachment" };
+    const paperB: MockItem = { id: 18, key: "ATTACH02", kind: "attachment" };
+    const readerA: MockReader = { id: "reader-a" };
+    const readerB: MockReader = { id: "reader-b" };
+    let activeHook: ReaderHook<MockReader, MockItem> = { reader: readerA, item: paperA };
+    const base = makeMetadata().attachment;
+    const readPdfWorkerText = vi.fn(async (item: MockItem) => ({
+      text: `${item.key} page one\f${item.key} page two`,
+      extractedPages: 2,
+      totalPages: 2,
+    }));
+    const { adapter } = makeAdapter({
+      getActiveReaderHook: vi.fn(async () => activeHook),
+      resolveAttachment: vi.fn(async (_reader, item) => item ?? null),
+      resolveParent: vi.fn(async () => null),
+      describeAttachment: vi.fn(async (item: MockItem) => ({
+        ...base,
+        id: item.id,
+        key: item.key,
+        parentID: undefined,
+        filename: `${item.key}.pdf`,
+      })),
+      getPdfPath: vi.fn(async (item: MockItem) => `/papers/${item.key}.pdf`),
+      getIndexedFullTextReference: vi.fn(async () => null),
+      readIndexedFullText: vi.fn(async () => null),
+      readPdfWorkerText,
+    });
+    const service = new ReaderContextService(adapter, host, {
+      now: () => new Date(nowMs),
+      maxWorkspaceCacheEntries: 1,
+      workspaceCachePruneIntervalMs: 1,
+      maxFullTextCacheEntries: 3,
+    });
+
+    const firstA = await service.acceptReaderHook({
+      reader: readerA,
+      item: paperA,
+      capturedAt: new Date(nowMs).toISOString(),
+    });
+    await service.ensureCurrentPdfTextReference();
+    const aTextPath = firstA.workspace!.pdfText;
+    expect(host.files.get(aTextPath)).toContain("ATTACH01 page one");
+
+    nowMs += 10;
+    activeHook = { reader: readerB, item: paperB };
+    await service.acceptReaderHook({
+      reader: readerB,
+      item: paperB,
+      capturedAt: new Date(nowMs).toISOString(),
+    });
+    expect(host.files.has(aTextPath)).toBe(false);
+
+    nowMs += 10;
+    activeHook = { reader: readerA, item: paperA };
+    const reopenedA = await service.acceptReaderHook({
+      reader: readerA,
+      item: paperA,
+      capturedAt: new Date(nowMs).toISOString(),
+    });
+    expect(reopenedA.pdfText).toBeNull();
+    const rebuilt = await service.ensureCurrentPdfTextReference();
+
+    expect(rebuilt?.path).toBe(aTextPath);
+    expect(host.files.get(aTextPath)).toContain("ATTACH01 page one");
+    expect(host.replaceCalls.filter(({ path }) => path === aTextPath)).toHaveLength(2);
+  });
+
+  it("keeps private PDF fallback references in a bounded least-recently-used map", () => {
+    const { adapter } = makeAdapter();
+    const service = new ReaderContextService(adapter, host, {
+      maxFullTextCacheEntries: 2,
+    });
+    const internal = service as unknown as {
+      pdfTextReferences: Map<string, PdfTextReference>;
+      rememberPdfTextReference(
+        attachment: AttachmentMetadata,
+        reference: PdfTextReference,
+      ): void;
+    };
+    const metadata = makeMetadata().attachment;
+    const remember = (key: string) => internal.rememberPdfTextReference(
+      { ...metadata, key },
+      {
+        schemaVersion: 1,
+        path: `/profile/zoterochat/reader-context/papers/1-${key}/current-pdf-text.txt`,
+        source: "pdf-worker",
+        truncated: false,
+      },
+    );
+
+    remember("A");
+    remember("B");
+    remember("A");
+    remember("C");
+
+    expect([...internal.pdfTextReferences.keys()]).toEqual(["1-A", "1-C"]);
   });
 
   it("builds one shared library snapshot only on terminal-open or explicit refresh", async () => {
@@ -1466,6 +1630,12 @@ describe("createZotero9ReadAdapter", () => {
       text: "hook selection",
       pageNumber: 2,
     });
+    await expect(adapter.getIndexedFullTextReference?.(attachment)).resolves.toEqual({
+      schemaVersion: 1,
+      path: "/cache/.zotero-ft-cache",
+      source: "indexed-fulltext",
+      truncated: false,
+    });
     await expect(adapter.readIndexedFullText(attachment)).resolves.toMatchObject({
       text: "cached one\fcached two\fcached three",
       extractedPages: 3,
@@ -1638,6 +1808,55 @@ describe("createZotero9ReadAdapter", () => {
     expect(loadDataTypes).toHaveBeenCalledOnce();
     expect(getField).not.toHaveBeenCalled();
   });
+
+  it("isolates a throwing attachment filename getter while building the library snapshot", async () => {
+    const paper = {
+      id: 10,
+      key: "PARENT01",
+      libraryID: 1,
+      itemType: "journalArticle",
+      isTopLevelItem: () => true,
+      getField: (field: string) => (field === "title" ? "Healthy paper" : ""),
+      getCreators: () => [],
+      getTags: () => [],
+      getCollections: () => [],
+    };
+    const attachment: Record<string, unknown> = {
+      id: 11,
+      key: "ATTACH01",
+      libraryID: 1,
+      itemType: "attachment",
+      parentKey: "PARENT01",
+      isTopLevelItem: () => false,
+      getField: (field: string) => (field === "title" ? "Bad-path attachment" : ""),
+      getCreators: () => [],
+      getTags: () => [],
+      getCollections: () => [],
+    };
+    Object.defineProperty(attachment, "attachmentFilename", {
+      enumerable: true,
+      get: () => {
+        throw new Error("PathUtils.filename: NS_ERROR_FILE_UNRECOGNIZED_PATH");
+      },
+    });
+    const adapter = createZotero9ReadAdapter({
+      Items: {
+        getAll: vi.fn(async () => [paper, attachment]),
+        loadDataTypes: vi.fn(async () => undefined),
+      },
+      Collections: { getByLibrary: vi.fn(() => []) },
+    });
+
+    const snapshot = await adapter.buildZotkitLibrarySnapshot!(1, {
+      maxItems: 100,
+      maxCollections: 100,
+    });
+
+    expect(snapshot.items).toEqual([
+      expect.objectContaining({ key: "PARENT01", title: "Healthy paper" }),
+      expect.objectContaining({ key: "ATTACH01", filename: undefined }),
+    ]);
+  });
 });
 
 describe("createGeckoProfileAdapter", () => {
@@ -1732,6 +1951,8 @@ describe("createGeckoProfileAdapter", () => {
       0o600,
       false,
     );
+    await expect(host.profileTextExists(`${root}/papers/KEY/context.json`)).resolves.toBe(true);
+    await expect(host.profileTextExists("/profile/elsewhere/file")).resolves.toBe(false);
     expect(setPermissions.mock.calls.filter((call) => call[1] === 0o700).length).toBeGreaterThan(0);
     await expect(host.replaceProfileText("/profile/elsewhere/file", "x")).rejects.toThrow(
       "outside",

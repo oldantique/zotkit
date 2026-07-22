@@ -1,4 +1,5 @@
 import "@xterm/xterm/css/xterm.css";
+import "katex/dist/katex.min.css";
 import "./styles.css";
 import { ZoteroChatPlugin } from "./plugin";
 

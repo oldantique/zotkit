@@ -202,7 +202,7 @@ export class ZoteroChatPlugin {
       const { doc, append } = event;
       const button = doc.createElement("button");
       button.type = "button";
-      button.title = "打开 Zotkit Codex 终端（⌘⇧J）";
+      button.title = "打开 Zotkit Agent 终端（⌘⇧J）";
       button.setAttribute("aria-label", button.title);
       button.style.cssText = "display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:6px;background:transparent;cursor:pointer;padding:5px";
       const icon = doc.createElement("img");
@@ -442,6 +442,10 @@ export class ZoteroChatPlugin {
   }
 
   private async terminalOptions(host: HTMLElement): Promise<TerminalPaperOptions> {
+    // Prepare a read-only whole-document source for the terminal MCP. This
+    // references Zotero's existing index in place and only creates one bounded,
+    // private fallback when that index is unavailable.
+    await this.readerContext.ensureCurrentPdfTextReference();
     const context = this.context;
     if (!context?.workspace) throw new Error("请先打开一篇 PDF Reader");
     const preferredAgent = prefString("defaultAgent", this.settings.defaultAgent);

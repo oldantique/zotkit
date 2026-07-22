@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -17,12 +19,6 @@ import unittest
 
 HELPER = Path(os.environ.get("HELPER", Path(__file__).parents[1] / "build" / "zoterochat-helper"))
 TOKEN = "native-helper-test-token-0123456789"
-
-
-def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def recv_exact(sock: socket.socket, length: int) -> bytes:
@@ -36,16 +32,26 @@ def recv_exact(sock: socket.socket, length: int) -> bytes:
 
 
 class WebSocket:
-    def __init__(self, port: int, token: str):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=3)
+    def __init__(self, socket_path: str, token: str):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(3)
+        try:
+            self.sock.connect(socket_path)
+        except BaseException:
+            self.sock.close()
+            raise
         self.sock.settimeout(5)
         key = base64.b64encode(os.urandom(16)).decode()
+        client_proof = base64.b64encode(
+            hmac.new(token.encode(), ("client:" + key).encode(), hashlib.sha1).digest()
+        ).decode()
         request = (
-            f"GET /ws?token={token} HTTP/1.1\r\n"
-            f"Host: 127.0.0.1:{port}\r\n"
+            "GET /ws HTTP/1.1\r\n"
+            "Host: localhost\r\n"
             "Upgrade: websocket\r\n"
             "Connection: keep-alive, Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
+            f"X-Zotkit-Client-Proof: {client_proof}\r\n"
             "Sec-WebSocket-Version: 13\r\n\r\n"
         ).encode()
         self.sock.sendall(request)
@@ -55,14 +61,19 @@ class WebSocket:
         expected = base64.b64encode(
             hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
         )
-        self.assert_handshake(bytes(response), expected)
+        server_proof = base64.b64encode(
+            hmac.new(token.encode(), ("server:" + key).encode(), hashlib.sha1).digest()
+        )
+        self.assert_handshake(bytes(response), expected, server_proof)
 
     @staticmethod
-    def assert_handshake(response: bytes, expected: bytes) -> None:
+    def assert_handshake(response: bytes, expected: bytes, server_proof: bytes) -> None:
         if not response.startswith(b"HTTP/1.1 101 "):
             raise AssertionError(response)
         if b"Sec-WebSocket-Accept: " + expected + b"\r\n" not in response:
             raise AssertionError("bad Sec-WebSocket-Accept")
+        if b"X-Zotkit-Server-Proof: " + server_proof + b"\r\n" not in response:
+            raise AssertionError("bad X-Zotkit-Server-Proof")
 
     def send_frame(self, opcode: int, payload: bytes, *, fin: bool = True) -> None:
         mask = os.urandom(4)
@@ -113,13 +124,20 @@ class WebSocket:
 class DaemonTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.port = free_port()
-        cls.token_dir = tempfile.TemporaryDirectory()
+        cls.token_dir = tempfile.TemporaryDirectory(dir="/tmp")
+        Path(cls.token_dir.name).chmod(0o700)
+        cls.socket_path = str(Path(cls.token_dir.name) / "bridge.sock")
         token_path = Path(cls.token_dir.name) / "helper-token"
         token_path.write_text(TOKEN + "\n", encoding="utf-8")
         token_path.chmod(0o600)
         cls.daemon = subprocess.Popen(
-            [str(HELPER), "--port", str(cls.port), "--token-file", str(token_path)],
+            [
+                str(HELPER),
+                "--socket",
+                cls.socket_path,
+                "--token-file",
+                str(token_path),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
@@ -129,7 +147,9 @@ class DaemonTests(unittest.TestCase):
             if cls.daemon.poll() is not None:
                 raise RuntimeError(cls.daemon.stderr.read())
             try:
-                with socket.create_connection(("127.0.0.1", cls.port), timeout=0.1):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.settimeout(0.1)
+                    probe.connect(cls.socket_path)
                     break
             except OSError:
                 time.sleep(0.03)
@@ -137,6 +157,9 @@ class DaemonTests(unittest.TestCase):
             raise RuntimeError("daemon did not become ready")
         if token_path.exists():
             raise RuntimeError("daemon did not consume its token file")
+        socket_mode = Path(cls.socket_path).stat().st_mode & 0o777
+        if socket_mode != 0o600:
+            raise RuntimeError(f"daemon socket mode is {socket_mode:o}, expected 600")
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -147,12 +170,16 @@ class DaemonTests(unittest.TestCase):
             cls.daemon.kill()
             cls.daemon.wait(timeout=3)
         cls.daemon.stderr.close()
+        if Path(cls.socket_path).exists():
+            raise RuntimeError("daemon did not remove its Unix socket")
         cls.token_dir.cleanup()
 
     def http(self, path: str, extra_headers: str = "") -> bytes:
-        with socket.create_connection(("127.0.0.1", self.port), timeout=3) as sock:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(3)
+            sock.connect(self.socket_path)
             request = (
-                f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
+                f"GET {path} HTTP/1.1\r\nHost: localhost\r\n"
                 f"{extra_headers}Connection: close\r\n\r\n"
             ).encode()
             sock.sendall(request)
@@ -165,12 +192,49 @@ class DaemonTests(unittest.TestCase):
 
     def test_health_requires_token(self) -> None:
         self.assertTrue(self.http("/health").startswith(b"HTTP/1.1 401 "))
+        self.assertTrue(
+            self.http(f"/health?token={TOKEN}").startswith(b"HTTP/1.1 401 ")
+        )
+        self.assertTrue(
+            self.http("/health", f"X-ZoteroChat-Token: {TOKEN}\r\n").startswith(
+                b"HTTP/1.1 401 "
+            )
+        )
         response = self.http("/health", f"Authorization: Bearer {TOKEN}\r\n")
         self.assertTrue(response.startswith(b"HTTP/1.1 200 "))
         self.assertIn(b'"ok":true', response)
 
+    def test_websocket_requires_mutual_hmac_proof(self) -> None:
+        key = base64.b64encode(os.urandom(16)).decode()
+        request = (
+            "GET /ws HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            f"Authorization: Bearer {TOKEN}\r\n\r\n"
+        ).encode()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(3)
+            sock.connect(self.socket_path)
+            sock.sendall(request)
+            response = sock.recv(4096)
+        self.assertTrue(response.startswith(b"HTTP/1.1 401 "))
+        self.assertNotIn(TOKEN.encode(), response)
+
+    def test_idle_http_handshake_is_closed_on_deadline(self) -> None:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(4)
+            sock.connect(self.socket_path)
+            started = time.monotonic()
+            self.assertEqual(sock.recv(1), b"")
+            elapsed = time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 1.5)
+        self.assertLess(elapsed, 3.0)
+
     def test_websocket_pty_io_resize_exit_and_multiple_sessions(self) -> None:
-        ws = WebSocket(self.port, TOKEN)
+        ws = WebSocket(self.socket_path, TOKEN)
         self.addCleanup(ws.close)
 
         ws.send_frame(9, b"probe")
@@ -249,7 +313,7 @@ class DaemonTests(unittest.TestCase):
             self.assertIsNotNone(sleeper_exit)
 
     def test_websocket_pipe_io_for_jsonl_services(self) -> None:
-        ws = WebSocket(self.port, TOKEN)
+        ws = WebSocket(self.socket_path, TOKEN)
         self.addCleanup(ws.close)
         with tempfile.TemporaryDirectory() as cwd:
             ws.send_json(
@@ -285,8 +349,123 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(bytes(output), b'{"wrapped":{"ok":true}}\n')
             self.assertEqual(exit_event["exitCode"], 0)
 
+    def test_spawned_child_does_not_inherit_helper_descriptors(self) -> None:
+        ws = WebSocket(self.socket_path, TOKEN)
+        self.addCleanup(ws.close)
+        with tempfile.TemporaryDirectory() as cwd:
+            ws.send_json(
+                {
+                    "type": "spawn",
+                    "sessionId": "fd-sleeper",
+                    "argv": ["/bin/sh", "-c", "sleep 30"],
+                    "cwd": cwd,
+                }
+            )
+            while True:
+                message = ws.recv_json()
+                if (
+                    message.get("type") == "spawned"
+                    and message.get("sessionId") == "fd-sleeper"
+                ):
+                    break
+
+            # Keeping the exception-safe probe in argv avoids creating a script file
+            # that could add its own descriptor and contaminate the observation.
+            audit = (
+                "import json,os\n"
+                "leaked=[]\n"
+                "for fd in range(3,256):\n"
+                " try: os.fstat(fd)\n"
+                " except OSError: continue\n"
+                " leaked.append(fd)\n"
+                "print(json.dumps(leaked,separators=(',',':')))\n"
+            )
+
+            def inherited_fds(kind: str, session_id: str) -> list[int]:
+                ws.send_json(
+                    {
+                        "type": kind,
+                        "sessionId": session_id,
+                        "argv": [sys.executable, "-c", audit],
+                        "cwd": cwd,
+                    }
+                )
+                output = bytearray()
+                exit_event = None
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and exit_event is None:
+                    message = ws.recv_json()
+                    if (
+                        message.get("type") == "output"
+                        and message.get("sessionId") == session_id
+                    ):
+                        output.extend(base64.b64decode(message["data"]))
+                    elif (
+                        message.get("type") == "exit"
+                        and message.get("sessionId") == session_id
+                    ):
+                        exit_event = message
+                self.assertIsNotNone(exit_event)
+                self.assertEqual(exit_event["exitCode"], 0)
+                return json.loads(bytes(output))
+
+            for kind, session_id in (
+                ("spawnPipe", "fd-audit-pipe"),
+                ("spawn", "fd-audit-pty"),
+            ):
+                self.assertEqual(
+                    inherited_fds(kind, session_id),
+                    [],
+                    f"{kind} agents must inherit only stdin, stdout, and stderr",
+                )
+            ws.send_json({"type": "close", "sessionId": "fd-sleeper"})
+
+    def test_close_escalates_for_a_child_ignoring_hup_and_term(self) -> None:
+        ws = WebSocket(self.socket_path, TOKEN)
+        self.addCleanup(ws.close)
+        with tempfile.TemporaryDirectory() as cwd:
+            ws.send_json(
+                {
+                    "type": "spawnPipe",
+                    "sessionId": "stubborn-close",
+                    "argv": [
+                        "/bin/sh",
+                        "-c",
+                        "trap '' HUP TERM; printf 'READY\\n'; while :; do :; done",
+                    ],
+                    "cwd": cwd,
+                }
+            )
+            pid = None
+            output = bytearray()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and (pid is None or b"READY\n" not in output):
+                message = ws.recv_json()
+                if message.get("type") == "spawned":
+                    pid = message["pid"]
+                elif message.get("type") == "output":
+                    output.extend(base64.b64decode(message["data"]))
+            self.assertIsNotNone(pid)
+            self.assertIn(b"READY\n", output)
+
+            ws.send_json({"type": "close", "sessionId": "stubborn-close"})
+            closing = False
+            exit_event = None
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and exit_event is None:
+                message = ws.recv_json()
+                if message.get("type") == "closing":
+                    closing = True
+                elif message.get("type") == "exit":
+                    exit_event = message
+            self.assertTrue(closing)
+            self.assertIsNotNone(exit_event)
+            self.assertEqual(exit_event["signal"], 9)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
     def test_large_nonblocking_input_is_queued_without_truncation(self) -> None:
-        ws = WebSocket(self.port, TOKEN)
+        ws = WebSocket(self.socket_path, TOKEN)
         self.addCleanup(ws.close)
         with tempfile.TemporaryDirectory() as cwd:
             total = 240_000
@@ -334,12 +513,19 @@ class DaemonTests(unittest.TestCase):
 
 class TokenFileTests(unittest.TestCase):
     def test_rejects_group_or_world_readable_token_file(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             token_path = Path(directory) / "token"
+            socket_path = Path(directory) / "bridge.sock"
             token_path.write_text(TOKEN, encoding="utf-8")
             token_path.chmod(0o644)
             result = subprocess.run(
-                [str(HELPER), "--port", str(free_port()), "--token-file", str(token_path)],
+                [
+                    str(HELPER),
+                    "--socket",
+                    str(socket_path),
+                    "--token-file",
+                    str(token_path),
+                ],
                 capture_output=True,
                 text=True,
                 timeout=3,
@@ -347,6 +533,131 @@ class TokenFileTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("private regular file", result.stderr)
             self.assertTrue(token_path.exists())
+
+
+class GracefulShutdownTests(unittest.TestCase):
+    def test_authenticated_shutdown_reaps_a_stubborn_child(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            socket_path = str(root / "bridge.sock")
+            token_path = root / "token"
+            token_path.write_text(TOKEN, encoding="utf-8")
+            token_path.chmod(0o600)
+            daemon = subprocess.Popen(
+                [
+                    str(HELPER),
+                    "--socket",
+                    socket_path,
+                    "--token-file",
+                    str(token_path),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            ws = None
+            try:
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    try:
+                        ws = WebSocket(socket_path, TOKEN)
+                        break
+                    except OSError:
+                        if daemon.poll() is not None:
+                            self.fail(daemon.stderr.read())
+                        time.sleep(0.03)
+                self.assertIsNotNone(ws)
+                ws.send_json(
+                    {
+                        "type": "spawnPipe",
+                        "sessionId": "stubborn-shutdown",
+                        "argv": [
+                            "/bin/sh",
+                            "-c",
+                            "trap '' HUP TERM; printf 'READY\\n'; while :; do :; done",
+                        ],
+                        "cwd": directory,
+                    }
+                )
+                pid = None
+                output = bytearray()
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and (
+                    pid is None or b"READY\n" not in output
+                ):
+                    message = ws.recv_json()
+                    if message.get("type") == "spawned":
+                        pid = message["pid"]
+                    elif message.get("type") == "output":
+                        output.extend(base64.b64decode(message["data"]))
+                self.assertIsNotNone(pid)
+                self.assertIn(b"READY\n", output)
+
+                ws.send_json({"type": "shutdown"})
+                self.assertEqual(ws.recv_json(), {"type": "shutdownAck"})
+                self.assertEqual(daemon.wait(timeout=3), 0)
+                self.assertFalse(Path(socket_path).exists())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+            finally:
+                if ws is not None:
+                    try:
+                        ws.sock.close()
+                    except OSError:
+                        pass
+                if daemon.poll() is None:
+                    daemon.kill()
+                    daemon.wait(timeout=3)
+                daemon.stderr.close()
+
+
+class UnixSocketSecurityTests(unittest.TestCase):
+    def test_rejects_socket_directory_accessible_to_other_users(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            root = Path(directory)
+            root.chmod(0o755)
+            token_path = root / "token"
+            token_path.write_text(TOKEN, encoding="utf-8")
+            token_path.chmod(0o600)
+            result = subprocess.run(
+                [
+                    str(HELPER),
+                    "--socket",
+                    str(root / "bridge.sock"),
+                    "--token-file",
+                    str(token_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cannot bind private socket", result.stderr)
+
+    def test_refuses_to_replace_an_existing_socket_path(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            socket_path = root / "bridge.sock"
+            socket_path.write_text("do not replace", encoding="utf-8")
+            token_path = root / "token"
+            token_path.write_text(TOKEN, encoding="utf-8")
+            token_path.chmod(0o600)
+            result = subprocess.run(
+                [
+                    str(HELPER),
+                    "--socket",
+                    str(socket_path),
+                    "--token-file",
+                    str(token_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(socket_path.read_text(encoding="utf-8"), "do not replace")
 
 
 class McpTests(unittest.TestCase):
@@ -357,6 +668,12 @@ class McpTests(unittest.TestCase):
         self.library = root / "library"
         self.outside = root / "outside"
         self.context.mkdir()
+        self.pdf_text = self.context / "current-pdf-text.txt"
+        self.pdf_text.write_text(
+            "first page introduction\fsecond page discusses intermediate-state "
+            "scattering and dark paths\fthird page conclusion",
+            encoding="utf-8",
+        )
         (self.library / "Papers").mkdir(parents=True)
         self.outside.mkdir()
         (self.library / "Papers" / "Alpha Paper.pdf").write_bytes(b"pdf")
@@ -377,12 +694,21 @@ class McpTests(unittest.TestCase):
     def write_context(self, selection: str) -> None:
         value = {
             "libraryRoot": str(self.library),
+            "attachment": {"key": "ATTACH01"},
             "activePaper": {
                 "title": "Alpha Paper",
                 "pdfPath": str(self.library / "Papers" / "Alpha Paper.pdf"),
             },
             "currentPage": {"page": 4},
             "currentSelection": {"page": 4, "length": len(selection)},
+            "pdfText": {
+                "schemaVersion": 1,
+                "path": str(self.pdf_text),
+                "source": "pdf-worker",
+                "characters": self.pdf_text.stat().st_size,
+                "totalPages": 3,
+                "truncated": False,
+            },
         }
         (self.context / "context.json").write_text(
             json.dumps(value, indent=2), encoding="utf-8"
@@ -447,6 +773,24 @@ class McpTests(unittest.TestCase):
                     "method": "tools/call",
                     "params": {"name": "get_reader_context", "arguments": {}},
                 },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_current_pdf",
+                        "arguments": {"query": "scattering"},
+                    },
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 8,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "read_pdf_pages",
+                        "arguments": {"start_page": 2, "end_page": 3},
+                    },
+                },
             ]
         )
         self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "zotkit-reader")
@@ -460,6 +804,8 @@ class McpTests(unittest.TestCase):
                 "get_active_paper",
                 "get_current_page",
                 "get_current_selection",
+                "search_current_pdf",
+                "read_pdf_pages",
                 "list_library_files",
                 "search_library_files",
             },
@@ -481,6 +827,12 @@ class McpTests(unittest.TestCase):
         self.assertEqual(combined["activePaper"]["title"], "Alpha Paper")
         self.assertEqual(combined["currentPageText"], "page four")
         self.assertEqual(combined["currentSelectionText"], "selection one")
+        searched = responses[6]["result"]["structuredContent"]
+        self.assertEqual(searched["matches"][0]["pageNumber"], 2)
+        self.assertIn("scattering", searched["matches"][0]["snippet"])
+        pages = responses[7]["result"]["structuredContent"]
+        self.assertEqual([page["pageNumber"] for page in pages["pages"]], [2, 3])
+        self.assertIn("dark paths", pages["pages"][0]["text"])
 
     def test_library_boundary_listing_and_search(self) -> None:
         responses = self.call(
@@ -534,6 +886,195 @@ class McpTests(unittest.TestCase):
         self.assertNotIn("secret.pdf", json.dumps(responses))
         self.assertNotIn("Hidden Paper.pdf", json.dumps(responses))
         self.assertNotIn("Metadata.pdf", json.dumps(responses))
+
+    def test_reads_zotero_index_in_place_only_for_the_active_attachment_key(self) -> None:
+        index_directory = self.context.parent / "ATTACH01"
+        index_directory.mkdir()
+        index_path = index_directory / ".zotero-ft-cache"
+        index_path.write_text(
+            "indexed first page\findexed second page with Rydberg scattering",
+            encoding="utf-8",
+        )
+        context_path = self.context / "context.json"
+        context = json.loads(context_path.read_text(encoding="utf-8"))
+        context["pdfText"] = {
+            "schemaVersion": 1,
+            "path": str(index_path),
+            "source": "indexed-fulltext",
+            "totalPages": 2,
+            "truncated": False,
+        }
+        context_path.write_text(json.dumps(context, indent=2), encoding="utf-8")
+
+        response = self.call(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_current_pdf",
+                        "arguments": {"query": "Rydberg"},
+                    },
+                }
+            ]
+        )[0]
+        self.assertFalse(response["result"]["isError"])
+        self.assertEqual(
+            response["result"]["structuredContent"]["matches"][0]["pageNumber"],
+            2,
+        )
+
+        context["attachment"]["key"] = "DIFFERENT"
+        context_path.write_text(json.dumps(context, indent=2), encoding="utf-8")
+        rejected = self.call(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "read_pdf_pages",
+                        "arguments": {"start_page": 1, "end_page": 1},
+                    },
+                }
+            ]
+        )[0]
+        self.assertTrue(rejected["result"]["isError"])
+        self.assertIn(
+            "does not match the active attachment",
+            rejected["result"]["content"][0]["text"],
+        )
+
+    def test_pdf_page_response_is_bounded_after_nested_json_escaping(self) -> None:
+        self.pdf_text.write_text(
+            ("\x01\"\\\n" * 100_000) + "tail",
+            encoding="utf-8",
+        )
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "read_pdf_pages",
+                "arguments": {"start_page": 1, "end_page": 1},
+            },
+        }
+        result = subprocess.run(
+            [str(HELPER), "--mcp-stdio", "--context", str(self.context)],
+            input=json.dumps(request, separators=(",", ":")) + "\n",
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=True,
+        )
+        encoded = result.stdout.encode("utf-8")
+        self.assertLessEqual(
+            len(encoded),
+            512 * 1024,
+            "the complete JSON-RPC line must stay bounded after both JSON encodings",
+        )
+        lines = result.stdout.splitlines()
+        self.assertEqual(len(lines), 1)
+        response = json.loads(lines[0])["result"]
+        self.assertFalse(response["isError"])
+        structured = response["structuredContent"]
+        self.assertTrue(structured["pages"][0]["truncated"])
+        self.assertLessEqual(
+            structured["output"]["escapedBytes"],
+            structured["output"]["escapedByteLimit"],
+        )
+
+    def test_pdf_search_scans_many_form_feed_pages_in_one_pass(self) -> None:
+        page_count = 50_000
+        self.pdf_text.write_text(
+            "\f".join(["short page"] * (page_count - 1) + ["last-page needle"]),
+            encoding="utf-8",
+        )
+        context_path = self.context / "context.json"
+        context = json.loads(context_path.read_text(encoding="utf-8"))
+        context["pdfText"]["totalPages"] = page_count
+        context_path.write_text(json.dumps(context, indent=2), encoding="utf-8")
+
+        response = self.call(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_current_pdf",
+                        "arguments": {"query": "last-page needle"},
+                    },
+                }
+            ]
+        )[0]["result"]["structuredContent"]
+
+        self.assertEqual(response["pagesSearched"], page_count)
+        self.assertEqual(response["matches"][0]["pageNumber"], page_count)
+
+    def test_pdf_search_handles_eight_mibibyte_kmp_near_match_under_timeout(self) -> None:
+        prefix_size = 8 * 1024 * 1024
+        self.pdf_text.write_bytes((b"a" * prefix_size) + b"b")
+        query = ("A" * 511) + "B"
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "search_current_pdf",
+                "arguments": {"query": query, "limit": 1},
+            },
+        }
+        result = subprocess.run(
+            [str(HELPER), "--mcp-stdio", "--context", str(self.context)],
+            input=json.dumps(request, separators=(",", ":")) + "\n",
+            text=True,
+            capture_output=True,
+            timeout=3,
+            check=True,
+        )
+        response = json.loads(result.stdout)["result"]["structuredContent"]
+        self.assertEqual(response["matches"][0]["pageNumber"], 1)
+        self.assertEqual(response["matches"][0]["matchStart"], prefix_size - 511)
+        self.assertEqual(response["matches"][0]["matchLength"], 512)
+
+    def test_pdf_search_folds_ascii_only_and_keeps_utf8_bytes_exact(self) -> None:
+        self.pdf_text.write_text("ASCII Mixed Case; Ä only", encoding="utf-8")
+        responses = self.call(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_current_pdf",
+                        "arguments": {"query": "ascii mixed case"},
+                    },
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_current_pdf",
+                        "arguments": {"query": "Ä"},
+                    },
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_current_pdf",
+                        "arguments": {"query": "ä"},
+                    },
+                },
+            ]
+        )
+        self.assertEqual(len(responses[0]["result"]["structuredContent"]["matches"]), 1)
+        self.assertEqual(len(responses[1]["result"]["structuredContent"]["matches"]), 1)
+        self.assertEqual(responses[2]["result"]["structuredContent"]["matches"], [])
 
     def test_context_is_reloaded_for_each_tool_call(self) -> None:
         process = subprocess.Popen(

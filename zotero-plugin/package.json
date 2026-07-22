@@ -1,8 +1,8 @@
 {
   "name": "zotkit-zotero-plugin",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
-  "description": "A real Codex CLI terminal with live, read-only PDF context inside Zotero Reader.",
+  "description": "A real Codex or Claude Code terminal with bounded, read-only PDF context inside Zotero Reader.",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

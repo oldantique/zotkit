@@ -20,12 +20,14 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 #include <util.h>
 
-#define ZC_VERSION "0.2.2"
+#define ZC_VERSION "0.2.3"
 #define MCP_PROTOCOL_VERSION "2025-06-18"
 #define MAX_CLIENTS 16
 #define MAX_SESSIONS 32
@@ -39,17 +41,42 @@
 #define MAX_INPUT_MESSAGE (64U * 1024U)
 #define MAX_PENDING_INPUT (256U * 1024U)
 #define MAX_MCP_LINE (1024U * 1024U)
+#define MAX_MCP_RESPONSE (1024U * 1024U)
 #define MAX_CONTEXT_FILE (1024U * 1024U)
+#define MAX_PDF_TEXT_FILE (64U * 1024U * 1024U)
+#define MAX_PDF_TEXT_ESCAPED_BUDGET (384U * 1024U)
+#define MAX_PDF_SEARCH_RESULTS 50
 #define MAX_ZOTKIT_SNAPSHOT_FILE (64U * 1024U * 1024U)
 #define MAX_ZOTKIT_SNAPSHOT_LINE (1024U * 1024U)
 #define MAX_LIBRARY_RESULTS 500
 #define MAX_LIBRARY_SCANNED 100000
+#define SESSION_HUP_GRACE_MS 250
+#define SESSION_TERM_GRACE_MS 250
+#define SESSION_KILL_GRACE_MS 500
+#define HTTP_HANDSHAKE_TIMEOUT_MS 2000
 
 typedef struct {
   char *data;
   size_t len;
   size_t cap;
 } StrBuf;
+
+static bool fd_set_cloexec(int fd, bool enabled) {
+  int flags;
+  do {
+    flags = fcntl(fd, F_GETFD);
+  } while (flags < 0 && errno == EINTR);
+  if (flags < 0)
+    return false;
+  int next = enabled ? flags | FD_CLOEXEC : flags & ~FD_CLOEXEC;
+  if (next == flags)
+    return true;
+  int result;
+  do {
+    result = fcntl(fd, F_SETFD, next);
+  } while (result < 0 && errno == EINTR);
+  return result == 0;
+}
 
 static bool sb_reserve(StrBuf *sb, size_t extra) {
   if (extra > SIZE_MAX - sb->len - 1)
@@ -738,10 +765,42 @@ static unsigned char *base64_decode(const char *s, size_t n, size_t *outlen) {
   return out;
 }
 
+static char *hmac_sha1_base64(const char *secret, const char *prefix,
+                              const char *challenge) {
+  unsigned char key[64] = {0}, inner_digest[20], digest[20];
+  size_t secret_len = strlen(secret);
+  if (secret_len > sizeof(key)) {
+    Sha1 key_hash;
+    sha1_init(&key_hash);
+    sha1_update(&key_hash, secret, secret_len);
+    sha1_final(&key_hash, key);
+  } else {
+    memcpy(key, secret, secret_len);
+  }
+  unsigned char inner_pad[64], outer_pad[64];
+  for (size_t i = 0; i < sizeof(key); i++) {
+    inner_pad[i] = key[i] ^ 0x36;
+    outer_pad[i] = key[i] ^ 0x5c;
+  }
+  Sha1 inner;
+  sha1_init(&inner);
+  sha1_update(&inner, inner_pad, sizeof(inner_pad));
+  sha1_update(&inner, prefix, strlen(prefix));
+  sha1_update(&inner, challenge, strlen(challenge));
+  sha1_final(&inner, inner_digest);
+  Sha1 outer;
+  sha1_init(&outer);
+  sha1_update(&outer, outer_pad, sizeof(outer_pad));
+  sha1_update(&outer, inner_digest, sizeof(inner_digest));
+  sha1_final(&outer, digest);
+  return base64_encode(digest, sizeof(digest), NULL);
+}
+
 typedef enum { CLIENT_UNUSED, CLIENT_HTTP, CLIENT_WS } ClientState;
 typedef struct {
   int fd;
   ClientState state;
+  uint64_t accepted_at_ms;
   unsigned char *buf;
   size_t len, cap;
   unsigned char *frag;
@@ -757,6 +816,8 @@ typedef struct {
   int owner;
   bool is_pty;
   bool closing;
+  int close_stage;
+  uint64_t close_deadline_ms;
   unsigned char *pending_input;
   size_t pending_input_len;
   size_t pending_input_off;
@@ -768,6 +829,13 @@ static Session sessions[MAX_SESSIONS];
 static volatile sig_atomic_t daemon_stop;
 
 static void session_discard_input(Session *s);
+
+static uint64_t monotonic_ms(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+    return 0;
+  return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
+}
 
 static void on_signal(int sig) {
   (void)sig;
@@ -833,6 +901,37 @@ static void session_signal(Session *s, int sig) {
     kill(s->pid, sig);
 }
 
+static void session_begin_close(Session *s, uint64_t now) {
+  if (!s->used || s->closing)
+    return;
+  s->closing = true;
+  s->close_stage = 1;
+  s->close_deadline_ms = now + SESSION_HUP_GRACE_MS;
+  session_signal(s, SIGHUP);
+  if (s->master >= 0) {
+    close(s->master);
+    s->master = -1;
+  }
+  session_discard_input(s);
+}
+
+static void session_advance_closures(uint64_t now) {
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    Session *s = &sessions[i];
+    if (!s->used || !s->closing || now < s->close_deadline_ms)
+      continue;
+    if (s->close_stage == 1) {
+      session_signal(s, SIGTERM);
+      s->close_stage = 2;
+      s->close_deadline_ms = now + SESSION_TERM_GRACE_MS;
+    } else {
+      session_signal(s, SIGKILL);
+      s->close_stage = 3;
+      s->close_deadline_ms = now + SESSION_KILL_GRACE_MS;
+    }
+  }
+}
+
 static void client_close(int ci) {
   if (ci < 0 || ci >= MAX_CLIENTS || clients[ci].state == CLIENT_UNUSED)
     return;
@@ -841,16 +940,11 @@ static void client_close(int ci) {
   free(clients[ci].frag);
   memset(&clients[ci], 0, sizeof(clients[ci]));
   clients[ci].fd = -1;
+  uint64_t now = monotonic_ms();
   for (int i = 0; i < MAX_SESSIONS; i++)
     if (sessions[i].used && sessions[i].owner == ci) {
       sessions[i].owner = -1;
-      sessions[i].closing = true;
-      session_signal(&sessions[i], SIGHUP);
-      if (sessions[i].master >= 0) {
-        close(sessions[i].master);
-        sessions[i].master = -1;
-      }
-      session_discard_input(&sessions[i]);
+      session_begin_close(&sessions[i], now);
     }
 }
 
@@ -880,6 +974,18 @@ static bool buf_append(unsigned char **buf, size_t *len, size_t *cap,
 static void json_error_to_client(int owner, const char *message) {
   StrBuf b = {0};
   sb_append(&b, "{\"type\":\"error\",\"message\":");
+  sb_json_string(&b, message);
+  sb_append(&b, "}");
+  ws_send_json(owner, b.data, b.len);
+  sb_free(&b);
+}
+
+static void json_session_error_to_client(int owner, const char *session_id,
+                                         const char *message) {
+  StrBuf b = {0};
+  sb_append(&b, "{\"type\":\"error\",\"sessionId\":");
+  sb_json_string(&b, session_id);
+  sb_append(&b, ",\"message\":");
   sb_json_string(&b, message);
   sb_append(&b, "}");
   ws_send_json(owner, b.data, b.len);
@@ -938,7 +1044,7 @@ static void session_flush_input(Session *s) {
       continue;
     if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
       return;
-    json_error_to_client(s->owner, "PTY input failed");
+    json_session_error_to_client(s->owner, s->id, "PTY input failed");
     session_discard_input(s);
     return;
   }
@@ -1154,13 +1260,20 @@ static Session *session_find(const char *id) {
 
 static void configure_child(const SpawnSpec *sp, bool is_pty) {
   if (!is_pty) {
-    int nullfd = open("/dev/null", O_WRONLY);
+    int nullfd = open("/dev/null", O_WRONLY | O_CLOEXEC);
     if (nullfd >= 0) {
-      dup2(nullfd, STDERR_FILENO);
+      if (dup2(nullfd, STDERR_FILENO) < 0)
+        _exit(126);
       if (nullfd != STDERR_FILENO)
         close(nullfd);
     }
   }
+  /* dup2 normally clears FD_CLOEXEC on its destination. Clear it explicitly
+     for the same-fd edge case so the intended stdio endpoints survive exec. */
+  if (!fd_set_cloexec(STDIN_FILENO, false) ||
+      !fd_set_cloexec(STDOUT_FILENO, false) ||
+      !fd_set_cloexec(STDERR_FILENO, false))
+    _exit(126);
   if (sp->cwd && chdir(sp->cwd) < 0) {
     if (is_pty)
       dprintf(STDERR_FILENO, "zoterochat-helper: chdir failed: %s\r\n",
@@ -1182,7 +1295,7 @@ static void configure_child(const SpawnSpec *sp, bool is_pty) {
 static void handle_spawn(int owner, const char *js, JTok *t, int count,
                          const char *sid, bool use_pipe) {
   if (session_find(sid)) {
-    json_error_to_client(owner, "sessionId already exists");
+    json_session_error_to_client(owner, sid, "sessionId already exists");
     return;
   }
   int owned = 0, slot = -1;
@@ -1193,13 +1306,14 @@ static void handle_spawn(int owner, const char *js, JTok *t, int count,
       slot = i;
   }
   if (owned >= MAX_SESSIONS_PER_CLIENT || slot < 0) {
-    json_error_to_client(owner, "session limit reached");
+    json_session_error_to_client(owner, sid, "session limit reached");
     return;
   }
   SpawnSpec sp = {0};
   const char *err = NULL;
   if (!parse_spawn(js, t, count, &sp, &err)) {
-    json_error_to_client(owner, err ? err : "invalid spawn request");
+    json_session_error_to_client(owner, sid,
+                                 err ? err : "invalid spawn request");
     spawn_free(&sp);
     return;
   }
@@ -1208,7 +1322,16 @@ static void handle_spawn(int owner, const char *js, JTok *t, int count,
   int pair[2] = {-1, -1};
   if (use_pipe) {
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) < 0) {
-      json_error_to_client(owner, "socketpair failed");
+      json_session_error_to_client(owner, sid, "socketpair failed");
+      spawn_free(&sp);
+      return;
+    }
+    if (!fd_set_cloexec(pair[0], true) ||
+        !fd_set_cloexec(pair[1], true)) {
+      close(pair[0]);
+      close(pair[1]);
+      json_session_error_to_client(owner, sid,
+                                   "could not secure socketpair descriptors");
       spawn_free(&sp);
       return;
     }
@@ -1237,12 +1360,24 @@ static void handle_spawn(int owner, const char *js, JTok *t, int count,
       close(pair[0]);
     if (pair[1] >= 0)
       close(pair[1]);
-    json_error_to_client(owner, use_pipe ? "fork failed" : "forkpty failed");
+    json_session_error_to_client(
+        owner, sid, use_pipe ? "fork failed" : "forkpty failed");
     spawn_free(&sp);
     return;
   }
   if (pid == 0)
     configure_child(&sp, true);
+  if (!fd_set_cloexec(master, true)) {
+    close(master);
+    if (kill(-pid, SIGKILL) < 0)
+      kill(pid, SIGKILL);
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {
+    }
+    json_session_error_to_client(owner, sid,
+                                 "could not secure session descriptor");
+    spawn_free(&sp);
+    return;
+  }
   if (use_pipe)
     (void)setpgid(pid, pid);
   fcntl(master, F_SETFL, fcntl(master, F_GETFL) | O_NONBLOCK);
@@ -1290,6 +1425,11 @@ static void handle_ws_json(int owner, const unsigned char *data, size_t len) {
     ws_send_json(owner, "{\"type\":\"pong\"}", 15);
     goto done;
   }
+  if (!strcmp(type, "shutdown")) {
+    ws_send_json(owner, "{\"type\":\"shutdownAck\"}", 22);
+    daemon_stop = 1;
+    goto done;
+  }
   int sidi = obj_get((const char *)data, t, count, 0, "sessionId");
   char *sid = sidi >= 0 ? tok_strdup((const char *)data, &t[sidi], 64) : NULL;
   if (!sid || !valid_session_id(sid)) {
@@ -1305,7 +1445,7 @@ static void handle_ws_json(int owner, const unsigned char *data, size_t len) {
   }
   Session *s = session_find(sid);
   if (!s || s->owner != owner) {
-    json_error_to_client(owner, "unknown sessionId");
+    json_session_error_to_client(owner, sid, "unknown sessionId");
     free(sid);
     goto done;
   }
@@ -1315,7 +1455,7 @@ static void handle_ws_json(int owner, const unsigned char *data, size_t len) {
     char *d = di >= 0 ? tok_strdup((const char *)data, &t[di], 131072) : NULL;
     char *enc = ei >= 0 ? tok_strdup((const char *)data, &t[ei], 16) : NULL;
     if (!d) {
-      json_error_to_client(owner, "input data must be a string");
+      json_session_error_to_client(owner, sid, "input data must be a string");
       free(enc);
       free(sid);
       goto done;
@@ -1325,23 +1465,24 @@ static void handle_ws_json(int owner, const unsigned char *data, size_t len) {
     if (enc && !strcmp(enc, "base64")) {
       bytes = base64_decode(d, n, &n);
       if (!bytes) {
-        json_error_to_client(owner, "invalid base64 input");
+        json_session_error_to_client(owner, sid, "invalid base64 input");
         free(d);
         free(enc);
         free(sid);
         goto done;
       }
     } else if (enc && strcmp(enc, "utf8")) {
-      json_error_to_client(owner, "unsupported input encoding");
+      json_session_error_to_client(owner, sid, "unsupported input encoding");
       free(d);
       free(enc);
       free(sid);
       goto done;
     }
     if (n > MAX_INPUT_MESSAGE) {
-      json_error_to_client(owner, "input exceeds 64 KiB");
+      json_session_error_to_client(owner, sid, "input exceeds 64 KiB");
     } else if (!session_queue_input(s, bytes, n)) {
-      json_error_to_client(owner, "PTY input queue exceeds 256 KiB");
+      json_session_error_to_client(owner, sid,
+                                   "PTY input queue exceeds 256 KiB");
     } else {
       session_flush_input(s);
     }
@@ -1351,7 +1492,8 @@ static void handle_ws_json(int owner, const unsigned char *data, size_t len) {
     free(enc);
   } else if (!strcmp(type, "resize")) {
     if (!s->is_pty) {
-      json_error_to_client(owner, "pipe sessions cannot be resized");
+      json_session_error_to_client(owner, sid,
+                                   "pipe sessions cannot be resized");
       free(sid);
       goto done;
     }
@@ -1361,27 +1503,22 @@ static void handle_ws_json(int owner, const unsigned char *data, size_t len) {
     if (ri < 0 || ci < 0 ||
         !tok_int((const char *)data, &t[ri], 2, 500, &rows) ||
         !tok_int((const char *)data, &t[ci], 2, 500, &cols))
-      json_error_to_client(owner, "rows and cols must be 2..500");
+      json_session_error_to_client(owner, sid,
+                                   "rows and cols must be 2..500");
     else {
       struct winsize ws = {.ws_row = (unsigned short)rows,
                            .ws_col = (unsigned short)cols};
       if (ioctl(s->master, TIOCSWINSZ, &ws) < 0)
-        json_error_to_client(owner, "PTY resize failed");
+        json_session_error_to_client(owner, sid, "PTY resize failed");
     }
   } else if (!strcmp(type, "close")) {
-    s->closing = true;
-    session_signal(s, SIGHUP);
-    if (s->master >= 0) {
-      close(s->master);
-      s->master = -1;
-    }
-    session_discard_input(s);
+    session_begin_close(s, monotonic_ms());
     StrBuf b = {0};
     sb_printf(&b, "{\"type\":\"closing\",\"sessionId\":\"%s\"}", sid);
     ws_send_json(owner, b.data, b.len);
     sb_free(&b);
   } else
-    json_error_to_client(owner, "unknown message type");
+    json_session_error_to_client(owner, sid, "unknown message type");
   free(sid);
 done:
   free(type);
@@ -1602,33 +1739,9 @@ static bool header_has_token(const char *value, const char *word) {
   return false;
 }
 
-static bool request_token_ok(const char *target, const char *auth,
-                             const char *x_token, const char *token) {
-  if (x_token && secure_eq(x_token, strlen(x_token), token))
-    return true;
-  if (auth && !strncasecmp(auth, "Bearer ", 7) &&
-      secure_eq(auth + 7, strlen(auth + 7), token))
-    return true;
-  const char *q = strchr(target, '?');
-  if (!q)
-    return false;
-  q++;
-  while (*q) {
-    const char *k = q;
-    const char *eq = strchr(k, '=');
-    if (!eq)
-      break;
-    const char *amp = strchr(eq + 1, '&');
-    if (!amp)
-      amp = target + strlen(target);
-    if ((size_t)(eq - k) == 5 && !memcmp(k, "token", 5) &&
-        secure_eq(eq + 1, (size_t)(amp - (eq + 1)), token))
-      return true;
-    if (!*amp)
-      break;
-    q = amp + 1;
-  }
-  return false;
+static bool request_token_ok(const char *auth, const char *token) {
+  return auth && !strncasecmp(auth, "Bearer ", 7) &&
+         secure_eq(auth + 7, strlen(auth + 7), token);
 }
 
 static void http_reply_close(int ci, int status, const char *reason,
@@ -1677,18 +1790,18 @@ static void handle_http(int ci, const char *token) {
     return;
   }
   *line_end = '\r';
-  char auth[512], xt[512], upgrade[128], connection[512], key[256],
-      version_h[64];
+  char auth[512], upgrade[128], connection[512], key[256],
+      version_h[64], client_proof[128];
   bool has_auth = header_copy(request, "Authorization", auth, sizeof(auth)),
-       has_xt = header_copy(request, "X-ZoteroChat-Token", xt, sizeof(xt)),
        has_upgrade = header_copy(request, "Upgrade", upgrade, sizeof(upgrade)),
        has_connection =
            header_copy(request, "Connection", connection, sizeof(connection)),
        has_key = header_copy(request, "Sec-WebSocket-Key", key, sizeof(key)),
        has_version = header_copy(request, "Sec-WebSocket-Version", version_h,
-                                 sizeof(version_h));
-  bool authorized = request_token_ok(target, has_auth ? auth : NULL,
-                                     has_xt ? xt : NULL, token);
+                                 sizeof(version_h)),
+       has_client_proof = header_copy(request, "X-Zotkit-Client-Proof",
+                                      client_proof, sizeof(client_proof));
+  bool authorized = request_token_ok(has_auth ? auth : NULL, token);
   char path[2048];
   strlcpy(path, target, sizeof(path));
   char *q = strchr(path, '?');
@@ -1705,10 +1818,6 @@ static void handle_http(int ci, const char *token) {
   }
   if (strcmp(path, "/ws")) {
     http_reply_close(ci, 404, "Not Found", "{\"error\":\"not found\"}");
-    return;
-  }
-  if (!authorized) {
-    http_reply_close(ci, 401, "Unauthorized", "{\"error\":\"unauthorized\"}");
     return;
   }
   if (!has_upgrade || strcasecmp(upgrade, "websocket") || !has_connection ||
@@ -1729,6 +1838,15 @@ static void handle_http(int ci, const char *token) {
     return;
   }
   free(decoded_key);
+  char *expected_client = hmac_sha1_base64(token, "client:", key);
+  bool proof_ok = has_client_proof && expected_client &&
+                  secure_eq(client_proof, strlen(client_proof),
+                            expected_client);
+  free(expected_client);
+  if (!proof_ok) {
+    http_reply_close(ci, 401, "Unauthorized", "{\"error\":\"unauthorized\"}");
+    return;
+  }
   snprintf(combined, sizeof(combined), "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
            key);
   Sha1 sh;
@@ -1738,18 +1856,22 @@ static void handle_http(int ci, const char *token) {
   sha1_final(&sh, digest);
   size_t alen;
   char *accept = base64_encode(digest, 20, &alen);
-  if (!accept) {
+  char *server_proof = hmac_sha1_base64(token, "server:", key);
+  if (!accept || !server_proof) {
+    free(accept);
+    free(server_proof);
     http_reply_close(ci, 500, "Internal Server Error",
                      "{\"error\":\"out of memory\"}");
     return;
   }
-  char response[512];
+  char response[768];
   int n = snprintf(
       response, sizeof(response),
       "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: "
-      "Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n",
-      accept);
+      "Upgrade\r\nSec-WebSocket-Accept: %s\r\nX-Zotkit-Server-Proof: %s\r\n\r\n",
+      accept, server_proof);
   free(accept);
+  free(server_proof);
   if (!send_all(c->fd, response, (size_t)n)) {
     client_close(ci);
     return;
@@ -1809,6 +1931,10 @@ static void reap_sessions(void) {
       continue;
     if (r < 0 && errno != ECHILD)
       continue;
+    /* The direct child may exit on HUP while a descendant in the same process
+       group ignores it. Do not abandon that descendant when reaping leader. */
+    if (s->closing)
+      (void)kill(-s->pid, SIGKILL);
     if (s->master >= 0) {
       drain_session_output(s);
       close(s->master);
@@ -1834,29 +1960,89 @@ static void reap_sessions(void) {
   }
 }
 
-static int make_listener(int port) {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+static bool private_socket_directory(const char *socket_path) {
+  if (!socket_path || socket_path[0] != '/' ||
+      strlen(socket_path) >= sizeof(((struct sockaddr_un *)0)->sun_path))
+    return false;
+  char parent[PATH_MAX];
+  if (strlcpy(parent, socket_path, sizeof(parent)) >= sizeof(parent))
+    return false;
+  char *slash = strrchr(parent, '/');
+  if (!slash)
+    return false;
+  if (slash == parent)
+    slash[1] = '\0';
+  else
+    *slash = '\0';
+  struct stat st;
+  return lstat(parent, &st) == 0 && S_ISDIR(st.st_mode) &&
+         !S_ISLNK(st.st_mode) && st.st_uid == geteuid() &&
+         (st.st_mode & 0077) == 0;
+}
+
+static int make_listener(const char *socket_path, struct stat *bound) {
+  if (!private_socket_directory(socket_path)) {
+    errno = EACCES;
+    return -1;
+  }
+  struct stat existing;
+  if (lstat(socket_path, &existing) == 0) {
+    errno = EEXIST;
+    return -1;
+  }
+  if (errno != ENOENT)
+    return -1;
+
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0)
     return -1;
-  int yes = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
-  struct sockaddr_in a = {.sin_family = AF_INET,
-                          .sin_port = htons((uint16_t)port)};
-  inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-  if (bind(fd, (struct sockaddr *)&a, sizeof(a)) < 0 || listen(fd, 16) < 0) {
+  if (!fd_set_cloexec(fd, true)) {
+    int saved = errno;
     close(fd);
+    errno = saved;
+    return -1;
+  }
+  int yes = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+  struct sockaddr_un address = {0};
+  address.sun_family = AF_UNIX;
+  strlcpy(address.sun_path, socket_path, sizeof(address.sun_path));
+#ifdef __APPLE__
+  address.sun_len = SUN_LEN(&address);
+#endif
+  mode_t old_umask = umask(0077);
+  int result = bind(fd, (struct sockaddr *)&address, SUN_LEN(&address));
+  int saved = errno;
+  umask(old_umask);
+  errno = saved;
+  if (result < 0 || chmod(socket_path, 0600) < 0 ||
+      lstat(socket_path, bound) < 0 || !S_ISSOCK(bound->st_mode) ||
+      bound->st_uid != geteuid() || listen(fd, 16) < 0) {
+    saved = errno;
+    close(fd);
+    unlink(socket_path);
+    errno = saved;
     return -1;
   }
   return fd;
 }
 
-static int run_daemon(int port, const char *token) {
+static void unlink_bound_socket(const char *socket_path,
+                                const struct stat *bound) {
+  struct stat current;
+  if (lstat(socket_path, &current) == 0 && S_ISSOCK(current.st_mode) &&
+      current.st_uid == geteuid() && current.st_dev == bound->st_dev &&
+      current.st_ino == bound->st_ino)
+    (void)unlink(socket_path);
+}
+
+static int run_daemon(const char *socket_path, const char *token) {
   pid_t initial_parent = getppid();
-  int listener = make_listener(port);
+  struct stat bound = {0};
+  int listener = make_listener(socket_path, &bound);
   if (listener < 0) {
-    fprintf(stderr, "zoterochat-helper: cannot bind 127.0.0.1:%d: %s\n", port,
-            strerror(errno));
+    fprintf(stderr, "zoterochat-helper: cannot bind private socket %s: %s\n",
+            socket_path, strerror(errno));
     return 1;
   }
   for (int i = 0; i < MAX_CLIENTS; i++)
@@ -1868,14 +2054,21 @@ static int run_daemon(int port, const char *token) {
   sa.sa_handler = on_signal;
   sigaction(SIGINT, &sa, NULL);
   sigaction(SIGTERM, &sa, NULL);
-  fprintf(stderr, "zoterochat-helper %s listening on 127.0.0.1:%d\n",
-          ZC_VERSION, port);
+  fprintf(stderr, "zoterochat-helper %s listening on private Unix socket\n",
+          ZC_VERSION);
   while (!daemon_stop) {
     pid_t current_parent = getppid();
     if (current_parent <= 1 || current_parent != initial_parent) {
       fprintf(stderr, "zoterochat-helper: parent exited; shutting down\n");
       break;
     }
+    uint64_t loop_now = monotonic_ms();
+    session_advance_closures(loop_now);
+    for (int i = 0; i < MAX_CLIENTS; i++)
+      if (clients[i].state == CLIENT_HTTP && clients[i].accepted_at_ms &&
+          loop_now - clients[i].accepted_at_ms >=
+              HTTP_HANDSHAKE_TIMEOUT_MS)
+        client_close(i);
     struct pollfd pf[1 + MAX_CLIENTS + MAX_SESSIONS];
     int kind[1 + MAX_CLIENTS + MAX_SESSIONS],
         idx[1 + MAX_CLIENTS + MAX_SESSIONS], n = 0;
@@ -1909,6 +2102,17 @@ static int run_daemon(int port, const char *token) {
         if (kind[k] == 0) {
           int fd = accept(listener, NULL, NULL);
           if (fd >= 0) {
+            if (!fd_set_cloexec(fd, true)) {
+              close(fd);
+              continue;
+            }
+            uid_t peer_uid = (uid_t)-1;
+            gid_t peer_gid = (gid_t)-1;
+            if (getpeereid(fd, &peer_uid, &peer_gid) < 0 ||
+                peer_uid != geteuid()) {
+              close(fd);
+              continue;
+            }
             int yes = 1;
             setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
             int slot = -1;
@@ -1920,7 +2124,9 @@ static int run_daemon(int port, const char *token) {
             if (slot < 0)
               close(fd);
             else
-              clients[slot] = (Client){.fd = fd, .state = CLIENT_HTTP};
+              clients[slot] = (Client){.fd = fd,
+                                       .state = CLIENT_HTTP,
+                                       .accepted_at_ms = monotonic_ms()};
           }
         } else if (kind[k] == 1) {
           int ci = idx[k];
@@ -1982,13 +2188,19 @@ static int run_daemon(int port, const char *token) {
     reap_sessions();
   }
   close(listener);
+  unlink_bound_socket(socket_path, &bound);
+  uint64_t shutdown_now = monotonic_ms();
+  for (int i = 0; i < MAX_SESSIONS; i++)
+    if (sessions[i].used)
+      session_begin_close(&sessions[i], shutdown_now);
   for (int i = 0; i < MAX_CLIENTS; i++)
     if (clients[i].state != CLIENT_UNUSED)
       client_close(i);
-  for (int i = 0; i < MAX_SESSIONS; i++)
-    if (sessions[i].used)
-      session_signal(&sessions[i], SIGHUP);
-  for (int rounds = 0; rounds < 10; rounds++) {
+  uint64_t shutdown_deadline = shutdown_now + SESSION_HUP_GRACE_MS +
+                               SESSION_TERM_GRACE_MS +
+                               SESSION_KILL_GRACE_MS;
+  while (monotonic_ms() < shutdown_deadline) {
+    session_advance_closures(monotonic_ms());
     reap_sessions();
     bool any = false;
     for (int i = 0; i < MAX_SESSIONS; i++)
@@ -1996,14 +2208,27 @@ static int run_daemon(int port, const char *token) {
         any = true;
     if (!any)
       break;
-    usleep(50000);
+    (void)poll(NULL, 0, 20);
+  }
+  for (int i = 0; i < MAX_SESSIONS; i++)
+    if (sessions[i].used)
+      session_signal(&sessions[i], SIGKILL);
+  uint64_t kill_deadline = monotonic_ms() + SESSION_KILL_GRACE_MS;
+  while (monotonic_ms() < kill_deadline) {
+    reap_sessions();
+    bool any = false;
+    for (int i = 0; i < MAX_SESSIONS; i++)
+      if (sessions[i].used)
+        any = true;
+    if (!any)
+      break;
+    (void)poll(NULL, 0, 20);
   }
   for (int i = 0; i < MAX_SESSIONS; i++)
     if (sessions[i].used) {
-      session_signal(&sessions[i], SIGKILL);
-      waitpid(sessions[i].pid, NULL, 0);
       if (sessions[i].master >= 0)
         close(sessions[i].master);
+      session_discard_input(&sessions[i]);
     }
   return 0;
 }
@@ -2015,6 +2240,11 @@ typedef struct {
   char library_root[PATH_MAX];
   char zotkit_snapshot[PATH_MAX];
   char zotkit_snapshot_error[256];
+  char pdf_text_path[PATH_MAX];
+  char pdf_text_source[32];
+  char pdf_text_error[256];
+  long pdf_text_total_pages;
+  bool pdf_text_truncated;
   char *json;
   size_t json_len;
   JTok *toks;
@@ -2024,6 +2254,7 @@ typedef struct {
 enum {
   MCP_CONTEXT_LIBRARY_ROOT = 1u << 0,
   MCP_CONTEXT_SNAPSHOT = 1u << 1,
+  MCP_CONTEXT_PDF_TEXT = 1u << 2,
 };
 
 static bool path_within(const char *root, const char *path) {
@@ -2079,6 +2310,11 @@ static void mcp_context_clear(McpContext *c) {
   c->library_root[0] = 0;
   c->zotkit_snapshot[0] = 0;
   c->zotkit_snapshot_error[0] = 0;
+  c->pdf_text_path[0] = 0;
+  c->pdf_text_source[0] = 0;
+  c->pdf_text_error[0] = 0;
+  c->pdf_text_total_pages = 0;
+  c->pdf_text_truncated = false;
 }
 
 static bool parent_directory(char *path) {
@@ -2139,6 +2375,91 @@ static void mcp_load_snapshot_reference(McpContext *c) {
   free(raw);
 }
 
+static void mcp_load_pdf_text_reference(McpContext *c) {
+  int ri = obj_get(c->json, c->toks, c->tok_count, 0, "pdfText");
+  if (ri < 0 || c->toks[ri].type == JT_NULL) {
+    strlcpy(c->pdf_text_error,
+            "Zotero has not prepared indexed text for the active PDF",
+            sizeof(c->pdf_text_error));
+    return;
+  }
+  int pi = obj_get(c->json, c->toks, c->tok_count, ri, "path");
+  int si = obj_get(c->json, c->toks, c->tok_count, ri, "source");
+  char *raw = pi >= 0 ? tok_strdup(c->json, &c->toks[pi], PATH_MAX - 1) : NULL;
+  char *source = si >= 0 ? tok_strdup(c->json, &c->toks[si], 31) : NULL;
+  if (!raw || raw[0] != '/' || !source ||
+      (strcmp(source, "indexed-fulltext") && strcmp(source, "pdf-worker"))) {
+    strlcpy(c->pdf_text_error, "active PDF text reference is invalid",
+            sizeof(c->pdf_text_error));
+    free(raw);
+    free(source);
+    return;
+  }
+
+  const char *name = strrchr(raw, '/');
+  name = name ? name + 1 : raw;
+  bool private_snapshot = !strcmp(name, "current-pdf-text.txt");
+  bool zotero_index = !strcmp(name, ".zotero-ft-cache");
+  char resolved[PATH_MAX];
+  struct stat lst, st;
+  if ((!private_snapshot && !zotero_index) || lstat(raw, &lst) < 0 ||
+      S_ISLNK(lst.st_mode) || !S_ISREG(lst.st_mode) ||
+      !realpath(raw, resolved) || stat(resolved, &st) < 0 ||
+      !S_ISREG(st.st_mode) || st.st_uid != geteuid() || st.st_size < 0 ||
+      (uint64_t)st.st_size > MAX_PDF_TEXT_FILE) {
+    strlcpy(c->pdf_text_error,
+            "active PDF indexed text is unavailable or unsafe",
+            sizeof(c->pdf_text_error));
+    free(raw);
+    free(source);
+    return;
+  }
+
+  if (private_snapshot) {
+    if (!path_within(c->context_dir, resolved)) {
+      strlcpy(c->pdf_text_error,
+              "private PDF text snapshot escaped its Reader workspace",
+              sizeof(c->pdf_text_error));
+      free(raw);
+      free(source);
+      return;
+    }
+  } else {
+    int ai = obj_get(c->json, c->toks, c->tok_count, 0, "attachment");
+    int ki = ai >= 0 ? obj_get(c->json, c->toks, c->tok_count, ai, "key") : -1;
+    char *key = ki >= 0 ? tok_strdup(c->json, &c->toks[ki], 64) : NULL;
+    char parent[PATH_MAX];
+    strlcpy(parent, resolved, sizeof(parent));
+    if (!parent_directory(parent))
+      parent[0] = 0;
+    const char *directory_name = strrchr(parent, '/');
+    directory_name = directory_name ? directory_name + 1 : parent;
+    if (!key || !key[0] || strcmp(directory_name, key) ||
+        strcmp(source, "indexed-fulltext")) {
+      strlcpy(c->pdf_text_error,
+              "Zotero index path does not match the active attachment",
+              sizeof(c->pdf_text_error));
+      free(key);
+      free(raw);
+      free(source);
+      return;
+    }
+    free(key);
+  }
+
+  int ti = obj_get(c->json, c->toks, c->tok_count, ri, "totalPages");
+  long pages = 0;
+  if (ti >= 0)
+    (void)tok_int(c->json, &c->toks[ti], 1, 1000000, &pages);
+  int tri = obj_get(c->json, c->toks, c->tok_count, ri, "truncated");
+  c->pdf_text_truncated = tri >= 0 && c->toks[tri].type == JT_TRUE;
+  c->pdf_text_total_pages = pages;
+  strlcpy(c->pdf_text_path, resolved, sizeof(c->pdf_text_path));
+  strlcpy(c->pdf_text_source, source, sizeof(c->pdf_text_source));
+  free(raw);
+  free(source);
+}
+
 static bool mcp_context_reload(McpContext *c, unsigned load_flags,
                                char *err, size_t errn) {
   mcp_context_clear(c);
@@ -2185,6 +2506,8 @@ static bool mcp_context_reload(McpContext *c, unsigned load_flags,
   }
   if (load_flags & MCP_CONTEXT_SNAPSHOT)
     mcp_load_snapshot_reference(c);
+  if (load_flags & MCP_CONTEXT_PDF_TEXT)
+    mcp_load_pdf_text_reference(c);
   return true;
 }
 
@@ -2290,9 +2613,11 @@ static void mcp_emit_tool(const char *js, const JTok *id, const char *payload) {
             sb_append(&b, "}],\"structuredContent\":") &&
             sb_append_compact_json(&b, payload) &&
             sb_append(&b, ",\"isError\":false}");
-  if (!ok) {
+  if (!ok || b.len + 64 > MAX_MCP_RESPONSE) {
     sb_free(&b);
-    mcp_emit_tool_error(js, id, "could not serialize tool result");
+    mcp_emit_tool_error(js, id,
+                        ok ? "tool result exceeds the MCP response limit"
+                           : "could not serialize tool result");
     return;
   }
   mcp_emit_result(js, id, b.data);
@@ -2432,6 +2757,10 @@ static void walk_library(const char *root, const char *dir, const char *rel,
   DIR *d = opendir(dir);
   if (!d)
     return;
+  if (!fd_set_cloexec(dirfd(d), true)) {
+    closedir(d);
+    return;
+  }
   struct dirent *de;
   while ((de = readdir(d))) {
     if (hidden_name(de->d_name))
@@ -2586,6 +2915,343 @@ static char *library_payload(McpContext *c, const char *js, JTok *t, int count,
   free(relowned);
   free(qowned);
   return r.json.data;
+}
+
+typedef struct {
+  const char *data;
+  size_t len;
+} TextSlice;
+
+static TextSlice trim_text_slice(TextSlice value) {
+  while (value.len && isspace((unsigned char)value.data[0])) {
+    value.data++;
+    value.len--;
+  }
+  while (value.len && isspace((unsigned char)value.data[value.len - 1]))
+    value.len--;
+  return value;
+}
+
+static long pdf_text_page_count(const char *text, size_t len) {
+  if (!len)
+    return 0;
+  long pages = 1;
+  for (size_t i = 0; i < len; i++)
+    if (text[i] == '\f')
+      pages++;
+  return pages;
+}
+
+typedef struct {
+  const char *text;
+  size_t len;
+  size_t offset;
+  long page;
+  bool done;
+} PdfTextIterator;
+
+static bool pdf_text_iterator_next(PdfTextIterator *it, TextSlice *out) {
+  if (it->done || (!it->len && !it->page))
+    return false;
+  const char *start = it->text + it->offset;
+  size_t remaining = it->len - it->offset;
+  const char *separator = memchr(start, '\f', remaining);
+  size_t length = separator ? (size_t)(separator - start) : remaining;
+  *out = trim_text_slice((TextSlice){.data = start, .len = length});
+  it->page++;
+  if (separator)
+    it->offset += length + 1;
+  else {
+    it->offset = it->len;
+    it->done = true;
+  }
+  return true;
+}
+
+static bool pdf_text_ready(McpContext *c, char *err, size_t errn) {
+  if (c->pdf_text_path[0])
+    return true;
+  snprintf(err, errn, "%s",
+           c->pdf_text_error[0]
+               ? c->pdf_text_error
+               : "Zotero has not prepared text for the active PDF");
+  return false;
+}
+
+static bool pdf_page_range_args(const char *js, JTok *t, int count, int args,
+                                long *start, long *end, char *err,
+                                size_t errn) {
+  if (args < 0 || t[args].type != JT_OBJECT) {
+    snprintf(err, errn, "arguments must be an object");
+    return false;
+  }
+  int si = obj_get(js, t, count, args, "start_page");
+  int ei = obj_get(js, t, count, args, "end_page");
+  if (si < 0 || !tok_int(js, &t[si], 1, 1000000, start) || ei < 0 ||
+      !tok_int(js, &t[ei], 1, 1000000, end)) {
+    snprintf(err, errn, "start_page and end_page must be positive integers");
+    return false;
+  }
+  if (*end < *start) {
+    snprintf(err, errn, "end_page must be greater than or equal to start_page");
+    return false;
+  }
+  if (*end - *start + 1 > 50) {
+    snprintf(err, errn, "a maximum of 50 pages can be read at once");
+    return false;
+  }
+  return true;
+}
+
+static size_t utf8_left_boundary(const char *text, size_t position);
+
+static size_t nested_json_byte_cost(unsigned char value) {
+  if (value == '"' || value == '\\')
+    return 6;
+  if (value == '\b' || value == '\f' || value == '\n' || value == '\r' ||
+      value == '\t')
+    return 5;
+  if (value < 0x20)
+    return 13;
+  return 2;
+}
+
+static size_t pdf_text_for_escaped_budget(const char *text, size_t len,
+                                          size_t budget, size_t *cost) {
+  size_t used = 0, total = 0;
+  while (used < len) {
+    unsigned char first = (unsigned char)text[used];
+    size_t sequence = 1;
+    if ((first & 0xe0) == 0xc0)
+      sequence = 2;
+    else if ((first & 0xf0) == 0xe0)
+      sequence = 3;
+    else if ((first & 0xf8) == 0xf0)
+      sequence = 4;
+    if (sequence > len - used)
+      sequence = 1;
+    for (size_t index = 1; index < sequence; index++) {
+      if ((((unsigned char)text[used + index]) & 0xc0) != 0x80) {
+        sequence = 1;
+        break;
+      }
+    }
+    size_t next = 0;
+    for (size_t index = 0; index < sequence; index++)
+      next += nested_json_byte_cost((unsigned char)text[used + index]);
+    if (next > budget - total)
+      break;
+    total += next;
+    used += sequence;
+  }
+  *cost = total;
+  return used;
+}
+
+static char *pdf_read_pages_payload(McpContext *c, const char *js, JTok *t,
+                                    int count, int args, char *err,
+                                    size_t errn) {
+  long start, end;
+  if (!pdf_text_ready(c, err, errn) ||
+      !pdf_page_range_args(js, t, count, args, &start, &end, err, errn))
+    return NULL;
+  size_t text_len = 0;
+  char *text = read_regular_file(c->pdf_text_path, MAX_PDF_TEXT_FILE, &text_len);
+  if (!text) {
+    snprintf(err, errn, "could not read active PDF indexed text: %s",
+             strerror(errno));
+    return NULL;
+  }
+  long available_pages = pdf_text_page_count(text, text_len);
+  if (start > available_pages) {
+    snprintf(err, errn,
+             c->pdf_text_truncated
+                 ? "requested page is outside the bounded PDF text snapshot"
+                 : "requested page is outside the indexed PDF page range");
+    free(text);
+    return NULL;
+  }
+  long actual_end = end > available_pages ? available_pages : end;
+  StrBuf b = {0};
+  sb_append(&b, "{\"source\":");
+  sb_json_string(&b, c->pdf_text_source);
+  sb_printf(&b, ",\"startPage\":%ld,\"endPage\":%ld,\"pageCount\":%ld,"
+                "\"pages\":[",
+            start, actual_end,
+            c->pdf_text_total_pages > 0 ? c->pdf_text_total_pages
+                                       : available_pages);
+  size_t emitted = 0, escaped_emitted = 0;
+  bool output_truncated = false;
+  PdfTextIterator iterator = {.text = text, .len = text_len};
+  TextSlice value = {0};
+  while (pdf_text_iterator_next(&iterator, &value)) {
+    long page = iterator.page;
+    if (page < start)
+      continue;
+    if (page > actual_end)
+      break;
+    if (page != start)
+      sb_append(&b, ",");
+    size_t remaining = escaped_emitted < MAX_PDF_TEXT_ESCAPED_BUDGET
+                           ? MAX_PDF_TEXT_ESCAPED_BUDGET - escaped_emitted
+                           : 0;
+    size_t escaped = 0;
+    size_t used =
+        pdf_text_for_escaped_budget(value.data, value.len, remaining, &escaped);
+    sb_printf(&b, "{\"pageNumber\":%ld,\"text\":", page);
+    sb_json_string_n(&b, value.data, used);
+    sb_printf(&b, ",\"availableCharacters\":%zu,\"truncated\":%s}",
+              value.len, used < value.len ? "true" : "false");
+    emitted += used;
+    escaped_emitted += escaped;
+    if (used < value.len)
+      output_truncated = true;
+  }
+  sb_printf(&b,
+            "],\"output\":{\"characters\":%zu,\"escapedBytes\":%zu,"
+            "\"escapedByteLimit\":%u,"
+            "\"truncated\":%s},\"snapshotTruncated\":%s}",
+            emitted, escaped_emitted, MAX_PDF_TEXT_ESCAPED_BUDGET,
+            output_truncated ? "true" : "false",
+            c->pdf_text_truncated ? "true" : "false");
+  free(text);
+  return b.data;
+}
+
+static unsigned char ascii_fold(unsigned char value) {
+  return value >= 'A' && value <= 'Z' ? (unsigned char)(value + ('a' - 'A'))
+                                      : value;
+}
+
+static void pdf_search_kmp_table(const unsigned char *query, size_t query_len,
+                                 size_t *failure) {
+  if (!query_len)
+    return;
+  failure[0] = 0;
+  for (size_t index = 1; index < query_len; index++) {
+    size_t matched = failure[index - 1];
+    unsigned char current = ascii_fold(query[index]);
+    while (matched &&
+           current != ascii_fold(query[matched]))
+      matched = failure[matched - 1];
+    if (current == ascii_fold(query[matched]))
+      matched++;
+    failure[index] = matched;
+  }
+}
+
+static size_t utf8_left_boundary(const char *text, size_t position) {
+  while (position && (((unsigned char)text[position]) & 0xc0) == 0x80)
+    position--;
+  return position;
+}
+
+static size_t utf8_right_boundary(const char *text, size_t len,
+                                  size_t position) {
+  while (position < len && (((unsigned char)text[position]) & 0xc0) == 0x80)
+    position++;
+  return position;
+}
+
+static char *pdf_search_payload(McpContext *c, const char *js, JTok *t,
+                                int count, int args, char *err, size_t errn) {
+  if (!pdf_text_ready(c, err, errn))
+    return NULL;
+  if (args < 0 || t[args].type != JT_OBJECT) {
+    snprintf(err, errn, "arguments must be an object");
+    return NULL;
+  }
+  int qi = obj_get(js, t, count, args, "query");
+  int li = obj_get(js, t, count, args, "limit");
+  char *query = qi >= 0 ? tok_strdup(js, &t[qi], 512) : NULL;
+  long limit = 20;
+  if (!query || !query[0]) {
+    snprintf(err, errn, "query must be a non-empty string");
+    free(query);
+    return NULL;
+  }
+  if (li >= 0 &&
+      !tok_int(js, &t[li], 1, MAX_PDF_SEARCH_RESULTS, &limit)) {
+    snprintf(err, errn, "limit must be 1..%d", MAX_PDF_SEARCH_RESULTS);
+    free(query);
+    return NULL;
+  }
+  size_t text_len = 0;
+  char *text = read_regular_file(c->pdf_text_path, MAX_PDF_TEXT_FILE, &text_len);
+  if (!text) {
+    snprintf(err, errn, "could not read active PDF indexed text: %s",
+             strerror(errno));
+    free(query);
+    return NULL;
+  }
+  StrBuf b = {0};
+  sb_append(&b, "{\"query\":");
+  sb_json_string(&b, query);
+  sb_append(&b, ",\"source\":");
+  sb_json_string(&b, c->pdf_text_source);
+  sb_append(&b, ",\"matches\":[");
+  long found = 0;
+  size_t query_len = strlen(query);
+  size_t failure[512] = {0};
+  pdf_search_kmp_table((const unsigned char *)query, query_len, failure);
+  long available_pages = 0;
+  PdfTextIterator iterator = {.text = text, .len = text_len};
+  TextSlice value = {0};
+  while (pdf_text_iterator_next(&iterator, &value)) {
+    long page = iterator.page;
+    available_pages = page;
+    if (found >= limit)
+      continue;
+    size_t matched = 0;
+    /* The precomputed table is reused for every page. Non-ASCII UTF-8 bytes
+       remain byte-exact; only ASCII A-Z are folded. Total search work is
+       O(document bytes + query bytes), including adversarial near-matches. */
+    for (size_t offset = 0; offset < value.len && found < limit; offset++) {
+      unsigned char current = ascii_fold((unsigned char)value.data[offset]);
+      while (matched &&
+             current !=
+                 ascii_fold((unsigned char)query[matched]))
+        matched = failure[matched - 1];
+      if (current == ascii_fold((unsigned char)query[matched]))
+        matched++;
+      if (matched != query_len)
+        continue;
+      size_t position = offset + 1 - query_len;
+      size_t snippet_start = position > 180 ? position - 180 : 0;
+      size_t snippet_end = position + query_len + 260;
+      if (snippet_end > value.len)
+        snippet_end = value.len;
+      snippet_start = utf8_left_boundary(value.data, snippet_start);
+      snippet_end = utf8_right_boundary(value.data, value.len, snippet_end);
+      if (found++)
+        sb_append(&b, ",");
+      sb_printf(&b, "{\"pageNumber\":%ld,\"snippet\":", page);
+      StrBuf snippet = {0};
+      if (snippet_start)
+        sb_append(&snippet, "…");
+      sb_append_n(&snippet, value.data + snippet_start,
+                  snippet_end - snippet_start);
+      if (snippet_end < value.len)
+        sb_append(&snippet, "…");
+      sb_json_string(&b, snippet.data ? snippet.data : "");
+      sb_free(&snippet);
+      sb_printf(&b, ",\"matchStart\":%zu,\"matchLength\":%zu}",
+                position, query_len);
+      /* Match the old non-overlapping behavior: resume after the full hit. */
+      matched = 0;
+    }
+  }
+  sb_printf(&b,
+            "],\"pagesSearched\":%ld,\"totalPages\":%ld,\"limit\":%ld,"
+            "\"limitReached\":%s,\"snapshotTruncated\":%s}",
+            available_pages,
+            c->pdf_text_total_pages > 0 ? c->pdf_text_total_pages
+                                       : available_pages,
+            limit, found >= limit ? "true" : "false",
+            c->pdf_text_truncated ? "true" : "false");
+  free(text);
+  free(query);
+  return b.data;
 }
 
 typedef struct {
@@ -3085,6 +3751,22 @@ static const char tools_list_json[] =
     "snapshot.\"" MCP_READ_ONLY_ANNOTATIONS
     ",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":"
     "false}},"
+    "{\"name\":\"search_current_pdf\",\"description\":\"Search Zotero's "
+    "existing indexed text (or one bounded private PDFWorker fallback) for the "
+    "active PDF and return one-based page snippets. Use this instead of shell "
+    "PDF commands.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\",\"required\":[\"query\"],"
+    "\"properties\":{\"query\":{\"type\":\"string\",\"minLength\":1,"
+    "\"maxLength\":512},\"limit\":{\"type\":\"integer\",\"minimum\":1,"
+    "\"maximum\":50}},\"additionalProperties\":false}},"
+    "{\"name\":\"read_pdf_pages\",\"description\":\"Read an inclusive "
+    "one-based page range from the active PDF's Zotero text source. Read-only; "
+    "never invokes textutil, pdftotext, OCR, or another process.\""
+    MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\",\"required\":[\"start_page\","
+    "\"end_page\"],\"properties\":{\"start_page\":{\"type\":\"integer\","
+    "\"minimum\":1},\"end_page\":{\"type\":\"integer\",\"minimum\":1}},"
+    "\"additionalProperties\":false}},"
     "{\"name\":\"list_library_files\",\"description\":\"List non-hidden PDF files "
     "below libraryRoot without following "
     "symlinks.\"" MCP_READ_ONLY_ANNOTATIONS
@@ -3184,7 +3866,9 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
                     "\"tools\":{\"listChanged\":false}},\"serverInfo\":{"
                     "\"name\":\"zotkit-reader\",\"version\":\"" ZC_VERSION
                     "\"},\"instructions\":\"Use get_reader_context once for ordinary "
-                    "paper questions. Never call tools from this server concurrently "
+                    "paper questions. For details beyond the visible page, use "
+                    "search_current_pdf and then read_pdf_pages. Never use shell PDF "
+                    "commands as a fallback. Never call tools from this server concurrently "
                     "or through Promise.all; await any granular calls serially. This "
                     "is authoritative read-only context for the active Zotero PDF "
                     "Reader. Cite one-based PDF pages. Never modify the "
@@ -3209,7 +3893,10 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
                                 : ((!strcmp(name, "list_library_files") ||
                                     !strcmp(name, "search_library_files"))
                                        ? MCP_CONTEXT_LIBRARY_ROOT
-                                       : 0);
+                                       : ((!strcmp(name, "search_current_pdf") ||
+                                           !strcmp(name, "read_pdf_pages"))
+                                              ? MCP_CONTEXT_PDF_TEXT
+                                              : 0));
       if (!mcp_context_reload(c, load_flags, err, sizeof(err)))
         mcp_emit_tool_error(line, id, err);
       else if (zotkit_only) {
@@ -3244,6 +3931,22 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
       } else if (!strcmp(name, "get_current_selection")) {
         char *p = context_payload(c, "currentSelection", "selection",
                                   "current-selection.md");
+        if (p) {
+          mcp_emit_tool(line, id, p);
+          free(p);
+        } else
+          mcp_emit_tool_error(line, id, err);
+      } else if (!strcmp(name, "search_current_pdf")) {
+        char *p = pdf_search_payload(c, line, t, count, args, err,
+                                     sizeof(err));
+        if (p) {
+          mcp_emit_tool(line, id, p);
+          free(p);
+        } else
+          mcp_emit_tool_error(line, id, err);
+      } else if (!strcmp(name, "read_pdf_pages")) {
+        char *p = pdf_read_pages_payload(c, line, t, count, args, err,
+                                         sizeof(err));
         if (p) {
           mcp_emit_tool(line, id, p);
           free(p);
@@ -3508,10 +4211,11 @@ oom:
 static void usage(FILE *f) {
   fprintf(
       f,
-      "Usage:\n  zoterochat-helper --port PORT --token-file PATH\n  "
+      "Usage:\n  zoterochat-helper --socket PATH --token-file PATH\n  "
       "zoterochat-helper --mcp-stdio --context PATH\n  "
       "zoterochat-helper --zotkit-mcp --context PATH\n\nDaemon endpoints: GET "
-      "/health and WebSocket /ws (Bearer, X-ZoteroChat-Token, or ?token=).\n");
+      "/health and WebSocket /ws over a private Unix-domain socket "
+      "(mutual per-connection HMAC for WebSocket; Bearer only for diagnostic health).\n");
 }
 
 static void wipe_secret(char *value) {
@@ -3532,7 +4236,7 @@ static char *read_token_file(const char *path) {
             "zoterochat-helper: token file must be a private regular file owned by the current user\n");
     return NULL;
   }
-  int fd = open(path, O_RDONLY | O_NOFOLLOW);
+  int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0 || fstat(fd, &after) < 0 || !S_ISREG(after.st_mode) ||
       after.st_dev != before.st_dev || after.st_ino != before.st_ino) {
     if (fd >= 0)
@@ -3577,20 +4281,13 @@ int main(int argc, char **argv) {
   program = program ? program + 1 : argv[0];
   if (!strcmp(program, "zotkit"))
     return run_zotkit_cli(argc, argv);
-  int port = 27121;
-  const char *token_file = NULL, *context = NULL;
+  const char *socket_path = NULL, *token_file = NULL, *context = NULL;
   char *owned_token = NULL;
   bool mcp = false, zotkit_mcp = false;
   for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "--port") && i + 1 < argc) {
-      char *e = NULL;
-      long v = strtol(argv[++i], &e, 10);
-      if (!e || *e || v < 1 || v > 65535) {
-        usage(stderr);
-        return 2;
-      }
-      port = (int)v;
-    } else if (!strcmp(argv[i], "--token-file") && i + 1 < argc)
+    if (!strcmp(argv[i], "--socket") && i + 1 < argc)
+      socket_path = argv[++i];
+    else if (!strcmp(argv[i], "--token-file") && i + 1 < argc)
       token_file = argv[++i];
     else if (!strcmp(argv[i], "--mcp-stdio"))
       mcp = true;
@@ -3610,7 +4307,7 @@ int main(int argc, char **argv) {
     }
   }
   if (mcp || zotkit_mcp) {
-    if (mcp == zotkit_mcp || !context || token_file) {
+    if (mcp == zotkit_mcp || !context || token_file || socket_path) {
       usage(stderr);
       return 2;
     }
@@ -3619,15 +4316,15 @@ int main(int argc, char **argv) {
   if (token_file) {
     owned_token = read_token_file(token_file);
   }
-  if (context || !owned_token || strlen(owned_token) < 16 ||
+  if (context || !socket_path || !owned_token || strlen(owned_token) < 16 ||
       strlen(owned_token) > 256) {
     fprintf(stderr,
-            "zoterochat-helper: daemon mode requires a private --token-file containing 16..256 bytes\n");
+            "zoterochat-helper: daemon mode requires --socket in a private directory and a private --token-file containing 16..256 bytes\n");
     wipe_secret(owned_token);
     free(owned_token);
     return 2;
   }
-  int result = run_daemon(port, owned_token);
+  int result = run_daemon(socket_path, owned_token);
   wipe_secret(owned_token);
   free(owned_token);
   return result;

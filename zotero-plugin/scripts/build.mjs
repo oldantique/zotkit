@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
@@ -17,18 +17,14 @@ async function copy(source, target) {
   await cp(source, target, { recursive: true });
 }
 
-async function ensureNativeHelper() {
+function buildNativeHelper() {
   const source = path.join(repo, "native", "dist", "zoterochat-helper");
-  const implementation = path.join(repo, "native", "src", "zoterochat_helper.c");
-  try {
-    const [binaryStat, sourceStat] = await Promise.all([stat(source), stat(implementation)]);
-    if (binaryStat.mtimeMs < sourceStat.mtimeMs) throw new Error("native helper is stale");
-  }
-  catch {
-    execFileSync("make", ["-C", path.join(repo, "native"), "universal"], {
-      stdio: "inherit"
-    });
-  }
+  // Packaging must never trust a pre-existing dist binary. The universal
+  // target is phony and compiles both architectures directly from the C
+  // source on every invocation before the helper is copied into the XPI.
+  execFileSync("make", ["-C", path.join(repo, "native"), "universal"], {
+    stdio: "inherit"
+  });
   return source;
 }
 
@@ -56,7 +52,7 @@ await build({
   }
 });
 
-const helper = await ensureNativeHelper();
+const helper = buildNativeHelper();
 await Promise.all([
   copy(path.join(repo, "manifest.json"), path.join(root, "manifest.json")),
   copy(path.join(repo, "THIRD_PARTY_NOTICES.txt"), path.join(root, "THIRD_PARTY_NOTICES.txt")),

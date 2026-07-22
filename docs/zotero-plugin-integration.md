@@ -4,7 +4,7 @@ This repository contains the existing root project and the installable add-on wi
 deliberately different trust boundaries:
 
 - `zotero-plugin/` is the installable Zotero add-on. It observes the active Reader,
-  hosts a real Codex terminal in the right sidebar, and includes the read-only Zotkit
+  hosts a real agent CLI terminal in the right sidebar, and includes the read-only Zotkit
   metadata CLI/MCP used by that terminal.
 - The root `zotkit` Python package predates this integration. The XPI does not install,
   launch, configure, or depend on it; no external Zotkit CLI is part of the Reader
@@ -26,8 +26,9 @@ Zotero Reader
 right-sidebar xterm.js terminal
           │ authenticated local PTY
           ▼
-real `codex` CLI
-  ├── `--no-alt-screen --sandbox read-only --ask-for-approval untrusted`
+real agent CLI (`codex` or `claude`)
+  ├── Codex: `--no-alt-screen --sandbox read-only --ask-for-approval untrusted`
+  ├── Claude Code: `--permission-mode plan`
   ├── cwd/`--cd` = directory containing the active PDF
   └── live Reader MCP + bundled read-only Zotkit metadata MCP
 ```
@@ -39,14 +40,14 @@ held behind an invisible approval prompt.
 
 The terminal starts lazily when the user opens the assistant, rather than starting
 one process for every viewed paper. The PDF's containing directory is used as the
-working directory so that Codex sees the same local research context the user sees.
+working directory so that the selected agent sees the same local research context the user sees.
 If that directory is missing or unusable, the terminal falls back to its private
-profile context workspace. The original directory is always a read-only reference:
-the add-on must not place `AGENTS.md`, indexes, notes, or any other generated files
+profile context workspace. The add-on itself always treats the original directory as
+a read-only reference: it must not place `AGENTS.md`, indexes, notes, or any other generated files
 beside the original PDF.
 
 When the user selects text in the Reader, the add-on captures the extractable text,
-page number, and current item identity. “Send to Codex” inserts a bounded plain-text
+page number, and current item identity. “Send to Agent” inserts a bounded plain-text
 context block into the terminal input together with the user's question. Control
 characters and line breaks are normalized so the insertion cannot submit itself. The
 user can review the visible one-line input before it is submitted. Live Reader tools
@@ -58,7 +59,7 @@ The paper-reading path and Zotero-library discovery/query path are intentionally
 
 | Surface | Intended operations | Default policy |
 | --- | --- | --- |
-| Reader MCP | Active-paper metadata/PDF path, bounded current-page and latest-selection snapshots, PDF filename/path listing and search | Read-only |
+| Reader MCP | Active-paper metadata/PDF path, bounded current-page and latest-selection snapshots, active-PDF full-text search/page reads, PDF filename/path listing and search | Read-only |
 | Bundled Zotkit MCP | Search and inspect the local Zotero library metadata snapshot | Read-only |
 
 Codex should use the structured read-only Zotkit MCP tools for ordinary paper chat.
@@ -70,21 +71,25 @@ external `zotkit` executable or Python runtime. Its deliberately small tool surf
 - `zotkit_list_collections`
 - `zotkit_list_tags`
 
-The native Reader MCP likewise has an intentionally fixed six-tool surface. Ordinary
-paper questions should use the atomic first tool; granular calls must be awaited
-serially:
+The native Reader MCP likewise has an intentionally fixed eight-tool surface. Ordinary
+paper questions should use the atomic first tool; full-paper questions should search
+before reading a bounded page range, and all granular calls must be awaited serially:
 
 - `get_reader_context`
 - `get_active_paper`
 - `get_current_page`
 - `get_current_selection`
+- `search_current_pdf`
+- `read_pdf_pages`
 - `list_library_files`
 - `search_library_files`
 
-It does not expose annotations, arbitrary PDF page reads, automatic whole-PDF extraction, Zotero
-writes, or arbitrary filesystem access. Page and selection text come from bounded
-profile snapshots maintained by the plugin; the two library tools return PDF filenames
-and relative paths only.
+It does not expose annotations, cross-attachment page reads, Zotero writes, or arbitrary
+filesystem access. Page and selection text come from bounded profile snapshots maintained
+by the plugin. Active-PDF full text is normally the existing Zotero `.zotero-ft-cache`
+referenced in place; if no index exists, terminal startup may prepare one bounded text
+fallback in the private, automatically pruned workspace. The two library tools return
+PDF filenames and relative paths only.
 
 Do not expose an unrestricted shell wrapper as a tool, and do not make mutating Zotkit
 commands available through the automatic Reader context.
@@ -107,9 +112,10 @@ CLI; the plugin never opens or copies its token files.
 Small session and live-context files are confined below
 `<Zotero Profile>/zotkit/`. Metadata for each Zotero library is written to one bounded,
 shared snapshot and reused as the user opens different papers in that library. Live
-Reader state may be replaced in place, but the plugin does not create per-paper PDF,
-full-text, or library-metadata copies. Stored context may refer to the original PDF by
-absolute path, but nothing is written beside that PDF.
+Reader state may be replaced in place. The plugin never creates PDF copies and normally
+references Zotero's existing full-text cache; the bounded fallback described above is
+the only per-paper full-text materialization. Stored context may refer to the original
+PDF by absolute path, but nothing is written beside that PDF.
 
 ## Add-on identity
 

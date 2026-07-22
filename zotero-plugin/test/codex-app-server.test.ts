@@ -130,8 +130,8 @@ describe("CodexAppServerClient transport", () => {
       method: "initialize",
       params: {
         clientInfo: {
-          name: "zotero_chat",
-          title: "ZoteroChat",
+          name: "zotkit_zotero",
+          title: "Zotkit",
           version: "1.2.3",
         },
         capabilities: {

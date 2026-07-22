@@ -105,11 +105,27 @@ export interface FullTextResult {
   totalPages?: number;
 }
 
+/**
+ * A plugin-authored reference consumed by the bundled terminal MCP helper.
+ * Zotero's own index is referenced in place; PDFWorker text is mirrored only
+ * as a bounded fallback below the plugin's private profile workspace.
+ */
+export interface PdfTextReference {
+  schemaVersion: 1;
+  path: string;
+  source: "indexed-fulltext" | "pdf-worker";
+  characters?: number;
+  extractedPages?: number;
+  totalPages?: number;
+  truncated: boolean;
+}
+
 export interface WorkspaceFiles {
   root: string;
   context: string;
   currentPage: string;
   currentSelection: string;
+  pdfText: string;
   agents: string;
   claude: string;
 }
@@ -129,6 +145,8 @@ export interface ReaderContext {
     extractedPages?: number;
     totalPages?: number;
   };
+  /** Read-only text source for the terminal MCP's page/search tools. */
+  pdfText?: PdfTextReference | null;
   workspace?: WorkspaceFiles;
   warnings: string[];
 }
@@ -222,6 +240,10 @@ export interface ZoteroReadAdapter<TReader = unknown, TItem = unknown> {
   extractPdfJsPage(reader: TReader, pageIndex: number): Promise<string | null>;
   /** Read Zotero's existing full-text cache without initiating or changing indexing. */
   readIndexedFullText(attachment: TItem): Promise<PdfWorkerTextResult | null>;
+  /** Resolve Zotero's existing full-text cache path without reading or changing it. */
+  getIndexedFullTextReference?(
+    attachment: TItem,
+  ): Promise<PdfTextReference | null>;
   /** Read PDF text in memory. `pageIndexes` are zero-based; null means all pages. */
   readPdfWorkerText(
     attachment: TItem,
@@ -256,6 +278,8 @@ export interface ReaderContextHostAdapter {
   joinPath(...parts: string[]): string;
   ensureProfileDirectory(path: string): Promise<void>;
   replaceProfileText(path: string, text: string): Promise<void>;
+  /** Verify a plugin-owned profile text file without reading its contents. */
+  profileTextExists(path: string): Promise<boolean>;
   /**
    * Remove stale, plugin-managed paper cache directories only. The host must
    * fail closed on symlinks or unknown files and must never traverse outside
@@ -302,6 +326,8 @@ export interface ReaderContextOptions {
   maxWorkspaceTextCharacters?: number;
   /** Full PDF text is memory-only and retained for only this many recent papers. */
   maxFullTextCacheEntries?: number;
+  /** Maximum size of the private PDFWorker fallback mirrored for terminal MCP. */
+  maxPdfTextSnapshotCharacters?: number;
   /** Metadata snapshots are rebuilt only on an explicit terminal refresh after this TTL. */
   librarySnapshotTtlMs?: number;
   maxLibrarySnapshotItems?: number;
@@ -511,6 +537,7 @@ const DEFAULT_OPTIONS: Required<
   workspaceCachePruneIntervalMs: 60 * 60 * 1_000,
   maxWorkspaceTextCharacters: 64_000,
   maxFullTextCacheEntries: 3,
+  maxPdfTextSnapshotCharacters: 8_000_000,
   // Library metadata changes far less often than page/selection context. A
   // once-per-day in-memory refresh avoids re-enumerating large Zotero libraries
   // whenever the user collapses and reopens the terminal.
@@ -533,6 +560,7 @@ const DATABASE_SUFFIXES = [
 ] as const;
 
 const ZOTKIT_SNAPSHOT_WARNING_PREFIX = "Built-in Zotkit library snapshot unavailable:";
+const PDF_TEXT_WARNING_PREFIX = "Terminal PDF text unavailable:";
 
 function cleanText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
@@ -721,6 +749,10 @@ function summarizeLibraryAttachment(metadata: AttachmentMetadata): LibraryAttach
   };
 }
 
+function attachmentCacheKey(metadata: AttachmentMetadata): string {
+  return `${metadata.libraryID ?? "0"}-${metadata.key}`;
+}
+
 /**
  * Captures the active Reader and exposes a fixed, read-only tool set.
  */
@@ -738,6 +770,7 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
   private captureSequence = 0;
   private profileSyncTail: Promise<void> = Promise.resolve();
   private readonly fullTextCache = new Map<string, Promise<CachedFullText>>();
+  private readonly pdfTextReferences = new Map<string, PdfTextReference>();
   private readonly materializedStaticWorkspaces = new Set<string>();
   private readonly librarySnapshots = new Map<string, CachedLibrarySnapshot>();
   private readonly librarySnapshotBuilds = new Map<
@@ -816,6 +849,14 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
         ),
         16,
       ),
+      maxPdfTextSnapshotCharacters: clamp(
+        positiveInteger(
+          options.maxPdfTextSnapshotCharacters,
+          DEFAULT_OPTIONS.maxPdfTextSnapshotCharacters,
+        ),
+        250_000,
+        32_000_000,
+      ),
       librarySnapshotTtlMs: Math.min(
         positiveInteger(
           options.librarySnapshotTtlMs,
@@ -875,6 +916,91 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
       await this.enqueueWorkspaceSync(sequence, active.context, active.context.workspace);
     }
     return reference;
+  }
+
+  /**
+   * Prepare the terminal MCP's whole-document read source. Zotero's existing
+   * index is referenced in place. Only when no safe index reference exists do
+   * we mirror a bounded PDFWorker result into the plugin's private workspace.
+   */
+  async ensureCurrentPdfTextReference(): Promise<PdfTextReference | null> {
+    const snapshot = await this.ensureSnapshot();
+    const files = snapshot.context.workspace;
+    if (!files) return null;
+    const existing = snapshot.context.pdfText;
+    if (existing && existing.path !== files.pdfText) return existing;
+    if (existing) {
+      if (await this.host.profileTextExists(files.pdfText)) {
+        this.rememberPdfTextReference(snapshot.context.attachment, existing);
+        return existing;
+      }
+      // Workspace cleanup may have reclaimed the fallback while this service
+      // still has a live paper/session object. Drop the stale reference before
+      // rebuilding it from the bounded in-memory/Zotero text source.
+      snapshot.context.pdfText = null;
+      this.pdfTextReferences.delete(attachmentCacheKey(snapshot.context.attachment));
+    }
+
+    const fullText = await this.ensureFullText(snapshot);
+    if (this.snapshot !== snapshot) return this.ensureCurrentPdfTextReference();
+    if (!cleanText(fullText.text)) {
+      const warning = `${PDF_TEXT_WARNING_PREFIX} Zotero has no indexed or extractable text for this PDF`;
+      if (!snapshot.context.warnings.includes(warning)) snapshot.context.warnings.push(warning);
+      await this.enqueueWorkspaceSync(this.captureSequence, snapshot.context, files);
+      return null;
+    }
+
+    const bounded = truncateTextEnd(
+      fullText.text.replace(/\r\n?/g, "\n"),
+      this.options.maxPdfTextSnapshotCharacters,
+    );
+    await this.host.replaceProfileText(files.pdfText, bounded.text);
+    if (this.snapshot !== snapshot) return this.ensureCurrentPdfTextReference();
+    const reference: PdfTextReference = {
+      schemaVersion: 1,
+      path: files.pdfText,
+      source: fullText.source === "indexed-fulltext" ? "indexed-fulltext" : "pdf-worker",
+      characters: bounded.text.length,
+      extractedPages: splitPdfPages(bounded.text).length,
+      totalPages: fullText.totalPages ?? snapshot.context.page.pageCount,
+      truncated: bounded.truncated,
+    };
+    snapshot.context.pdfText = reference;
+    snapshot.context.warnings = snapshot.context.warnings.filter(
+      (warning) => !warning.startsWith(PDF_TEXT_WARNING_PREFIX),
+    );
+    this.rememberPdfTextReference(snapshot.context.attachment, reference);
+    await this.enqueueWorkspaceSync(this.captureSequence, snapshot.context, files);
+    return reference;
+  }
+
+  private rememberPdfTextReference(
+    attachment: AttachmentMetadata,
+    reference: PdfTextReference,
+  ): void {
+    const key = attachmentCacheKey(attachment);
+    this.pdfTextReferences.delete(key);
+    this.pdfTextReferences.set(key, reference);
+    while (this.pdfTextReferences.size > this.options.maxFullTextCacheEntries) {
+      const oldest = this.pdfTextReferences.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.pdfTextReferences.delete(oldest);
+    }
+  }
+
+  private async restorePdfTextReference(
+    attachment: AttachmentMetadata,
+    files: WorkspaceFiles,
+  ): Promise<PdfTextReference | null> {
+    const key = attachmentCacheKey(attachment);
+    const cached = this.pdfTextReferences.get(key);
+    if (!cached) return null;
+    if (cached.path !== files.pdfText || !(await this.host.profileTextExists(files.pdfText))) {
+      this.pdfTextReferences.delete(key);
+      return null;
+    }
+    this.rememberPdfTextReference(attachment, cached);
+    return cached;
   }
 
   getCachedZotkitLibrarySnapshotReference(): ZotkitLibrarySnapshotReference | null {
@@ -1420,7 +1546,7 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
 
     const attachmentMetadata = await this.zotero.describeAttachment(attachment);
     this.assertCurrentCapture(sequence);
-    const [parentHandle, pdfPath, rawPageStats, selection] = await Promise.all([
+    const [parentHandle, pdfPath, rawPageStats, selection, indexedPdfText] = await Promise.all([
       this.zotero.resolveParent(attachment).catch((error) => {
         warnings.push(`Parent metadata unavailable: ${errorMessage(error)}`);
         return null;
@@ -1440,6 +1566,10 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
         warnings.push(`Reader selection unavailable: ${errorMessage(error)}`);
         return null;
       }),
+      this.zotero.getIndexedFullTextReference?.(attachment).catch((error) => {
+        warnings.push(`Indexed full-text reference unavailable: ${boundedErrorMessage(error)}`);
+        return null;
+      }) ?? Promise.resolve(null),
     ]);
     this.assertCurrentCapture(sequence);
     const pageStats = normalizePageStats(rawPageStats);
@@ -1459,6 +1589,12 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
     );
     this.assertCurrentCapture(sequence);
     const capturedAt = hook.capturedAt ?? this.options.now().toISOString();
+    const pdfText = indexedPdfText
+      ? {
+        ...indexedPdfText,
+        totalPages: indexedPdfText.totalPages ?? pageStats.pageCount,
+      }
+      : null;
     let context: ReaderContext = {
       schemaVersion: 1,
       capturedAt,
@@ -1472,13 +1608,21 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
         characters: 0,
         totalPages: pageStats.pageCount,
       },
+      pdfText,
       warnings,
     };
 
     if (materializeWorkspace) {
       try {
         const workspace = await this.resolveWorkspaceFiles(context);
-        const contextWithWorkspace = { ...context, workspace };
+        const restoredPdfText = context.pdfText
+          ? null
+          : await this.restorePdfTextReference(attachmentMetadata, workspace);
+        const contextWithWorkspace = {
+          ...context,
+          pdfText: context.pdfText ?? restoredPdfText,
+          workspace,
+        };
         const synchronized = await this.enqueueWorkspaceSync(
           sequence,
           contextWithWorkspace,
@@ -1677,6 +1821,7 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
       context: this.host.joinPath(root, "context.json"),
       currentPage: this.host.joinPath(root, "current-page.md"),
       currentSelection: this.host.joinPath(root, "current-selection.md"),
+      pdfText: this.host.joinPath(root, "current-pdf-text.txt"),
       agents: this.host.joinPath(root, "AGENTS.md"),
       claude: this.host.joinPath(root, "CLAUDE.md"),
     };
@@ -1848,7 +1993,12 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
         maxAgeMs: this.options.workspaceCacheMaxAgeMs,
         nowMs,
       });
-      for (const removed of result.removed) this.materializedStaticWorkspaces.delete(removed);
+      for (const removed of result.removed) {
+        this.materializedStaticWorkspaces.delete(removed);
+        for (const [key, reference] of this.pdfTextReferences) {
+          if (isPathInside(removed, reference.path)) this.pdfTextReferences.delete(key);
+        }
+      }
     } catch (error) {
       context.warnings.push(`Profile workspace cleanup unavailable: ${errorMessage(error)}`);
     }
@@ -1933,6 +2083,7 @@ function renderWorkspaceContext(
     page,
     selection,
     fullText: context.fullText,
+    pdfText: context.pdfText,
     workspace: context.workspace,
     libraryRoot,
     zotkitLibrarySnapshot,
@@ -2227,11 +2378,12 @@ export function renderAgentInstructions(context: ReaderContext): string {
     "- `current-page.md`: text from the page visible when the context was captured.",
     "- `current-selection.md`: the latest text-selection annotation received from the Reader.",
     "- The original PDF is referenced read-only by `pdfPath` in `context.json`; it is never copied or modified.",
-    "- Full PDF text is not duplicated into this cache. Live search uses Zotero's existing index first and read-only PDF extraction only when requested.",
+    "- The terminal MCP references Zotero's existing full-text index in place. Only when no index reference exists may it keep one bounded fallback as `current-pdf-text.txt` in this private, automatically pruned workspace.",
     "",
     "## Live read-only tools",
     "",
     ...READER_TOOL_NAMES.map((name) => `- \`${name}\``),
+    "- Terminal MCP aliases: `get_reader_context`, `search_current_pdf`, and `read_pdf_pages`.",
     "",
     "Before answering references such as “this”, “here”, or “the selected passage”, call the live context or selection tool.",
     "Cite the one-based PDF page number for claims about the paper.",
@@ -2240,6 +2392,7 @@ export function renderAgentInstructions(context: ReaderContext): string {
     "The external library filename search never reads file contents.",
     "Library PDF content tools require a safe relative path and a unique match to an existing Zotero attachment through public read-only item APIs; they use only Zotero's existing full-text cache or bounded read-only PDFWorker extraction.",
     "If a library PDF is not uniquely associated with a Zotero attachment, report that state and do not use shell or direct file reads as a fallback.",
+    "For the active PDF, use `search_current_pdf` and then `read_pdf_pages`; never run `textutil`, `pdftotext`, Python PDF libraries, OCR, or other shell commands as a fallback.",
     "Place any user-requested generated notes in a separate user-approved output location, never in the Zotero library.",
     "",
   ].join("\n");
@@ -2365,6 +2518,30 @@ function stringProperty(object: unknown, ...names: string[]): string | undefined
 function numberProperty(object: unknown, ...names: string[]): number | undefined {
   const value = Number(property(object, ...names));
   return Number.isFinite(value) ? value : undefined;
+}
+
+function safeProperty(object: unknown, ...names: string[]): unknown {
+  try {
+    return property(object, ...names);
+  } catch {
+    return undefined;
+  }
+}
+
+function safeStringProperty(object: unknown, ...names: string[]): string | undefined {
+  try {
+    return stringProperty(object, ...names);
+  } catch {
+    return undefined;
+  }
+}
+
+function safeNumberProperty(object: unknown, ...names: string[]): number | undefined {
+  try {
+    return numberProperty(object, ...names);
+  } catch {
+    return undefined;
+  }
 }
 
 function itemField(item: unknown, field: string): string | undefined {
@@ -2629,6 +2806,21 @@ export function createZotero9ReadAdapter(
       return normalizePdfTextContent(await getTextContent({ includeMarkedContent: false }));
     },
 
+    async getIndexedFullTextReference(attachment) {
+      const fulltext = zotero.Fulltext ?? zotero.FullText;
+      const cacheFile = fulltext?.getItemCacheFile?.(attachment);
+      const path = stringProperty(cacheFile, "path")
+        ?? (typeof cacheFile === "string" ? cacheFile : undefined);
+      if (!path || !path.startsWith("/")) return null;
+      if (environment.fileExists && !(await environment.fileExists(path))) return null;
+      return {
+        schemaVersion: 1,
+        path,
+        source: "indexed-fulltext",
+        truncated: false,
+      };
+    },
+
     async readIndexedFullText(attachment) {
       const fulltext = zotero.Fulltext ?? zotero.FullText;
       const cacheFile = fulltext?.getItemCacheFile?.(attachment);
@@ -2713,7 +2905,7 @@ export function createZotero9ReadAdapter(
       }
       const candidates: unknown[] = [];
       for (const item of pool) {
-        if (property(item, "deleted")) continue;
+        if (safeProperty(item, "deleted")) continue;
         const isAttachment = method(item, "isAttachment");
         if (isAttachment && !isAttachment()) continue;
         if (!isAttachment && stringProperty(item, "itemType") !== "attachment") continue;
@@ -2861,8 +3053,8 @@ export function createZotero9ReadAdapter(
           const check = method(item, "isTopLevelItem");
           topLevel = check
             ? Boolean(check())
-            : property(item, "parentItemID", "parentID") === undefined
-              || property(item, "parentItemID", "parentID") === null;
+            : safeProperty(item, "parentItemID", "parentID") === undefined
+              || safeProperty(item, "parentItemID", "parentID") === null;
         }
         catch {
           topLevel = false;
@@ -2915,10 +3107,10 @@ export function createZotero9ReadAdapter(
           tags: uniqueTags,
           collections: collectionNames,
           collectionKeys,
-          version: numberProperty(item, "version") ?? null,
-          parentItem: stringProperty(item, "parentKey") ?? undefined,
-          filename: stringProperty(item, "attachmentFilename") ?? undefined,
-          contentType: stringProperty(item, "attachmentContentType", "contentType") ?? undefined,
+          version: safeNumberProperty(item, "version") ?? null,
+          parentItem: safeStringProperty(item, "parentKey") ?? undefined,
+          filename: safeStringProperty(item, "attachmentFilename") ?? undefined,
+          contentType: safeStringProperty(item, "attachmentContentType", "contentType") ?? undefined,
         };
         if (snapshotItemNeedsTruncation(record)) metadataComplete = false;
         itemRecords.push(normalizedSnapshotItem(record));
@@ -3099,6 +3291,7 @@ export function createGeckoProfileAdapter(
     "context.json",
     "current-page.md",
     "current-selection.md",
+    "current-pdf-text.txt",
     "AGENTS.md",
     "CLAUDE.md",
     "zotkit-mcp.json",
@@ -3182,6 +3375,23 @@ export function createGeckoProfileAdapter(
       );
       if (runtime.IOUtils.setPermissions) {
         await runtime.IOUtils.setPermissions(path, 0o600, false);
+      }
+    },
+
+    async profileTextExists(path) {
+      if (trimTrailingSlash(path) === trimTrailingSlash(profileRoot)
+          || !isPathInside(profileRoot, path)) return false;
+      try {
+        const canonicalRoot = await canonicalProfileDirectory();
+        const inspected = await inspectExistingPath(path);
+        return Boolean(
+          inspected.exists
+          && (inspected.type === "regular" || inspected.type === "file")
+          && inspected.canonical
+          && isPathInside(canonicalRoot, inspected.canonical),
+        );
+      } catch {
+        return false;
       }
     },
 

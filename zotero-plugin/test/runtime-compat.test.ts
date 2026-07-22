@@ -57,6 +57,29 @@ describe("Zotero 9 runtime compatibility", () => {
     );
   });
 
+  it("uses a private Unix-domain socket instead of an impersonable TCP port", () => {
+    const bridge = projectFile("src/native-bridge.ts");
+    const helper = projectFile("native/src/zoterochat_helper.c");
+
+    expect(bridge).toContain("createUnixDomainTransport");
+    expect(bridge).toContain('profilePath("run")');
+    expect(bridge).toContain('["0700", directory]');
+    expect(bridge).toContain('"--socket"');
+    expect(bridge).not.toContain("127.0.0.1");
+    expect(bridge).not.toContain("Math.random()");
+    expect(bridge).not.toContain("new WebSocket(");
+    expect(bridge).toContain("X-Zotkit-Client-Proof");
+    expect(bridge).toContain("x-zotkit-server-proof");
+    expect(bridge).not.toContain("X-ZoteroChat-Token");
+    expect(bridge).not.toContain("?token=");
+    expect(helper).toContain("socket(AF_UNIX, SOCK_STREAM, 0)");
+    expect(helper).toContain("getpeereid(fd, &peer_uid, &peer_gid)");
+    expect(helper).toContain("peer_uid != geteuid()");
+    expect(helper).toContain('hmac_sha1_base64(token, "client:", key)');
+    expect(helper).toContain('hmac_sha1_base64(token, "server:", key)');
+    expect(helper).not.toContain("socket(AF_INET, SOCK_STREAM, 0)");
+  });
+
   it("does not start Codex or extract Reader context during plugin startup", () => {
     const plugin = projectFile("src/plugin.ts");
     const terminal = projectFile("src/terminal-panel.ts");
@@ -84,6 +107,9 @@ describe("Zotero 9 runtime compatibility", () => {
     expect(terminal).toContain('"--disable", "code_mode_host"');
     expect(terminal).toContain("CODEX_READER_DEVELOPER_INSTRUCTIONS");
     expect(terminal).toContain("zotero_reader.get_reader_context once");
+    expect(terminal).toContain("zotero_reader.search_current_pdf first");
+    expect(terminal).toContain("zotero_reader.read_pdf_pages");
+    expect(terminal).toContain("Never use textutil, pdftotext");
     expect(terminal).toContain("Never call tools from the same zotero_reader MCP server concurrently");
     expect(terminal).toContain(
       'args: ["--zotkit-mcp", "--context", session.workspace]',
@@ -102,6 +128,18 @@ describe("Zotero 9 runtime compatibility", () => {
     expect(terminal).not.toContain("pipx install zotkit");
     expect(terminal).not.toContain("~/.config/zotkit/env");
     expect(projectFile("src/platform.ts")).not.toContain('"codex" | "claude" | "zotkit"');
+  });
+
+  it("always rebuilds the native helper from source while packaging", () => {
+    const packaging = projectFile("scripts/build.mjs");
+
+    expect(packaging).toContain('function buildNativeHelper()');
+    expect(packaging).toContain(
+      'execFileSync("make", ["-C", path.join(repo, "native"), "universal"]',
+    );
+    expect(packaging).toContain("const helper = buildNativeHelper();");
+    expect(packaging).not.toContain("mtimeMs");
+    expect(packaging).not.toMatch(/\bstat\s*\(/);
   });
 
   it("ships localized section actions and context-aware fixed-size SVGs", () => {

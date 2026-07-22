@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "Zotkit — Codex Terminal for Zotero",
-  "version": "0.2.2",
-  "description": "A real, read-only Codex CLI terminal with live PDF context inside Zotero Reader.",
+  "name": "Zotkit — Agent Terminal for Zotero",
+  "version": "0.2.3",
+  "description": "A real Codex or Claude Code terminal with bounded, read-only PDF context inside Zotero Reader.",
   "author": "oldantique and contributors",
   "icons": {
     "48": "chrome/content/icons/icon.svg",

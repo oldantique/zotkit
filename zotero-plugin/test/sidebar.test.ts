@@ -191,6 +191,16 @@ describe("Reader pane layout CSS", () => {
     expect(styles).not.toContain("min-height: 610px");
     expect(styles).not.toContain("min-height: 560px");
   });
+
+  it("responds to the Zotero pane width instead of the application viewport", () => {
+    const styles = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
+    expect(styles).toContain("container-name: zotkit-pane");
+    expect(styles).toContain("container-type: inline-size");
+    expect(styles).toContain("@container zotkit-pane (max-width: 420px)");
+    expect(styles).toContain("@container zotkit-pane (max-width: 340px)");
+    expect(styles).toContain("grid-template-columns: auto minmax(0, 1fr)");
+    expect(styles).not.toContain("@media (max-width: 420px)");
+  });
 });
 
 describe("renderMarkdown", () => {

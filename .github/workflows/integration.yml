@@ -49,8 +49,6 @@ jobs:
       - run: npm ci
       - name: Test the native helper
         run: npm run native:test
-      - name: Build the universal native helper
-        run: npm run native:universal
       - name: Build the installable XPI
         run: npm run build
       - uses: actions/upload-artifact@v4

@@ -5,10 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { NativeBridge } from "../src/native-bridge";
 import {
   MAX_PENDING_TERMINAL_INPUT,
+  MAX_MATH_PREVIEW_FORMULAS,
   MAX_TERMINAL_SESSIONS,
+  MATH_PREVIEW_DEBOUNCE_MS,
   TERMINAL_READY_TIMEOUT_MS,
   TERMINAL_SESSION_IDLE_MS,
   TerminalPanel,
+  extractTerminalMath,
+  hasMathPreviewCandidate,
   prependExecutableDirectory,
 } from "../src/terminal-panel";
 
@@ -32,7 +36,18 @@ function fakeSession(key: string, lastUsed: number, started = true) {
     workspace: `/profile/${key}`,
     workingDirectory: `/papers/${key}`,
     pdfPath: `/papers/${key}/paper.pdf`,
-    terminal: { dispose: vi.fn(), focus: vi.fn(), writeln: vi.fn(), options: {} },
+    terminal: {
+      dispose: vi.fn(),
+      focus: vi.fn(),
+      writeln: vi.fn(),
+      options: {},
+      buffer: {
+        active: {
+          length: 0,
+          getLine: vi.fn(),
+        },
+      },
+    },
     fit: { fit: vi.fn() },
     element: document.createElement("div"),
     started,
@@ -42,9 +57,84 @@ function fakeSession(key: string, lastUsed: number, started = true) {
     readyTimer: null,
     startupOutput: "",
     pendingInput: "",
+    zotkitAvailable: true,
     lastUsed,
+    mathExpressions: [],
+    mathFingerprint: "",
+    mathDetectionTail: "",
+    mathCandidatePending: false,
+    mathPreviewCollapsed: false,
+    mathPreviewDismissed: false,
+    mathScanTimer: null,
   };
 }
+
+function setRenderedLines(
+  session: any,
+  lines: Array<string | { text: string; wrapped: boolean }>,
+): void {
+  session.terminal.buffer.active.length = lines.length;
+  session.terminal.buffer.active.getLine = vi.fn((index: number) => {
+    const line = lines[index];
+    return {
+      isWrapped: typeof line === "string" ? false : Boolean(line?.wrapped),
+      translateToString: () => typeof line === "string" ? line : line?.text || "",
+    };
+  });
+}
+
+describe("terminal rich math extraction", () => {
+  it("recognizes supported delimiters and standalone LaTeX brackets", () => {
+    const formulas = extractTerminalMath(String.raw`
+\(E=mc^2\)
+\[
+P_e\sim\left(\frac{\Omega}{\Delta}\right)^2
+\]
+$$\Gamma_{\rm sc}=\Gamma_e P_e$$
+[
+  V_{ij}=C_6/r_{ij}^6
+]
+`);
+
+    expect(formulas).toHaveLength(MAX_MATH_PREVIEW_FORMULAS);
+    expect(formulas[0]).toContain("P_e\\sim");
+    expect(formulas[1]).toContain("\\Gamma_{\\rm sc}");
+    expect(formulas[2]).toContain("V_{ij}");
+    expect(extractTerminalMath(String.raw`The gap is \(E=mc^2\).`))
+      .toEqual(["E=mc^2"]);
+  });
+
+  it("deduplicates redraws and ignores citations or terminal badges", () => {
+    const formulas = extractTerminalMath(String.raw`
+[6, 63–66]
+[Zotkit] connected
+$$E=\hbar\omega$$
+$$E=\hbar\omega$$
+`);
+
+    expect(formulas).toEqual([String.raw`E=\hbar\omega`]);
+    expect(hasMathPreviewCandidate("\u001b[32m[Zotkit] ready\u001b[0m")).toBe(false);
+    expect(hasMathPreviewCandidate(String.raw`\[ P_e\sim 1 \]`)).toBe(true);
+  });
+
+  it("accepts ANSI-coloured Codex and Claude bullet prefixes without treating citations as math", () => {
+    const codex = "\u001b[36m•\u001b[0m [\nP_e\\sim(\\Omega/\\Delta)^2\n]";
+    const claude = "\u001b[35m⏺\u001b[0m [\n\\Gamma_{\\rm sc}=\\Gamma_e P_e\n]";
+
+    expect(hasMathPreviewCandidate(codex)).toBe(true);
+    expect(hasMathPreviewCandidate(claude)).toBe(true);
+    expect(extractTerminalMath(`${codex}\n${claude}`)).toEqual([
+      String.raw`P_e\sim(\Omega/\Delta)^2`,
+      String.raw`\Gamma_{\rm sc}=\Gamma_e P_e`,
+    ]);
+    expect(extractTerminalMath("• [6, 63–66]\n⏺ [Methods]")).toEqual([]);
+  });
+
+  it("preserves a complete formula echoed after the user prompt", () => {
+    expect(extractTerminalMath(String.raw`› Compare \(P_e=(\Omega/\Delta)^2\) with Eq. 4`))
+      .toEqual([String.raw`P_e=(\Omega/\Delta)^2`]);
+  });
+});
 
 describe("TerminalPanel right-sidebar lifecycle", () => {
   it("adds Homebrew paths even when a Finder-launched Zotero has a non-empty PATH", () => {
@@ -71,6 +161,162 @@ describe("TerminalPanel right-sidebar lifecycle", () => {
     expect(host.textContent).toContain("展开 Zotkit 后才会启动");
     expect(host.querySelector(".zc-zotkit-status")?.textContent).toContain("准备中");
     expect(bridge.start).not.toHaveBeenCalled();
+  });
+
+  it("debounces candidate output, then renders KaTeX from the xterm buffer", () => {
+    vi.useFakeTimers();
+    const panel = new TerminalPanel(bridgeStub(), 420) as any;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    panel.mount(host);
+    panel.visible = true;
+    const session: any = fakeSession("paper", Date.now());
+    setRenderedLines(session, [
+      "The scattering rate is",
+      "[",
+      String.raw`P_e\sim\left(\frac{\Omega}{\Delta}\right)^2,`,
+      String.raw`\Gamma_{\rm sc}\sim\Gamma_e P_e.`,
+      "]",
+    ]);
+    panel.current = session;
+    panel.sessions.set(session.key, session);
+
+    panel.observeMathOutput(session, String.raw`[ P_e\sim`);
+    vi.advanceTimersByTime(Math.floor(MATH_PREVIEW_DEBOUNCE_MS / 2));
+    panel.observeMathOutput(session, String.raw`\Gamma_{\rm sc}`);
+    vi.advanceTimersByTime(Math.ceil(MATH_PREVIEW_DEBOUNCE_MS / 2));
+    expect(host.querySelector(".zc-math-preview")?.hasAttribute("hidden")).toBe(true);
+    vi.advanceTimersByTime(Math.floor(MATH_PREVIEW_DEBOUNCE_MS / 2));
+
+    expect(host.querySelector(".zc-math-preview")?.hasAttribute("hidden")).toBe(false);
+    expect(host.querySelectorAll(".zc-math-preview-card")).toHaveLength(1);
+    expect(host.querySelector(".zc-math-preview-formula .katex")).not.toBeNull();
+    expect(host.querySelector(".zc-math-preview-formula a")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("waits for xterm's write callback before scheduling a rendered-buffer scan", () => {
+    vi.useFakeTimers();
+    let listener!: (event: any) => void;
+    let writeComplete!: () => void;
+    const bridge = {
+      ...bridgeStub(),
+      onEvent: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+      decodeOutput: vi.fn((_sessionId, data) => data),
+    } as unknown as NativeBridge;
+    const panel = new TerminalPanel(bridge, 420) as any;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    panel.mount(host);
+    panel.visible = true;
+    const session: any = fakeSession("paper", Date.now());
+    session.terminal.write = vi.fn((_output: string, callback: () => void) => {
+      writeComplete = callback;
+    });
+    panel.current = session;
+    panel.sessions.set(session.key, session);
+
+    listener({
+      type: "output",
+      sessionId: session.sessionId,
+      data: "\u001b[36m•\u001b[0m [\nP_e\\sim(\\Omega/\\Delta)^2\n]",
+    });
+    vi.advanceTimersByTime(MATH_PREVIEW_DEBOUNCE_MS * 2);
+    expect(session.terminal.buffer.active.getLine).not.toHaveBeenCalled();
+    expect(host.querySelector(".zc-math-preview")?.hasAttribute("hidden")).toBe(true);
+
+    setRenderedLines(session, ["• [", String.raw`P_e\sim(\Omega/\Delta)^2`, "]"]);
+    writeComplete();
+    vi.advanceTimersByTime(MATH_PREVIEW_DEBOUNCE_MS);
+
+    expect(session.terminal.buffer.active.getLine).toHaveBeenCalled();
+    expect(host.querySelector(".zc-math-preview-formula .katex")).not.toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("joins wrapped xterm rows before extracting a formula", () => {
+    const panel = new TerminalPanel(bridgeStub(), 420) as any;
+    const session: any = fakeSession("paper", Date.now());
+    setRenderedLines(session, [
+      String.raw`\[`,
+      { text: String.raw`P_e\sim\frac{\Om`, wrapped: false },
+      { text: String.raw`ega}{\Delta}`, wrapped: true },
+      String.raw`\]`,
+    ]);
+
+    const rendered = panel.readRenderedTerminalBuffer(session);
+
+    expect(rendered).toContain(String.raw`\frac{\Omega}{\Delta}`);
+    expect(extractTerminalMath(rendered)).toEqual([
+      String.raw`P_e\sim\frac{\Omega}{\Delta}`,
+    ]);
+  });
+
+  it("does no buffer scan for ordinary output or while the session is hidden", () => {
+    vi.useFakeTimers();
+    const panel = new TerminalPanel(bridgeStub(), 420) as any;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    panel.mount(host);
+    const session: any = fakeSession("paper", Date.now());
+    panel.current = session;
+    panel.sessions.set(session.key, session);
+    const scan = vi.spyOn(panel, "scanMathPreview");
+
+    panel.visible = true;
+    panel.observeMathOutput(session, "Working (42s) • esc to interrupt");
+    vi.advanceTimersByTime(MATH_PREVIEW_DEBOUNCE_MS * 2);
+    expect(scan).not.toHaveBeenCalled();
+
+    panel.visible = false;
+    panel.observeMathOutput(session, String.raw`\[E=mc^2\]`);
+    vi.advanceTimersByTime(MATH_PREVIEW_DEBOUNCE_MS * 2);
+    expect(scan).not.toHaveBeenCalled();
+    expect(session.mathCandidatePending).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("lets the formula rail collapse, close, and reopen without covering xterm", () => {
+    const panel = new TerminalPanel(bridgeStub(), 420) as any;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    panel.mount(host);
+    const session: any = fakeSession("paper", Date.now());
+    session.mathExpressions = [String.raw`E=\hbar\omega`];
+    panel.current = session;
+    panel.renderMathPreview(session);
+
+    const preview = host.querySelector(".zc-math-preview") as HTMLElement;
+    const surface = host.querySelector(".zc-terminal-surface") as HTMLElement;
+    expect(preview.nextElementSibling).toBe(surface);
+    expect(preview.contains(surface)).toBe(false);
+
+    (preview.querySelector(".zc-math-preview-actions button") as HTMLButtonElement).click();
+    expect(preview.classList.contains("is-collapsed")).toBe(true);
+    (preview.querySelector(".zc-math-preview-close") as HTMLButtonElement).click();
+    expect(preview.hidden).toBe(true);
+    (host.querySelector(".zc-math-preview-toggle") as HTMLButtonElement).click();
+    expect(preview.hidden).toBe(false);
+    expect(preview.classList.contains("is-collapsed")).toBe(false);
+  });
+
+  it("keeps KaTeX trust disabled in rich preview", () => {
+    const panel = new TerminalPanel(bridgeStub(), 420) as any;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    panel.mount(host);
+    const session: any = fakeSession("paper", Date.now());
+    session.mathExpressions = [String.raw`\href{javascript:alert(1)}{unsafe}`];
+    panel.current = session;
+
+    panel.renderMathPreview(session);
+
+    expect(host.querySelector(".zc-math-preview-formula a")).toBeNull();
+    expect(host.querySelector(".zc-math-preview-formula [href]")).toBeNull();
+    expect(host.querySelector(".zc-math-preview-formula .katex")).not.toBeNull();
   });
 
   it("shows explicit enabled and unavailable built-in Zotkit states", () => {
@@ -188,6 +434,40 @@ describe("TerminalPanel right-sidebar lifecycle", () => {
     expect(session.terminal.writeln).toHaveBeenCalledWith(
       expect.stringContaining("PTY input queue exceeds 256 KiB"),
     );
+  });
+
+  it("routes a hidden session error to that paper without contaminating the current one", () => {
+    let listener!: (event: any) => void;
+    const bridge = {
+      onEvent: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+    } as unknown as NativeBridge;
+    const panel = new TerminalPanel(bridge, 420) as any;
+    const hiddenA: any = fakeSession("paper-a", Date.now());
+    const currentB: any = fakeSession("paper-b", Date.now());
+    panel.sessions.set(hiddenA.key, hiddenA);
+    panel.sessions.set(currentB.key, currentB);
+    panel.current = currentB;
+
+    listener({
+      type: "error",
+      sessionId: hiddenA.sessionId,
+      message: "paper A PTY input failed",
+    });
+
+    expect(hiddenA.terminal.writeln).toHaveBeenCalledWith(
+      expect.stringContaining("paper A PTY input failed"),
+    );
+    expect(currentB.terminal.writeln).not.toHaveBeenCalled();
+
+    listener({
+      type: "error",
+      sessionId: "session-already-removed",
+      message: "stale session error",
+    });
+    expect(currentB.terminal.writeln).not.toHaveBeenCalled();
   });
 
   it("restores a hidden live session when switching back to its Reader", async () => {
@@ -396,6 +676,6 @@ describe("TerminalPanel resource bounds", () => {
     listener({ type: "output", sessionId: session.sessionId, data: "cHJvZ3Jlc3M=" });
 
     expect(session.lastUsed).toBe(123);
-    expect(session.terminal.write).toHaveBeenCalledWith("progress");
+    expect(session.terminal.write).toHaveBeenCalledWith("progress", expect.any(Function));
   });
 });

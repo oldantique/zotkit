@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.3
+
+- Replaced the loopback TCP bridge with a profile-private Unix-domain socket, verified the local peer identity, kept the bearer token out of URLs, and rejected pre-existing socket nodes.
+- Marked every helper, client, PTY, pipe, directory, and token descriptor close-on-exec, with adversarial tests proving Codex and Claude child processes inherit only standard input, output, and error.
+- Added authenticated graceful helper shutdown, per-session error isolation, helper-death propagation, HTTP handshake deadlines, and bounded HUP → TERM → KILL cleanup so stubborn child processes cannot survive an idle close or Zotero shutdown.
+- Exposed bounded `search_current_pdf` and `read_pdf_pages` tools to the terminal MCP, reusing Zotero's existing full-text cache in place and eliminating unreliable `textutil`/shell PDF fallbacks. Whole-PDF search is now a single pass, and final JSONL responses remain bounded even for control-heavy text.
+- Made private PDFWorker fallback references an existence-checked, bounded LRU that is evicted with its pruned paper workspace and rebuilt safely when needed.
+- Isolated malformed attachment properties while building the bundled Zotkit snapshot so one broken linked attachment can no longer disable library search.
+- Added a compact, container-responsive research-workbench surface and a collapsible, safe KaTeX preview—with bundled fonts—for recent terminal formulas without changing the real PTY interaction.
+- Clarified the difference between interactive-agent approvals, Claude plan mode, and the strictly read-only app-server path, and made every XPI build recompile the native helper from source.
+
 ## 0.2.2
 
 - Fixed MCP stdio JSONL framing so pretty-printed Reader context can never split one JSON-RPC response across physical lines.

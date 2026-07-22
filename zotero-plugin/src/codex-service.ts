@@ -95,7 +95,7 @@ export class CodexService {
     this.unsubscribeStore?.();
     this.unsubscribeStore = null;
     if (this.client) {
-      this.client.close(1000, "ZoteroChat reconnecting");
+      this.client.close(1000, "Zotkit reconnecting");
       this.client = null;
     }
     if (this.appServerSessionId) {
@@ -112,12 +112,12 @@ export class CodexService {
     });
     const socket = new NativeSessionSocket(this.bridge, sessionId);
     const client = new CodexAppServerClient({
-      url: "zoterochat://authenticated-stdio",
+      url: "zotkit://authenticated-stdio",
       webSocketFactory: () => socket,
       store: this.store,
       clientInfo: {
-        name: "zoterochat",
-        title: "ZoteroChat",
+        name: "zotkit_zotero",
+        title: "Zotkit",
         version: this.version
       },
       capabilities: {
@@ -163,7 +163,7 @@ export class CodexService {
   stop(): void {
     this.unsubscribeStore?.();
     this.unsubscribeStore = null;
-    this.client?.close(1000, "ZoteroChat shutdown");
+    this.client?.close(1000, "Zotkit shutdown");
     this.client = null;
     if (this.appServerSessionId) this.bridge.closeSession(this.appServerSessionId);
     this.appServerSessionId = null;

@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { NativeBridge } from "./native-bridge";
+import { renderMarkdown } from "./markdown";
 import { findExecutable, randomID, setPrefString } from "./platform";
 
 export type TerminalAgent = "codex" | "claude";
@@ -11,10 +12,18 @@ export const TERMINAL_SESSION_IDLE_MS = 15 * 60 * 1000;
 export const TERMINAL_SCROLLBACK_LINES = 5_000;
 export const TERMINAL_READY_TIMEOUT_MS = 60_000;
 export const MAX_PENDING_TERMINAL_INPUT = 128 * 1_024;
+export const MATH_PREVIEW_DEBOUNCE_MS = 260;
+export const MAX_MATH_PREVIEW_FORMULAS = 3;
+const MATH_PREVIEW_BUFFER_LINES = 160;
+const MATH_PREVIEW_BUFFER_CHARS = 16_000;
+const MATH_DETECTION_TAIL_CHARS = 4_000;
+const MAX_MATH_EXPRESSION_CHARS = 2_000;
 export const CODEX_READER_DEVELOPER_INSTRUCTIONS = [
   "You are the research assistant embedded in Zotero's PDF Reader by Zotkit.",
   "For ordinary questions about the open PDF, call zotero_reader.get_reader_context once; it returns the active-paper metadata, current page, and current selection together.",
-  "Never call tools from the same zotero_reader MCP server concurrently or through Promise.all. Await any granular get_active_paper, get_current_page, get_current_selection, list_library_files, or search_library_files calls serially.",
+  "For questions that require details beyond the visible page, call zotero_reader.search_current_pdf first, then zotero_reader.read_pdf_pages for the relevant one-based page range.",
+  "Never use textutil, pdftotext, Python PDF libraries, OCR, shell commands, or direct filesystem reads to inspect the active PDF; if the Reader MCP reports that text is unavailable, say so instead of falling back to the shell.",
+  "Never call tools from the same zotero_reader MCP server concurrently or through Promise.all. Await get_active_paper, get_current_page, get_current_selection, search_current_pdf, read_pdf_pages, list_library_files, or search_library_files calls serially.",
   "The built-in zotkit_library MCP server exposes exactly four read-only tools: zotkit_find_items, zotkit_get_item, zotkit_list_collections, and zotkit_list_tags.",
   "A bundled read-only zotkit CLI with find, get, collections, and tags commands is also on PATH and its absolute path is in ZOTKIT_CLI; it needs no Python install, API key, or external configuration.",
   "Treat the original PDF and its containing directory as read-only. Never create, edit, rename, move, or delete files there.",
@@ -62,6 +71,13 @@ interface TerminalSession {
   pendingInput: string;
   zotkitAvailable: boolean | null;
   lastUsed: number;
+  mathExpressions: string[];
+  mathFingerprint: string;
+  mathDetectionTail: string;
+  mathCandidatePending: boolean;
+  mathPreviewCollapsed: boolean;
+  mathPreviewDismissed: boolean;
+  mathScanTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -80,6 +96,11 @@ export class TerminalPanel {
   private zotkitStatus: HTMLElement | null = null;
   private status: HTMLElement | null = null;
   private agentPicker: HTMLSelectElement | null = null;
+  private mathPreview: HTMLElement | null = null;
+  private mathPreviewBody: HTMLElement | null = null;
+  private mathPreviewTitle: HTMLElement | null = null;
+  private mathPreviewCollapse: HTMLButtonElement | null = null;
+  private mathPreviewToggle: HTMLButtonElement | null = null;
   private current: TerminalSession | null = null;
   private sessions = new Map<string, TerminalSession>();
   private resizeObserver: ResizeObserver | null = null;
@@ -100,7 +121,7 @@ export class TerminalPanel {
           // Process redraws (notably spinners) are not user activity. Hidden
           // sessions are therefore still eligible for idle cleanup.
           const output = this.bridge.decodeOutput(event.sessionId, event.data);
-          session.terminal.write(output);
+          session.terminal.write(output, () => this.observeMathOutput(session, output));
           this.observeStartupOutput(session, output);
         }
       }
@@ -108,8 +129,14 @@ export class TerminalPanel {
         const session = this.sessionByID(event.sessionId);
         if (session) {
           const remaining = this.bridge.flushOutput(event.sessionId);
-          if (remaining) session.terminal.write(remaining);
+          if (remaining) {
+            session.terminal.write(
+              remaining,
+              () => this.observeMathOutput(session, remaining),
+            );
+          }
           this.clearReadyTimer(session);
+          this.clearMathScanTimer(session);
           session.pendingInput = "";
           session.exited = true;
           session.terminal.writeln(
@@ -121,7 +148,11 @@ export class TerminalPanel {
       else if (event.type === "error") {
         // Input and resize failures happen after spawn and must remain visible;
         // otherwise a rejected or truncated paste looks like a frozen terminal.
-        this.showError(event.message);
+        if (event.sessionId) {
+          const session = this.sessionByID(event.sessionId);
+          if (session) this.showSessionError(session, event.message);
+        }
+        else this.showError(event.message);
       }
     });
   }
@@ -194,10 +225,30 @@ export class TerminalPanel {
         agent,
       }).catch((error) => this.showError(error));
     });
-    bar.append(traffic, this.title, this.agentPicker);
+    const terminalTools = doc.createElement("div");
+    terminalTools.className = "zc-terminal-tools";
+    this.mathPreviewToggle = doc.createElement("button");
+    this.mathPreviewToggle.type = "button";
+    this.mathPreviewToggle.className = "zc-math-preview-toggle";
+    this.mathPreviewToggle.textContent = "ƒx";
+    this.mathPreviewToggle.title = "打开公式预览";
+    this.mathPreviewToggle.setAttribute("aria-label", "打开公式预览");
+    this.mathPreviewToggle.addEventListener("click", () => {
+      if (!this.current?.mathExpressions.length) return;
+      this.current.mathPreviewDismissed = false;
+      this.current.mathPreviewCollapsed = false;
+      this.renderMathPreview(this.current);
+      requestAnimationFrame(() => this.fitCurrent());
+    });
+    terminalTools.append(this.mathPreviewToggle, this.agentPicker);
+    bar.append(traffic, this.title, terminalTools);
 
     const context = doc.createElement("div");
     context.className = "zc-terminal-context";
+    const paperMark = doc.createElement("div");
+    paperMark.className = "zc-terminal-paper-mark";
+    paperMark.textContent = "PDF";
+    paperMark.setAttribute("aria-hidden", "true");
     const contextCopy = doc.createElement("div");
     contextCopy.className = "zc-terminal-context-copy";
     this.paperTitle = doc.createElement("div");
@@ -205,7 +256,7 @@ export class TerminalPanel {
     this.paperTitle.textContent = "展开后连接当前 PDF";
     this.contextMeta = doc.createElement("div");
     this.contextMeta.className = "zc-terminal-context-meta";
-    this.contextMeta.textContent = "真实 Codex CLI · 只读沙箱";
+    this.contextMeta.textContent = "真实本地 CLI · Zotero 只读工具";
     contextCopy.append(this.paperTitle, this.contextMeta);
     this.zotkitStatus = doc.createElement("span");
     this.zotkitStatus.className = "zc-zotkit-status is-checking";
@@ -224,7 +275,49 @@ export class TerminalPanel {
     refresh.title = "刷新当前论文、页码和选区";
     refresh.addEventListener("click", () => this.callbacks.onRefreshContext?.());
     actions.append(paste, refresh);
-    context.append(contextCopy, this.zotkitStatus, actions);
+    context.append(paperMark, contextCopy, this.zotkitStatus, actions);
+
+    this.mathPreview = doc.createElement("aside");
+    this.mathPreview.className = "zc-math-preview";
+    this.mathPreview.hidden = true;
+    const mathHeader = doc.createElement("header");
+    const mathIdentity = doc.createElement("div");
+    mathIdentity.className = "zc-math-preview-identity";
+    const mathGlyph = doc.createElement("span");
+    mathGlyph.className = "zc-math-preview-glyph";
+    mathGlyph.textContent = "ƒx";
+    this.mathPreviewTitle = doc.createElement("strong");
+    this.mathPreviewTitle.textContent = "公式预览";
+    mathIdentity.append(mathGlyph, this.mathPreviewTitle);
+    const mathActions = doc.createElement("div");
+    mathActions.className = "zc-math-preview-actions";
+    this.mathPreviewCollapse = doc.createElement("button");
+    this.mathPreviewCollapse.type = "button";
+    this.mathPreviewCollapse.textContent = "收起";
+    this.mathPreviewCollapse.title = "折叠公式预览";
+    this.mathPreviewCollapse.addEventListener("click", () => {
+      if (!this.current) return;
+      this.current.mathPreviewCollapsed = !this.current.mathPreviewCollapsed;
+      this.renderMathPreview(this.current);
+      requestAnimationFrame(() => this.fitCurrent());
+    });
+    const mathClose = doc.createElement("button");
+    mathClose.type = "button";
+    mathClose.className = "zc-math-preview-close";
+    mathClose.textContent = "×";
+    mathClose.title = "关闭公式预览";
+    mathClose.setAttribute("aria-label", "关闭公式预览");
+    mathClose.addEventListener("click", () => {
+      if (!this.current) return;
+      this.current.mathPreviewDismissed = true;
+      this.renderMathPreview(this.current);
+      requestAnimationFrame(() => this.fitCurrent());
+    });
+    mathActions.append(this.mathPreviewCollapse, mathClose);
+    mathHeader.append(mathIdentity, mathActions);
+    this.mathPreviewBody = doc.createElement("div");
+    this.mathPreviewBody.className = "zc-math-preview-body";
+    this.mathPreview.append(mathHeader, this.mathPreviewBody);
 
     this.surface = doc.createElement("div");
     this.surface.className = "zc-terminal-surface";
@@ -232,7 +325,7 @@ export class TerminalPanel {
     this.status.className = "zc-terminal-status";
     this.status.textContent = "展开 Zotkit 后才会启动本地 Codex CLI";
     this.surface.appendChild(this.status);
-    root.append(bar, context, this.surface);
+    root.append(bar, context, this.mathPreview, this.surface);
     host.replaceChildren(root);
     this.root = root;
 
@@ -259,6 +352,11 @@ export class TerminalPanel {
     this.zotkitStatus = null;
     this.status = null;
     this.agentPicker = null;
+    this.mathPreview = null;
+    this.mathPreviewBody = null;
+    this.mathPreviewTitle = null;
+    this.mathPreviewCollapse = null;
+    this.mathPreviewToggle = null;
     this.host = null;
   }
 
@@ -267,7 +365,13 @@ export class TerminalPanel {
     if (this.current && !this.current.disposed) {
       this.current.terminal.options.cursorBlink = visible;
     }
-    if (visible) requestAnimationFrame(() => this.fitCurrent());
+    if (!visible) {
+      for (const session of this.sessions.values()) this.clearMathScanTimer(session);
+    }
+    else {
+      if (this.current?.mathCandidatePending) this.scheduleMathScan(this.current);
+      requestAnimationFrame(() => this.fitCurrent());
+    }
     this.scheduleIdleCleanup();
   }
 
@@ -318,10 +422,15 @@ export class TerminalPanel {
   showError(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     if (this.current?.started && !this.current.exited) {
-      this.current.terminal.writeln(`\r\n\x1b[31m[Zotkit] ${message}\x1b[0m`);
+      this.showSessionError(this.current, message);
       return;
     }
     this.showStatus(message, true);
+  }
+
+  private showSessionError(session: TerminalSession, message: string): void {
+    if (session.disposed) return;
+    session.terminal.writeln(`\r\n\x1b[31m[Zotkit] ${message}\x1b[0m`);
   }
 
   destroy(): void {
@@ -360,6 +469,7 @@ export class TerminalPanel {
     }
     if (this.current && this.current !== session && !this.current.disposed) {
       this.current.terminal.options.cursorBlink = false;
+      this.clearMathScanTimer(this.current);
     }
     session.lastUsed = Date.now();
     this.current = session;
@@ -367,6 +477,8 @@ export class TerminalPanel {
     this.surface!.replaceChildren(session.element);
     this.agentPicker!.value = agent;
     this.updateHeader(options, agent);
+    this.renderMathPreview(session);
+    if (session.mathCandidatePending) this.scheduleMathScan(session);
     if (!session.started) await this.ensureSessionStarted(session);
     else this.setZotkitStatus(session.zotkitAvailable ? "enabled" : "missing");
     if (
@@ -441,6 +553,13 @@ export class TerminalPanel {
       pendingInput: "",
       zotkitAvailable: null,
       lastUsed: Date.now(),
+      mathExpressions: [],
+      mathFingerprint: "",
+      mathDetectionTail: "",
+      mathCandidatePending: false,
+      mathPreviewCollapsed: false,
+      mathPreviewDismissed: false,
+      mathScanTimer: null,
     };
     terminal.onData((data) => {
       if (!session.disposed && !session.exited && session.started) {
@@ -571,6 +690,131 @@ export class TerminalPanel {
     }
   }
 
+  /**
+   * Output is only a cheap wake-up signal. The actual formula source is read
+   * later from xterm's rendered buffer, after its parser has applied cursor
+   * movement, line clearing, and TUI redraws.
+  */
+  private observeMathOutput(session: TerminalSession, output: string): void {
+    if (session.disposed) return;
+    // Most TUI redraw chunks contain only cursor/colour CSI sequences. Avoid
+    // even ANSI cleanup for those high-frequency spinner updates.
+    if (!/[\\$^_•⏺]/.test(output) && !/(?:^|[\r\n])[ \t]*[\[\]]/.test(output)) return;
+    const plain = stripTerminalControlSequences(output);
+    if (!/[\\$\[\]]/.test(plain)) return;
+    session.mathDetectionTail = (session.mathDetectionTail + "\n" + plain)
+      .slice(-MATH_DETECTION_TAIL_CHARS);
+    if (!hasMathPreviewCandidate(session.mathDetectionTail)) return;
+    session.mathCandidatePending = true;
+    if (!this.isVisibleSession(session)) return;
+    this.scheduleMathScan(session);
+  }
+
+  private scheduleMathScan(session: TerminalSession): void {
+    if (!session.mathCandidatePending || !this.isVisibleSession(session)) return;
+    this.clearMathScanTimer(session);
+    session.mathScanTimer = setTimeout(() => {
+      session.mathScanTimer = null;
+      if (!this.isVisibleSession(session)) return;
+      this.scanMathPreview(session);
+    }, MATH_PREVIEW_DEBOUNCE_MS);
+  }
+
+  private scanMathPreview(session: TerminalSession): void {
+    const expressions = extractTerminalMath(this.readRenderedTerminalBuffer(session));
+    session.mathCandidatePending = false;
+    if (!expressions.length) return;
+    const fingerprint = expressions.map(mathExpressionFingerprint).join("\u001f");
+    session.mathDetectionTail = "";
+    if (fingerprint === session.mathFingerprint) return;
+    session.mathExpressions = expressions;
+    session.mathFingerprint = fingerprint;
+    this.renderMathPreview(session);
+    requestAnimationFrame(() => this.fitCurrent());
+  }
+
+  private readRenderedTerminalBuffer(session: TerminalSession): string {
+    const buffer = session.terminal.buffer.active;
+    const start = Math.max(0, buffer.length - MATH_PREVIEW_BUFFER_LINES);
+    const logicalLines: string[] = [];
+    for (let index = start; index < buffer.length; index++) {
+      const line = buffer.getLine(index);
+      if (!line) continue;
+      const text = line.translateToString(true);
+      if (line.isWrapped && logicalLines.length) {
+        logicalLines[logicalLines.length - 1] += text;
+      }
+      else logicalLines.push(text);
+    }
+    return logicalLines.join("\n").slice(-MATH_PREVIEW_BUFFER_CHARS);
+  }
+
+  private renderMathPreview(session: TerminalSession): void {
+    if (this.current !== session || !this.mathPreview || !this.mathPreviewBody) return;
+    const hasExpressions = session.mathExpressions.length > 0;
+    if (this.mathPreviewToggle) {
+      this.mathPreviewToggle.disabled = !hasExpressions;
+      this.mathPreviewToggle.classList.toggle("has-formulas", hasExpressions);
+      this.mathPreviewToggle.setAttribute(
+        "aria-pressed",
+        String(hasExpressions && !session.mathPreviewDismissed),
+      );
+      this.mathPreviewToggle.title = hasExpressions
+        ? `打开最近 ${session.mathExpressions.length} 个公式的预览`
+        : "检测到 LaTeX 输出后可打开公式预览";
+    }
+    if (!hasExpressions || session.mathPreviewDismissed) {
+      this.mathPreview.hidden = true;
+      this.mathPreviewBody.replaceChildren();
+      return;
+    }
+
+    this.mathPreview.hidden = false;
+    this.mathPreview.classList.toggle("is-collapsed", session.mathPreviewCollapsed);
+    if (this.mathPreviewTitle) {
+      this.mathPreviewTitle.textContent = `公式预览 · ${session.mathExpressions.length}`;
+    }
+    if (this.mathPreviewCollapse) {
+      this.mathPreviewCollapse.textContent = session.mathPreviewCollapsed ? "展开" : "收起";
+      this.mathPreviewCollapse.title = session.mathPreviewCollapsed
+        ? "展开公式预览"
+        : "折叠公式预览";
+    }
+    this.mathPreviewBody.replaceChildren();
+    if (session.mathPreviewCollapsed) return;
+
+    const doc = this.mathPreview.ownerDocument;
+    session.mathExpressions.forEach((expression, index) => {
+      const card = doc.createElement("article");
+      card.className = "zc-math-preview-card";
+      const label = doc.createElement("span");
+      label.className = "zc-math-preview-label";
+      label.textContent = index === session.mathExpressions.length - 1
+        ? "最新"
+        : `−${session.mathExpressions.length - index - 1}`;
+      const formula = doc.createElement("div");
+      formula.className = "zc-math-preview-formula";
+      // renderMarkdown delegates math to the hardened KaTeX path with
+      // trust:false, strict:error, bounded expansion, and unsafe nodes removed.
+      formula.appendChild(renderMarkdown(doc, `\\[\n${expression}\n\\]`));
+      card.append(label, formula);
+      this.mathPreviewBody!.appendChild(card);
+    });
+  }
+
+  private isVisibleSession(session: TerminalSession): boolean {
+    return this.visible
+      && this.current === session
+      && Boolean(this.root?.isConnected)
+      && !session.disposed;
+  }
+
+  private clearMathScanTimer(session: TerminalSession): void {
+    if (session.mathScanTimer === null) return;
+    clearTimeout(session.mathScanTimer);
+    session.mathScanTimer = null;
+  }
+
   private setZotkitStatus(state: "checking" | "enabled" | "missing"): void {
     if (!this.zotkitStatus) return;
     this.zotkitStatus.classList.remove("is-checking", "is-enabled", "is-missing");
@@ -677,6 +921,7 @@ export class TerminalPanel {
     if (session.disposed) return;
     session.disposed = true;
     this.clearReadyTimer(session);
+    this.clearMathScanTimer(session);
     session.pendingInput = "";
     if (closeProcess && session.started && !session.exited) {
       this.bridge.closeSession(session.sessionId);
@@ -684,7 +929,14 @@ export class TerminalPanel {
     session.exited = true;
     session.terminal.dispose();
     this.sessions.delete(session.key);
-    if (this.current === session) this.current = null;
+    if (this.current === session) {
+      this.current = null;
+      if (this.mathPreview) this.mathPreview.hidden = true;
+      if (this.mathPreviewToggle) {
+        this.mathPreviewToggle.disabled = true;
+        this.mathPreviewToggle.classList.remove("has-formulas");
+      }
+    }
   }
 
   private trafficButton(
@@ -701,6 +953,85 @@ export class TerminalPanel {
     button.addEventListener("click", callback);
     return button;
   }
+}
+
+/** Fast gate used before any xterm buffer walk. */
+export function hasMathPreviewCandidate(output: string): boolean {
+  const plain = stripTerminalControlSequences(output);
+  if (/\\\[|\\\(|\$\$/.test(plain)) return true;
+  const bracket = /(?:^|\n)[ \t]*(?:[•⏺][ \t]*)?\[([\s\S]{0,2000})/.exec(plain);
+  return Boolean(bracket && looksLikeLatex(bracket[1] || ""));
+}
+
+/**
+ * Extract at most the three newest unique formulas from xterm's plain buffer.
+ * Square brackets count only when they form a standalone line/block and the
+ * body has a strong LaTeX signal, which excludes citations and CLI badges.
+ */
+export function extractTerminalMath(bufferText: string): string[] {
+  const text = stripTerminalControlSequences(bufferText).slice(-MATH_PREVIEW_BUFFER_CHARS);
+  const matches: Array<{ index: number; expression: string }> = [];
+  const collect = (pattern: RegExp, capture = 1) => {
+    for (const match of text.matchAll(pattern)) {
+      const expression = normalizeMathExpression(match[capture] || "");
+      if (!expression || expression.length > MAX_MATH_EXPRESSION_CHARS) continue;
+      matches.push({ index: match.index || 0, expression });
+    }
+  };
+
+  collect(/\\\[([\s\S]{1,2000}?)\\\]/g);
+  collect(/\$\$([\s\S]{1,2000}?)\$\$/g);
+  collect(/\\\(([\s\S]{1,2000}?)\\\)/g);
+  for (const match of text.matchAll(
+    /(?:^|\n)[ \t]*(?:[•⏺][ \t]*)?\[[ \t]*(?:\n)?([\s\S]{1,2000}?)(?:\n)?[ \t]*(?:[•⏺][ \t]*)?\][ \t]*(?=\n|$)/g,
+  )) {
+    const expression = normalizeMathExpression(match[1] || "");
+    if (!expression || expression.length > MAX_MATH_EXPRESSION_CHARS) continue;
+    if (!looksLikeLatex(expression)) continue;
+    matches.push({ index: match.index || 0, expression });
+  }
+
+  matches.sort((left, right) => left.index - right.index);
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (let index = matches.length - 1; index >= 0; index--) {
+    const expression = matches[index]!.expression;
+    const fingerprint = mathExpressionFingerprint(expression);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    selected.unshift(expression);
+    if (selected.length === MAX_MATH_PREVIEW_FORMULAS) break;
+  }
+  return selected;
+}
+
+function looksLikeLatex(expression: string): boolean {
+  return /\\[A-Za-z]{2,}/.test(expression)
+    || /(?:[A-Za-z0-9)}\]])\s*[_^]\s*(?:\{|[A-Za-z0-9\\])/.test(expression)
+    || /(?:\\(?:alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega)|[α-ωΑ-Ω])/.test(expression);
+}
+
+function normalizeMathExpression(expression: string): string {
+  return expression
+    .replace(/\u00a0/g, " ")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function mathExpressionFingerprint(expression: string): string {
+  return normalizeMathExpression(expression).replace(/\s+/g, " ");
+}
+
+function stripTerminalControlSequences(text: string): string {
+  return text
+    // OSC sequences, including hyperlinks, terminated by BEL or ST.
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    // CSI cursor/style commands emitted by both Codex and Claude TUI.
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
 function codexMcpArguments(

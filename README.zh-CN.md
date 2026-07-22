@@ -2,18 +2,21 @@
 
 [English](README.md) | **简体中文**
 
-## Zotero Reader XPI（桌面端主流程）
+zotkit 包含两个地位相同、运行时与权限边界彼此独立的组件。它们共用仓库和产品名，
+但互不依赖。
+
+## Reader 插件（Zotero 9 / macOS）
 
 安装 [`zotero-plugin/`](zotero-plugin/README.md) 中的 XPI，即可在 Zotero 9 PDF
-Reader 右侧使用真实 Codex 终端。插件自动提供当前论文元数据、PDF 所在目录、当前页和
-选中文字，并在 XPI 内置供 Codex 使用的只读 `zotkit` 查询 CLI/MCP（`find`、`get`、
+Reader 右侧使用真实 Codex 或 Claude Code 终端。插件自动提供当前论文元数据、PDF 所在目录、当前页和
+选中文字，并在 XPI 内置供 Agent 使用的只读 `zotkit` 查询 CLI/MCP（`find`、`get`、
 `collections`、`tags`）。用户不需要安装 Python 包、填写 Zotero Web API key、配置
 `.env` 或另装 Zotkit 命令；Reader 插件也不暴露会修改文库或附件的命令。
 
 运行 `make bootstrap && make package` 即可构建，然后在 Zotero 插件管理器安装
-`zotero-plugin/dist/Zotkit-<version>.xpi`。唯一额外前提是本机已有并登录过 Codex CLI。
+`zotero-plugin/dist/Zotkit-<version>.xpi`。所选 Agent 需要已在本机安装并登录：Codex 模式使用 `codex`，Claude Code 模式使用 `claude`。
 
-## 可选的独立 headless 包（XPI 不使用）
+## Headless Python 包（macOS / Windows / Linux）
 
 **不打开 Zotero,也能管理你的文献库。**
 
@@ -57,8 +60,8 @@ zotkit doctor
 ## Zotero Reader 插件（macOS）
 
 仓库的 [`zotero-plugin/`](zotero-plugin/README.md) 是可直接安装到 Zotero 9 的
-XPI 插件。它在 PDF Reader 右侧放入真实的 Codex 终端，以当前 PDF
-所在目录作为只读工作目录，并通过本地 Reader MCP 提供当前论文元数据、受长度限制的
+XPI 插件。它在 PDF Reader 右侧放入真实的 Agent CLI 终端，以当前 PDF
+所在目录作为工作目录，并通过本地 Reader MCP 提供当前论文元数据、受长度限制的
 当前页快照和最近选区快照。
 
 在 macOS 构建并安装：
@@ -69,15 +72,16 @@ make plugin-build
 ```
 
 然后打开 Zotero 的“工具 → 插件”，选择“Install Add-on From File…”，安装
-`zotero-plugin/dist/Zotkit-<version>.xpi`。打开 PDF 并展开“Zotkit Codex 终端”后，
-helper 和 Codex 才会启动。XPI 已内置侧栏所用的只读 Zotkit 元数据 CLI/MCP；插件
+`zotero-plugin/dist/Zotkit-<version>.xpi`。打开 PDF 并展开“Zotkit Agent 终端”后，
+helper 和所选 Agent 才会启动。XPI 已内置侧栏所用的只读 Zotkit 元数据 CLI/MCP；插件
 用户不需要另装 Python、`pipx`，也不需要 Zotero Web API key、
 `~/.config/zotkit/env` 或其他 Zotkit 安装。
 
-Codex 固定使用 `--sandbox read-only --ask-for-approval untrusted`。插件不会修改
+Codex 固定使用 `--sandbox read-only --ask-for-approval untrusted`：默认在只读沙箱中，
+但用户仍可明确批准一次越权操作；Claude Code 的 plan 模式也不是操作系统级沙箱。插件自身不会修改
 Zotero 分类、标签、附件链接、批注、原 PDF 或 PDF 同目录文件；小型有界上下文只放在
-插件自己的 `<Zotero Profile>/zotkit/` 目录。Reader MCP 只有六个只读能力：一次聚合读取
-当前论文/当前页/最近选区，以及细粒度上下文和 PDF 文件名/相对路径的列出与搜索。XPI 内置的 Zotkit 元数据
+插件自己的 `<Zotero Profile>/zotkit/` 目录。Reader MCP 只有八个只读能力：一次聚合读取
+当前论文/当前页/最近选区、当前 PDF 的有界全文搜索与按页读取，以及 PDF 文件名/相对路径的列出与搜索。全文优先原地复用 Zotero 已有索引；没有索引时才在会自动清理的私有工作区生成一份有界文本回退，不复制原 PDF。XPI 内置的 Zotkit 元数据
 MCP 另提供四个只读 `zotkit_*` 工具，用于查询条目、分类和标签；同一 Zotero 文库只
 维护一份共享快照，不会给每篇论文复制一套文库数据。插件 ID 为
 `zotkit@oldantique.github.io`。详见
