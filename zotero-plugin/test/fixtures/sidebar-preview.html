@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ZoteroChat UI Preview</title>
-  <link rel="stylesheet" href="../../src/styles.css?v=compact-pane-2">
+  <title>Zotkit Research Chat Preview</title>
+  <link rel="stylesheet" href="../../src/styles.css?v=research-chat-3">
   <style>
     body { margin: 0; padding: 8px; min-height: 100vh; display: grid; place-items: center; background: #e9e8ed; }
     .preview-shell { width: min(410px, calc(100vw - 16px)); height: min(790px, calc(100vh - 16px)); overflow: hidden; border: 1px solid rgba(0,0,0,.12); border-radius: 13px; background: white; box-shadow: 0 22px 70px rgba(31,27,48,.22); }
@@ -13,19 +13,26 @@
 </head>
 <body>
   <div class="preview-shell">
-    <section class="zc-sidebar">
+    <section class="zc-sidebar" data-mode="agent">
       <header class="zc-topbar">
         <div class="zc-identity">
           <img src="../../assets/icon.svg" alt="">
-          <div><div class="zc-product-title">Codex</div><div class="zc-thread-title">Quantum Advantage with Shallow Circuits</div></div>
+          <div><div class="zc-product-title">Research Chat</div><div class="zc-thread-title">Quantum Advantage with Shallow Circuits</div></div>
         </div>
         <div class="zc-top-actions">
           <button class="zc-icon-button" title="对话历史">☷</button>
           <button class="zc-icon-button" title="新对话">＋</button>
-          <button class="zc-icon-button zc-terminal-button" title="终端"><img class="zc-button-icon" src="../../assets/terminal.svg" alt=""><span class="zc-button-label">CLI</span></button>
+          <button class="zc-icon-button zc-terminal-button" title="终端"><img class="zc-button-icon" src="../../assets/terminal.svg" alt=""><span class="zc-button-label">Terminal</span></button>
           <button class="zc-icon-button" title="账户">⋯</button>
         </div>
       </header>
+      <nav class="zc-thread-tabs">
+        <div class="zc-thread-tab-scroll">
+          <button class="zc-thread-tab is-active"><span class="zc-thread-tab-state is-running"></span><span>Main theorem</span></button>
+          <button class="zc-thread-tab"><span class="zc-thread-tab-state is-idle"></span><span>Methods</span></button>
+        </div>
+        <button class="zc-icon-button zc-thread-tab-add">＋</button>
+      </nav>
       <section class="zc-context-card">
         <div class="zc-pdf-icon">PDF</div>
         <div class="zc-context-copy">
@@ -36,6 +43,7 @@
       </section>
       <main class="zc-transcript">
         <article class="zc-entry zc-entry-user"><div class="zc-user-bubble">解释这里为什么可以忽略四阶项，并联系前面的定义。</div></article>
+        <article class="zc-entry zc-plan-card"><details open><summary><span>研究计划</span><small>1/2</small></summary><div class="zc-plan-body"><ol><li class="is-complete"><span class="zc-plan-step-state">✓</span><span>读取当前页定义</span></li><li class="is-running"><span class="zc-plan-step-state">◌</span><span>检查后续定理中的近似</span></li></ol></div></details></article>
         <article class="zc-entry zc-entry-tool">
           <details class="zc-tool-card">
             <summary><span class="zc-tool-state complete">✓</span><span>zotero_get_current_selection</span></summary>
@@ -53,19 +61,40 @@
             <h3>为什么四阶项可忽略</h3>
             <ol><li>前文把小参数定义为 <code>λ = g / Δ</code>。</li><li>当前结论只保留到 <code>O(λ²)</code>。</li><li>四阶修正因此被统一放进误差项。</li></ol>
             <blockquote>对应 PDF 第 7 页的 lightcone lemma 之后一段。</blockquote>
+            <p><span class="katex"><span class="katex-mathml">P_e ~ (Ω/Δ)²</span><span class="katex-html" aria-hidden="true"><span class="base"><span class="mord">P</span><sub>e</sub><span class="mrel">∼</span><span class="mopen">(</span><span class="mfrac">Ω/Δ</span><span class="mclose">)</span><sup>2</sup></span></span></span></p>
             <p>如果你愿意，我也可以继续检查这个近似在后续定理中是否仍然成立。</p>
           </div>
         </article>
+        <article class="zc-entry zc-review-card is-pending">
+          <details open><summary><span>更新论文分类</span><small>Review</small></summary><div class="zc-review-body">
+            <p>Nothing changes until Apply. A Zotero checkpoint will be created first.</p>
+            <pre class="zc-diff-view"><span class="is-hunk">@@ collections @@</span>
+<span class="is-deletion">- Quantum Control</span>
+<span class="is-addition">+ Rydberg Gates</span></pre>
+            <div class="zc-review-actions"><button>忽略</button><button class="is-primary">接受建议</button></div>
+          </div></details>
+        </article>
+        <article class="zc-entry zc-approval-card is-medium">
+          <div class="zc-approval-heading"><span>命令审批</span><strong>生成暂存的研究笔记</strong></div>
+          <code>python build_note.py</code>
+          <div class="zc-approval-actions"><button>拒绝</button><button class="is-primary">仅允许这一次</button></div>
+        </article>
+        <article class="zc-entry zc-checkpoint-card"><div class="zc-checkpoint-heading"><strong>Checkpoints</strong><small>恢复到先前的研究上下文</small></div><div class="zc-checkpoint-list"><div><span><strong>Zotero · 更新论文分类</strong><small>刚刚</small></span><button>Restore</button></div></div></article>
       </main>
       <footer class="zc-composer-wrap">
         <div class="zc-composer">
-          <div class="zc-composer-chips"><button class="zc-context-chip">⌁ 当前选区 · 328 字</button></div>
+          <div class="zc-composer-chips">
+            <span class="zc-context-chip is-paper"><span class="zc-context-chip-icon">P</span><span class="zc-context-chip-label">当前论文</span></span>
+            <span class="zc-context-chip is-selection"><span class="zc-context-chip-icon">“</span><span class="zc-context-chip-label">选区 · 328 字</span></span>
+            <button class="zc-icon-button zc-add-context-button">＋</button>
+          </div>
           <textarea class="zc-composer-input" rows="1" placeholder="询问这篇论文…"></textarea>
           <div class="zc-composer-footer">
             <div class="zc-composer-controls">
+              <select class="zc-compact-select zc-mode-picker"><option>Ask</option><option selected>Agent</option></select>
               <select class="zc-compact-select"><option>GPT-5.2-Codex</option></select>
               <select class="zc-compact-select"><option>思考 中</option></select>
-              <span class="zc-safety-chip">只读</span>
+              <span class="zc-safety-chip">需审批</span>
             </div>
             <button class="zc-send-button"><svg class="zc-button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg></button>
           </div>

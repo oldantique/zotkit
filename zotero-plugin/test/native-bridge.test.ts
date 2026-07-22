@@ -98,6 +98,81 @@ describe("NativeBridge helper lifecycle", () => {
     clearTimeout(timerB);
   });
 
+  it("does not reject unrelated pending spawns for an unscoped protocol error", () => {
+    const bridge = new NativeBridge("file:///unused/", "test") as any;
+    const rejected: string[] = [];
+    const timerA = setTimeout(() => {}, 10_000);
+    const timerB = setTimeout(() => {}, 10_000);
+    bridge.pendingSpawns.set("paper-a", {
+      resolve() {},
+      reject() { rejected.push("paper-a"); },
+      timer: timerA,
+    });
+    bridge.pendingSpawns.set("paper-b", {
+      resolve() {},
+      reject() { rejected.push("paper-b"); },
+      timer: timerB,
+    });
+
+    bridge.onMessage(JSON.stringify({
+      type: "error",
+      message: "malformed unrelated request",
+    }));
+
+    expect(rejected).toEqual([]);
+    expect([...bridge.pendingSpawns.keys()]).toEqual(["paper-a", "paper-b"]);
+    clearTimeout(timerA);
+    clearTimeout(timerB);
+  });
+
+  it("reports every acknowledged session once during an intentional helper stop", async () => {
+    const bridge = new NativeBridge("file:///unused/", "test") as any;
+    const events: any[] = [];
+    let running = true;
+    const socket = {
+      readyState: 1,
+      send() { running = false; },
+      close() { this.readyState = 3; },
+    };
+    bridge.process = {
+      get isRunning() { return running; },
+      kill() { running = false; },
+    };
+    bridge.socket = socket;
+    bridge.liveSessions.add("terminal-a");
+    bridge.liveSessions.add("app-server-b");
+    bridge.outputDecoders.set("terminal-a", new TextDecoder());
+    bridge.outputDecoders.set("app-server-b", new TextDecoder());
+    bridge.onEvent((event: any) => events.push(event));
+
+    await bridge.stop();
+
+    expect(events).toEqual([
+      { type: "exit", sessionId: "terminal-a", exitCode: null, signal: null },
+      { type: "exit", sessionId: "app-server-b", exitCode: null, signal: null },
+    ]);
+    expect(bridge.liveSessions.size).toBe(0);
+    expect(bridge.outputDecoders.size).toBe(0);
+  });
+
+  it("closes a process whose spawn acknowledgement arrives after timeout cleanup", () => {
+    const bridge = new NativeBridge("file:///unused/", "test") as any;
+    const sent: unknown[] = [];
+    bridge.socket = {
+      readyState: 1,
+      send(value: string) { sent.push(JSON.parse(value)); },
+    };
+
+    bridge.onMessage(JSON.stringify({
+      type: "spawned",
+      sessionId: "late-session",
+      pid: 123,
+    }));
+
+    expect(sent).toEqual([{ type: "close", sessionId: "late-session" }]);
+    expect(bridge.liveSessions.has("late-session")).toBe(false);
+  });
+
   it("requests authenticated shutdown and waits before closing the socket", async () => {
     const bridge = new NativeBridge("file:///unused/", "test") as any;
     const order: string[] = [];
@@ -208,8 +283,10 @@ describe("NativeBridge Unix WebSocket framing", () => {
       const socket = new UnixWebSocket("/private/profile/run/prebound.sock", token);
       const errors: unknown[] = [];
       socket.addEventListener("error", (event) => errors.push(event.error));
-      listener.onStartRequest();
 
+      // Gecko's Unix-domain input pump may not call onStartRequest until the
+      // peer closes. The client must write the upgrade without waiting for it.
+      expect(listener).toBeTruthy();
       expect(written).not.toContain(token);
       expect(written).not.toContain("X-ZoteroChat-Token");
       const key = /Sec-WebSocket-Key: ([^\r\n]+)/.exec(written)?.[1];

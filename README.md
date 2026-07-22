@@ -11,17 +11,31 @@ boundaries. They share a repository and product name, but neither depends on the
 
 ## Reader plugin (Zotero 9 on macOS)
 
-Install the XPI from [`zotero-plugin/`](zotero-plugin/README.md) to place a real Codex
-or Claude Code terminal in Zotero 9's PDF Reader sidebar. The active paper metadata, PDF directory,
-current page, and selected text are supplied automatically. The XPI embeds the
-read-only `zotkit` query CLI/MCP used by the agent (`find`, `get`, `collections`, `tags`),
-so plugin users need no Python package, Zotero Web API key, `.env`, or separately
-installed Zotkit command. Mutating library and attachment commands are deliberately
-not exposed by the Reader plugin.
+Install the XPI from [`zotero-plugin/`](zotero-plugin/README.md) to add a
+Cursor-style **Research Chat** to Zotero 9's PDF Reader. It drives the locally
+installed Codex through `codex app-server`, reuses the Codex CLI login, and exposes
+model/reasoning controls, per-paper history, Plan and Tool cards, streamed Markdown,
+and LaTeX rendering. The current paper metadata, PDF path and containing directory,
+page, selection, and other explicitly attached research context travel with each
+question. A real PTY-backed Codex/Claude terminal remains available as an advanced
+surface rather than the default interface.
+
+Research Chat starts in **Ask** mode, which is read-only. **Agent** mode may work only
+inside Zotkit's private staging workspace. A model cannot directly write to the
+original PDF directory or silently change Zotero. Metadata, existing-collection
+membership, linked-attachment paths, and PDF replacement use the dedicated
+`zotero_propose_changes` tool: it creates a visible Diff, waits for the user's
+**Apply** click, and creates a bounded restorable checkpoint immediately before the
+write.
+
+The XPI also embeds the read-only `zotkit` query layer shared by Research Chat and the advanced Terminal
+agent (`find`, `get`, `collections`, `tags`), so plugin users need no Python package,
+Zotero Web API key, `.env`, or separately installed Zotkit command.
 
 Build it with `make bootstrap && make package`, then install
-`zotero-plugin/dist/Zotkit-<version>.xpi` from Zotero's Add-ons manager. The selected
-agent must already be installed and logged in locally (`codex`, or `claude` for Claude Code mode).
+`zotero-plugin/dist/Zotkit-<version>.xpi` from Zotero's Add-ons manager. Research Chat
+requires the local `codex` CLI; the advanced Claude Code Terminal additionally requires
+`claude`.
 
 ## Headless Python package (macOS, Windows, and Linux)
 
@@ -40,9 +54,9 @@ Built for servers, scripts, and **LLM agents**: every write is dry-run by defaul
 batched, and version-checked, and you can define a tag taxonomy that is *enforced in
 code* so an agent (or a tired human) can't pollute your library with inconsistent tags.
 
-## Why zotkit
+## Why the headless CLI
 
-| | Desktop app | Other CLI/MCP tools | zotkit |
+| | Desktop app | Other CLI/MCP tools | Headless zotkit CLI |
 |---|---|---|---|
 | Works headless (server, SSH, CI) | ❌ | ✅ read-mostly | ✅ |
 | Write items/tags/collections | ✅ | ⚠️ usually needs the desktop app running | ✅ |
@@ -85,12 +99,12 @@ Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 
 ## Zotero Reader plugin (macOS)
 
-The repository also contains an installable Zotero 9 add-on in
-[`zotero-plugin/`](zotero-plugin/README.md). It places a real agent CLI terminal in the PDF
-Reader's right Item Pane, uses the active PDF's containing directory as its working
-directory, and supplies current-paper metadata, the bounded current-page
-snapshot, and the latest bounded text-selection snapshot through a local Reader MCP
-server.
+The installable Zotero 9 add-on in [`zotero-plugin/`](zotero-plugin/README.md) is the
+desktop Reader surface of zotkit; the headless Python package and the XPI are coequal
+entry points with independent runtimes. Research Chat is the default XPI experience.
+It connects to the local Codex app-server and supplies current-paper metadata, the
+original PDF path and directory, the bounded current-page snapshot, the latest
+bounded selection, and user-attached library context.
 
 To build and install it on macOS:
 
@@ -100,28 +114,26 @@ make plugin-build
 ```
 
 Then open Zotero **Tools → Add-ons**, choose **Install Add-on From File…**, and select
-`zotero-plugin/dist/Zotkit-<version>.xpi`. Open a PDF and expand **Zotkit Agent
-Terminal**. The helper and selected agent start only on first expansion. The XPI already embeds
-the read-only Zotkit metadata CLI/MCP used by the sidebar: plugin users do **not** need
-Python, `pipx`, a Zotero Web API key, `~/.config/zotkit/env`, or any other Zotkit
-installation.
+`zotero-plugin/dist/Zotkit-<version>.xpi`. Open a PDF and expand **Zotkit Research
+Chat**. The helper and app-server start lazily. The XPI already embeds the read-only
+Zotkit metadata query layer used by Research Chat and the advanced Terminal: plugin users do **not** need Python,
+`pipx`, a Zotero Web API key, `~/.config/zotkit/env`, or another Zotkit installation.
 
-The interactive Codex terminal starts with
-`--sandbox read-only --ask-for-approval untrusted`: it is read-only by default, while
-still allowing the user to explicitly approve an escalation. Claude Code mode uses
-`--permission-mode plan`, which is a CLI policy rather than an OS-level sandbox. The
-add-on itself and its bundled MCP tools never modify Zotero collections, tags,
-attachment links, annotations, the original PDF, or files beside it; bounded context
-files remain under the add-on's private `<Zotero Profile>/zotkit/` directory. The
-separate structured Codex app-server implementation is the stronger non-escalatable
-path: it uses a read-only sandbox, `approvalPolicy: never`, and declines command/file
-approval requests. Its Reader MCP has eight read-only tools,
-including one atomic active-paper/page/selection read, bounded search/page reads for
-the active PDF, and PDF filename/path listing/search tools.
-The bundled Zotkit metadata MCP adds four discovery-only `zotkit_*` tools for items,
-collections, and tags. Metadata is reused from one shared snapshot per Zotero library,
-not duplicated for each paper. The add-on ID is
-`zotkit@oldantique.github.io`. See the
+Ask mode uses a read-only sandbox and never offers write approvals. Agent mode can
+stage edits in Zotkit's private workspace and shows command/tool approvals in the
+sidebar. Changes to Zotero metadata, collection membership, a linked attachment path,
+or the active PDF are a separate reviewed workflow: Codex calls
+`zotero_propose_changes`, Zotkit validates the target and renders a Diff, and nothing
+changes until the user clicks **Apply**. Zotkit then records a bounded checkpoint;
+**Restore** can revert that applied change. The original PDF directory is context, not
+an Agent writable root.
+
+The advanced terminal starts Codex with
+`--sandbox read-only --ask-for-approval untrusted`, so a user can still approve an
+escalation inside the real TUI; Claude Code's `--permission-mode plan` is a CLI policy,
+not an OS sandbox. The bundled Zotkit metadata MCP remains discovery-only. Metadata is
+reused from one shared snapshot per Zotero library rather than duplicated per paper.
+The add-on ID is `zotkit@oldantique.github.io`. See the
 [`zotero-plugin` guide](zotero-plugin/README.md) and the
 [integration/security boundary](docs/zotero-plugin-integration.md) for details.
 
@@ -173,7 +185,7 @@ z.backup()
 `z.z` is the underlying [pyzotero](https://github.com/urschrei/pyzotero) client for
 anything not wrapped.
 
-## Using zotkit with AI agents
+## Using the headless CLI with AI agents
 
 zotkit is designed to be driven by coding agents (Claude Code and similar): dry-run
 defaults, code-enforced tag conventions, and a ready-made **Claude Code skill** in
@@ -189,7 +201,7 @@ taxonomy design, parallel read-only analysis, serial reviewed writes — is writ
 mkdir -p ~/.claude/skills && cp -r skills/zotkit ~/.claude/skills/
 ```
 
-## Safety model
+## Headless CLI safety model
 
 - `create` is **dry-run by default**; `--apply` to execute.
 - Writes go through fetch→modify→update (carries the item version, so concurrent edits

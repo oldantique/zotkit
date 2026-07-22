@@ -357,6 +357,10 @@ export const READER_TOOL_NAMES = [
   "zotero_read_library_pdf_pages",
   "zotero_search_library_pdf",
   "zotero_list_annotations",
+  "zotkit_find_items",
+  "zotkit_get_item",
+  "zotkit_list_collections",
+  "zotkit_list_tags",
 ] as const;
 
 export type ReaderToolName = (typeof READER_TOOL_NAMES)[number];
@@ -464,6 +468,57 @@ export const READER_CONTEXT_TOOLS: readonly ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "zotkit_find_items",
+    description:
+      "Search the active Zotero library's bounded, read-only metadata snapshot by title, creator, DOI, tag, collection, or filename. Returns item and collection keys for follow-up tools.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 512 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "zotkit_get_item",
+    description:
+      "Return one Zotero item's read-only metadata by its exact key in the active library, including collection keys and resolved collection paths.",
+    inputSchema: {
+      type: "object",
+      properties: { key: { type: "string", minLength: 1, maxLength: 128 } },
+      required: ["key"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "zotkit_list_collections",
+    description:
+      "List collection keys, names, paths, and parent keys from the active Zotero library's bounded read-only metadata snapshot. Use these keys when proposing reviewed collection membership changes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", maxLength: 512 },
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "zotkit_list_tags",
+    description:
+      "List tags and usage counts from the active Zotero library's bounded read-only metadata snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", maxLength: 512 },
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+      },
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 export interface SearchMatch {
@@ -503,6 +558,7 @@ interface CachedFullText {
 
 interface CachedLibrarySnapshot {
   reference: ZotkitLibrarySnapshotReference;
+  snapshot: ZotkitLibrarySnapshot;
   expiresAt: number;
 }
 
@@ -749,7 +805,9 @@ function summarizeLibraryAttachment(metadata: AttachmentMetadata): LibraryAttach
   };
 }
 
-function attachmentCacheKey(metadata: AttachmentMetadata): string {
+function attachmentCacheKey(
+  metadata: Pick<AttachmentMetadata, "libraryID" | "key">,
+): string {
   return `${metadata.libraryID ?? "0"}-${metadata.key}`;
 }
 
@@ -1010,6 +1068,34 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
   }
 
   /**
+   * Drop every plugin-owned text/reference cache for an attachment after its
+   * link target or PDF bytes change. The caller reloads Zotero's Reader before
+   * capturing again, so neither PDF.js nor the MCP tools can reuse old text.
+   */
+  async invalidateAttachmentCaches(
+    attachment: Pick<AttachmentMetadata, "key" | "libraryID">,
+  ): Promise<void> {
+    const key = attachmentCacheKey(attachment);
+    this.fullTextCache.delete(key);
+    this.pdfTextReferences.delete(key);
+    const active = this.snapshot;
+    if (!active || attachmentCacheKey(active.context.attachment) !== key) return;
+
+    // Cancel any slower capture that began before the approved mutation. Its
+    // promise may still settle, but it can no longer become the active snapshot.
+    this.captureSequence += 1;
+    this.snapshot = null;
+    const files = active.context.workspace;
+    if (files && await this.host.profileTextExists(files.pdfText)) {
+      // A previous capture may have created this fallback and a later capture
+      // may have switched to Zotero's external index. Empty it regardless of
+      // the currently selected source so Codex cannot read stale PDF text
+      // directly from the private workspace during the reload window.
+      await this.host.replaceProfileText(files.pdfText, "");
+    }
+  }
+
+  /**
    * Consume a Zotero Reader hook.  The item is observed and normalized by the
    * adapter, then a paper-scoped profile workspace is refreshed.
    */
@@ -1108,6 +1194,23 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
       case "zotero_list_annotations":
         return this.listAnnotations(
           args.page === undefined ? undefined : positiveInteger(args.page),
+        );
+      case "zotkit_find_items":
+        return this.findZotkitItems(
+          this.requireQuery(args.query),
+          this.parseListLimit(args.limit, 100, this.options.maxSearchResults),
+        );
+      case "zotkit_get_item":
+        return this.getZotkitItem(cleanText(args.key));
+      case "zotkit_list_collections":
+        return this.listZotkitCollections(
+          cleanText(args.query),
+          this.parseListLimit(args.limit, 500, 100),
+        );
+      case "zotkit_list_tags":
+        return this.listZotkitTags(
+          cleanText(args.query),
+          this.parseListLimit(args.limit, 500, 100),
         );
     }
   }
@@ -1430,6 +1533,128 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
         return pageDifference || left.key.localeCompare(right.key);
       });
     return { attachmentKey: snapshot.context.attachment.key, annotations: normalized };
+  }
+
+  async findZotkitItems(query: string, limit: number): Promise<{
+    query: string;
+    libraryID: number | string;
+    complete: boolean;
+    matches: Array<Record<string, JsonValue>>;
+  }> {
+    const snapshot = await this.ensureZotkitLibraryData();
+    const needle = query.toLocaleLowerCase();
+    const collections = new Map(snapshot.collections.map((collection) => [collection.key, collection]));
+    const matches: Array<Record<string, JsonValue>> = [];
+    for (const item of snapshot.items) {
+      if (matches.length >= limit) break;
+      const creators = item.creators
+        .map((creator) => creator.name || [creator.firstName, creator.lastName].filter(Boolean).join(" "))
+        .filter(Boolean);
+      const collectionPaths = item.collectionKeys
+        .map((key) => collections.get(key)?.path || "")
+        .filter(Boolean);
+      const haystack = [
+        item.key,
+        item.title,
+        item.DOI,
+        item.publicationTitle,
+        item.abstractNote,
+        item.filename || "",
+        ...creators,
+        ...item.tags,
+        ...item.collections,
+        ...collectionPaths,
+      ].join("\n").toLocaleLowerCase();
+      if (!haystack.includes(needle)) continue;
+      matches.push({
+        key: item.key,
+        itemType: item.itemType,
+        title: truncateMiddle(item.title, 1_000),
+        creators: creators.slice(0, 20),
+        date: truncateMiddle(item.date, 128),
+        DOI: truncateMiddle(item.DOI, 256),
+        tags: item.tags.slice(0, 50),
+        collectionKeys: item.collectionKeys.slice(0, 100),
+        collectionPaths: collectionPaths.slice(0, 100),
+        parentItem: item.parentItem || null,
+        filename: item.filename ? truncateMiddle(item.filename, 1_000) : null,
+      });
+    }
+    return {
+      query,
+      libraryID: snapshot.libraryID,
+      complete: snapshot.complete,
+      matches,
+    };
+  }
+
+  async getZotkitItem(key: string): Promise<Record<string, JsonValue>> {
+    if (!key || key.length > 128) throw new TypeError("key must be a non-empty Zotero item key");
+    const snapshot = await this.ensureZotkitLibraryData();
+    const normalized = key.toUpperCase();
+    const item = snapshot.items.find((candidate) => candidate.key.toUpperCase() === normalized);
+    if (!item) throw new Error(`No Zotero item with key ${key} exists in the active library snapshot`);
+    const collections = new Map(snapshot.collections.map((collection) => [collection.key, collection]));
+    return {
+      key: item.key,
+      itemType: item.itemType,
+      title: item.title,
+      creators: item.creators.map((creator) => ({ ...creator })) as unknown as JsonValue,
+      date: item.date,
+      publicationTitle: item.publicationTitle,
+      DOI: item.DOI,
+      url: item.url,
+      abstractNote: item.abstractNote,
+      language: item.language,
+      tags: [...item.tags],
+      collectionKeys: [...item.collectionKeys],
+      collections: item.collectionKeys.map((collectionKey) => {
+        const collection = collections.get(collectionKey);
+        return collection ? {
+          key: collection.key,
+          name: collection.name,
+          path: collection.path,
+          parentKey: collection.parentKey,
+        } : { key: collectionKey, name: "", path: "", parentKey: null };
+      }),
+      version: item.version,
+      parentItem: item.parentItem ?? null,
+      filename: item.filename ?? null,
+      contentType: item.contentType ?? null,
+    };
+  }
+
+  async listZotkitCollections(query: string, limit: number): Promise<{
+    libraryID: number | string;
+    complete: boolean;
+    collections: ZotkitLibraryCollection[];
+  }> {
+    if (query.length > 512) throw new TypeError("query must not exceed 512 characters");
+    const snapshot = await this.ensureZotkitLibraryData();
+    const needle = query.toLocaleLowerCase();
+    const collections = snapshot.collections
+      .filter((collection) => !needle || [collection.key, collection.name, collection.path]
+        .join("\n").toLocaleLowerCase().includes(needle))
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .slice(0, limit)
+      .map((collection) => ({ ...collection }));
+    return { libraryID: snapshot.libraryID, complete: snapshot.complete, collections };
+  }
+
+  async listZotkitTags(query: string, limit: number): Promise<{
+    libraryID: number | string;
+    complete: boolean;
+    tags: ZotkitLibraryTag[];
+  }> {
+    if (query.length > 512) throw new TypeError("query must not exceed 512 characters");
+    const snapshot = await this.ensureZotkitLibraryData();
+    const needle = query.toLocaleLowerCase();
+    const tags = snapshot.tags
+      .filter((tag) => !needle || tag.tag.toLocaleLowerCase().includes(needle))
+      .sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag))
+      .slice(0, limit)
+      .map((tag) => ({ ...tag }));
+    return { libraryID: snapshot.libraryID, complete: snapshot.complete, tags };
   }
 
   private async resolveLibraryPdfAttachment(relativePath: string): Promise<
@@ -1943,6 +2168,7 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
         };
         this.librarySnapshots.set(key, {
           reference,
+          snapshot,
           expiresAt: nowMs + this.options.librarySnapshotTtlMs,
         });
         const active = this.snapshot?.context;
@@ -1967,6 +2193,23 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
     })();
     this.librarySnapshotBuilds.set(key, promise);
     return promise;
+  }
+
+  private async ensureZotkitLibraryData(force = false): Promise<ZotkitLibrarySnapshot> {
+    const active = await this.ensureSnapshot();
+    const libraryID = active.context.attachment.libraryID;
+    const key = snapshotLibraryKey(libraryID);
+    if (!key || libraryID === undefined) {
+      throw new Error("The active Zotero attachment does not identify a library");
+    }
+    const reference = await this.buildLibrarySnapshot(libraryID, force);
+    const cached = this.librarySnapshots.get(key);
+    if (!reference || !cached) {
+      throw new Error(
+        "Built-in Zotkit library metadata is unavailable in this Zotero runtime",
+      );
+    }
+    return cached.snapshot;
   }
 
   private async pruneWorkspaceCache(
@@ -2014,6 +2257,11 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
   private parseLimit(value: unknown): number {
     if (value === undefined) return this.options.maxSearchResults;
     return clamp(positiveInteger(value), 1, 100);
+  }
+
+  private parseListLimit(value: unknown, maximum: number, fallback: number): number {
+    if (value === undefined) return clamp(fallback, 1, maximum);
+    return clamp(positiveInteger(value), 1, maximum);
   }
 }
 

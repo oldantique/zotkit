@@ -12,6 +12,9 @@ describe("Zotero 9 runtime compatibility", () => {
     const bootstrap = projectFile("bootstrap.js");
 
     expect(manifest.applications.zotero.id).toBe("zotkit@oldantique.github.io");
+    const updateURL = new URL(manifest.applications.zotero.update_url);
+    expect(updateURL.protocol).toBe("https:");
+    expect(updateURL.hostname).not.toBe("");
     expect(platform).toContain('PLUGIN_ID = "zotkit@oldantique.github.io"');
     expect(platform).toContain('PREF_BRANCH = "extensions.zotkit."');
     expect(platform).toContain('Zotero.Profile.dir, "zotkit"');
@@ -48,6 +51,9 @@ describe("Zotero 9 runtime compatibility", () => {
     expect(plugin).toContain('icon: "chrome://zotkit/content/icons/terminal.svg"');
     expect(plugin).toContain('icon: "chrome://zotkit/content/icons/icon16.svg"');
     expect(plugin).toContain('icon: "chrome://zotkit/content/icons/icon20.svg"');
+    expect(plugin).toContain('import readerToolbarIcon from "../assets/icon.svg"');
+    expect(plugin).toContain("icon.src = readerToolbarIcon");
+    expect(plugin).not.toContain('icon.src = "chrome://zotkit/content/icons/icon.svg"');
     expect(projectFile("src/terminal-panel.ts")).toContain('host.classList.add("zc-pane-host")');
     expect(projectFile("src/terminal-panel.ts")).not.toContain('"/bin/zsh"');
     expect(projectFile("src/settings.ts")).not.toContain('"shell"');

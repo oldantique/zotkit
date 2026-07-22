@@ -163,6 +163,30 @@ describe("TerminalPanel right-sidebar lifecycle", () => {
     expect(bridge.start).not.toHaveBeenCalled();
   });
 
+  it("attaches the xterm host to the flexible surface before renderer setup", () => {
+    vi.stubGlobal("Services", {
+      uuid: { generateUUID: () => "{12345678-1234-1234-1234-123456789abc}" },
+    });
+    const panel = new TerminalPanel(bridgeStub(), 420) as any;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    panel.mount(host);
+
+    const session = panel.createSession("paper:codex", {
+      paperKey: "paper",
+      paperTitle: "Paper",
+      workspace: "/profile/paper",
+      workingDirectory: "/papers/paper",
+      pdfPath: "/papers/paper.pdf",
+      librarySnapshotPath: "/profile/library.jsonl",
+    }, "codex");
+
+    expect(session.element.parentElement).toBe(host.querySelector(".zc-terminal-surface"));
+    expect(session.element.querySelector(".xterm")).not.toBeNull();
+    session.terminal.dispose();
+    vi.unstubAllGlobals();
+  });
+
   it("debounces candidate output, then renders KaTeX from the xterm buffer", () => {
     vi.useFakeTimers();
     const panel = new TerminalPanel(bridgeStub(), 420) as any;
@@ -468,6 +492,40 @@ describe("TerminalPanel right-sidebar lifecycle", () => {
       message: "stale session error",
     });
     expect(currentB.terminal.writeln).not.toHaveBeenCalled();
+  });
+
+  it("marks every paper terminal exited when the bridge reports helper loss", () => {
+    let listener!: (event: any) => void;
+    const bridge = {
+      onEvent: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+      flushOutput: vi.fn(() => ""),
+    } as unknown as NativeBridge;
+    const panel = new TerminalPanel(bridge, 420) as any;
+    const paperA: any = fakeSession("paper-a", Date.now());
+    const paperB: any = fakeSession("paper-b", Date.now());
+    panel.sessions.set(paperA.key, paperA);
+    panel.sessions.set(paperB.key, paperB);
+    panel.current = paperB;
+
+    listener({
+      type: "exit",
+      sessionId: paperA.sessionId,
+      exitCode: null,
+      signal: null,
+    });
+    listener({
+      type: "exit",
+      sessionId: paperB.sessionId,
+      exitCode: null,
+      signal: null,
+    });
+
+    expect(paperA.exited).toBe(true);
+    expect(paperB.exited).toBe(true);
+    expect(panel.hasLiveSessions).toBe(false);
   });
 
   it("restores a hidden live session when switching back to its Reader", async () => {

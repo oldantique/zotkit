@@ -27,6 +27,20 @@ describe("SidebarView", () => {
     document.body.replaceChildren();
   });
 
+  it("keeps the advanced Terminal reachable when app-server is unavailable", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = callbacks();
+    const view = new SidebarView(body, handlers);
+    view.setState({ phase: "unavailable", error: "app-server is unavailable" });
+
+    const button = [...body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent === "打开高级 Terminal")!;
+    button.click();
+
+    expect(handlers.onOpenTerminal).toHaveBeenCalledOnce();
+  });
+
   it("renders the current paper, streamed answer, tools, and safe controls", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);
@@ -58,10 +72,118 @@ describe("SidebarView", () => {
     expect(body.textContent).toContain("zotero_get_current_page");
     expect(body.querySelector("strong")?.textContent).toBe("Result:");
     expect(body.textContent).toContain("只读");
-    expect(body.querySelector<HTMLButtonElement>('button[title="打开真实 CLI 终端"]')?.textContent).toBe("CLI");
-    for (const title of ["对话历史", "新对话", "打开真实 CLI 终端", "账户", "刷新 Reader 上下文", "发送"]) {
+    expect(body.querySelector<HTMLButtonElement>('button[title="打开高级 CLI 终端"]')?.textContent).toContain("Terminal");
+    expect(body.textContent).toContain("Research Chat");
+    for (const title of ["对话历史", "新对话", "打开高级 CLI 终端", "账户", "刷新 Reader 上下文", "发送"]) {
       expect(body.querySelector(`button[title="${title}"] svg.zc-button-icon`)).not.toBeNull();
     }
+  });
+
+  it("provides Cursor-style thread tabs, modes, context chips, and an @ context menu", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = callbacks();
+    handlers.onModeChange = vi.fn();
+    handlers.onAddContext = vi.fn();
+    handlers.onRemoveContext = vi.fn();
+    const view = new SidebarView(body, handlers);
+    view.setState({
+      phase: "ready",
+      mode: "agent",
+      context: {
+        key: "ABC123",
+        title: "A Test Paper",
+        pageLabel: "7",
+        selectionText: "selected theorem",
+      },
+      contextChips: [
+        { id: "paper", kind: "paper", label: "当前论文" },
+        { id: "selection", kind: "selection", label: "选区 · 16 字", removable: true },
+      ],
+      contextSuggestions: [
+        { id: "annotations", kind: "annotation", label: "Annotations", detail: "12 notes" },
+        { id: "library", kind: "library", label: "Library", detail: "All papers" },
+      ],
+      threads: [
+        { id: "thread-a", title: "Main theorem", updatedAt: "2026-07-22", active: true, status: "running" },
+        { id: "thread-b", title: "Methods", updatedAt: "2026-07-21", active: false },
+      ],
+    });
+
+    expect(body.querySelector('.zc-sidebar')?.getAttribute("data-mode")).toBe("agent");
+    expect(body.textContent).toContain("需审批");
+    expect(body.querySelectorAll(".zc-thread-tab")).toHaveLength(2);
+    body.querySelector<HTMLButtonElement>('[data-thread-id="thread-b"]')?.click();
+    expect(handlers.onSelectThread).toHaveBeenCalledWith("thread-b");
+
+    const mode = body.querySelector<HTMLSelectElement>('select[title="研究模式"]')!;
+    mode.value = "ask";
+    mode.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(handlers.onModeChange).toHaveBeenCalledWith("ask");
+
+    body.querySelector<HTMLButtonElement>('button[title="移除上下文：选区 · 16 字"]')?.click();
+    expect(handlers.onRemoveContext).toHaveBeenCalledWith("selection");
+
+    const input = body.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "Compare @anno";
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const menu = body.querySelector<HTMLElement>(".zc-context-menu")!;
+    expect(menu.hidden).toBe(false);
+    expect(menu.textContent).toContain("Annotations");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(handlers.onAddContext).toHaveBeenCalledWith(expect.objectContaining({ id: "annotations" }));
+    expect(input.value).toBe("Compare ");
+    expect(menu.hidden).toBe(true);
+  });
+
+  it("renders plan, diff review, pending approval, and restorable checkpoints", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = callbacks();
+    handlers.onReviewDecision = vi.fn();
+    handlers.onApprovalDecision = vi.fn();
+    handlers.onRestoreCheckpoint = vi.fn();
+    const view = new SidebarView(body, handlers);
+    view.setState({
+      phase: "ready",
+      plan: {
+        id: "plan-1",
+        title: "Research plan",
+        explanation: "Read before comparing.",
+        steps: [
+          { id: "step-1", title: "Read the abstract", status: "complete" },
+          { id: "step-2", title: "Inspect the derivation", status: "running" },
+        ],
+      },
+      reviews: [{
+        id: "review-1",
+        title: "Proposed note",
+        summary: "Review before applying.",
+        diff: "@@ note\n-old\n+new",
+      }],
+      pendingApproval: {
+        id: "approval-1",
+        title: "Open an external source",
+        command: "search_library_pdf",
+        kind: "tool",
+        risk: "low",
+      },
+      checkpoints: [{ id: "checkpoint-1", label: "Before comparison", createdAt: "2026-07-22T10:30:00Z" }],
+    });
+
+    expect(body.textContent).toContain("Research plan");
+    expect(body.textContent).toContain("1/2");
+    expect(body.querySelector(".zc-diff-view .is-addition")?.textContent).toBe("+new");
+    [...body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "接受建议")?.click();
+    expect(handlers.onReviewDecision).toHaveBeenCalledWith("review-1", "accept");
+    [...body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "仅允许这一次")?.click();
+    expect(handlers.onApprovalDecision).toHaveBeenCalledWith("approval-1", "approve-once");
+    [...body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Restore")?.click();
+    expect(handlers.onRestoreCheckpoint).toHaveBeenCalledWith("checkpoint-1");
   });
 
   it("can reveal the composer when Zotero expands the custom section", () => {
@@ -184,9 +306,13 @@ describe("SidebarView", () => {
 describe("Reader pane layout CSS", () => {
   it("uses a bounded compact grid without a transcript minimum that can push the composer below the pane", () => {
     const styles = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
-    expect(styles).toContain("grid-template-rows: auto auto minmax(0, 1fr) auto");
-    expect(styles).toContain("height: clamp(340px, 58vh, 620px)");
+    expect(styles).toContain("grid-template-rows: auto auto auto minmax(0, 1fr) auto");
+    expect(styles).toContain("height: clamp(420px, 72vh, 780px)");
     expect(styles).toContain(".zc-composer-wrap { position: sticky; bottom: 0;");
+    expect(styles).toContain(".zc-context-menu { position: absolute;");
+    // The optional formula rail is hidden by default. Pin the terminal surface
+    // to the final flexible row so CSS Grid does not leave xterm at 0px tall.
+    expect(styles).toContain(".zc-terminal-surface { grid-row: 4;");
     expect(styles).not.toContain("minmax(320px, 1fr)");
     expect(styles).not.toContain("min-height: 610px");
     expect(styles).not.toContain("min-height: 560px");

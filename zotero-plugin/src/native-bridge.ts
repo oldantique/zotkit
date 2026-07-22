@@ -275,16 +275,7 @@ export class UnixWebSocket {
       .createInstance(Components.interfaces.nsIInputStreamPump);
     this.pump.init(this.input, 0, 0, true);
     this.pump.asyncRead({
-      onStartRequest: () => {
-        try {
-          this.writeBinary(new TextEncoder().encode(
-            nativeWebSocketUpgradeRequest(this.key, this.clientProof),
-          ));
-        }
-        catch (error) {
-          this.fail(error);
-        }
-      },
+      onStartRequest: () => {},
       onDataAvailable: (_request: unknown, stream: any, _offset: number, count: number) => {
         try {
           const binary = Components.classes["@mozilla.org/binaryinputstream;1"]
@@ -307,6 +298,21 @@ export class UnixWebSocket {
         "nsIRequestObserver",
       ]),
     }, null);
+    // Gecko's Unix-domain transport does not signal the input pump's
+    // onStartRequest when the connection becomes writable. Waiting for that
+    // callback deadlocks with an HTTP server that cannot send until it receives
+    // this upgrade request; on Zotero 9 it only fires after the server closes
+    // its idle handshake. The output stream is already available here, so send
+    // the request immediately after installing the input listener.
+    try {
+      this.writeBinary(new TextEncoder().encode(
+        nativeWebSocketUpgradeRequest(this.key, this.clientProof),
+      ));
+    }
+    catch (error) {
+      this.finishClose(1006, "Native socket write failed");
+      throw error;
+    }
   }
 
   addEventListener(
@@ -460,6 +466,8 @@ export class NativeBridge {
   private lifecycle = 0;
   private startPromise: Promise<void> | null = null;
   private listeners = new Set<BridgeListener>();
+  /** Sessions acknowledged by the helper and not yet followed by an exit. */
+  private liveSessions = new Set<string>();
   private outputDecoders = new Map<string, TextDecoder>();
   private pendingSpawns = new Map<string, {
     resolve: () => void;
@@ -571,6 +579,10 @@ export class NativeBridge {
     const pendingStart = this.startPromise;
     if (pendingStart) await pendingStart.catch(() => {});
     await this.stopHelperProcess("plugin shutdown");
+    // A process observer or transport implementation may report shutdown after
+    // the socket reference has already gone away. Keep the public lifecycle
+    // deterministic even in that ordering.
+    this.finishLiveSessions(false);
     this.outputDecoders.clear();
     this.listeners.clear();
   }
@@ -594,6 +606,9 @@ export class NativeBridge {
     }
     if (!options.argv.length || !options.argv[0]?.startsWith("/")) {
       throw new Error("Terminal command must use an absolute executable path");
+    }
+    if (this.pendingSpawns.has(sessionId) || this.liveSessions.has(sessionId)) {
+      throw new Error("Terminal session id is already in use");
     }
     this.outputDecoders.set(sessionId, new TextDecoder());
     const promise = new Promise<void>((resolve, reject) => {
@@ -750,10 +765,20 @@ export class NativeBridge {
     this.processExited = false;
     process.runAsync(args, args.length, {
       observe: (_subject: unknown, topic: string) => {
-        if (this.process === process && topic === "process-finished") {
+        const exited = topic === "process-finished" || topic === "process-failed";
+        if (this.process === process && exited) {
           this.processExited = true;
+          const socket = this.socket;
+          if (socket && socket.readyState !== SOCKET_CLOSED) {
+            // nsIProcess can report first; close locally so established pipe and
+            // PTY consumers do not wait for a later stream-pump notification.
+            socket.close(1011, "Native helper exited");
+          }
+          else if (this.liveSessions.size || this.outputDecoders.size) {
+            this.finishLiveSessions(!this.stopping && !this.helperStopping);
+          }
         }
-        if (!this.stopping && !this.helperStopping && topic === "process-finished") {
+        if (!this.stopping && !this.helperStopping && exited) {
           debug("Native helper exited");
         }
       }
@@ -805,6 +830,7 @@ export class NativeBridge {
         this.process = null;
         this.processExited = true;
       }
+      this.finishLiveSessions(false);
     }
     finally {
       this.helperStopping = false;
@@ -897,8 +923,19 @@ export class NativeBridge {
     for (const sessionId of [...this.pendingSpawns.keys()]) {
       this.rejectSpawn(sessionId, new Error("Native helper disconnected"));
     }
-    if (this.stopping || this.helperStopping) return;
-    for (const sessionId of [...this.outputDecoders.keys()]) {
+    this.finishLiveSessions(!this.stopping && !this.helperStopping);
+  }
+
+  private finishLiveSessions(emitDisconnectError: boolean): void {
+    // outputDecoders is included for compatibility with a session whose
+    // acknowledgement raced an older bridge implementation. pending spawns
+    // have already had their decoder removed by rejectSpawn().
+    const sessionIds = new Set([
+      ...this.liveSessions,
+      ...this.outputDecoders.keys(),
+    ]);
+    this.liveSessions.clear();
+    for (const sessionId of sessionIds) {
       this.emit({
         type: "exit",
         sessionId,
@@ -907,7 +944,9 @@ export class NativeBridge {
       });
       this.outputDecoders.delete(sessionId);
     }
-    this.emit({ type: "error", message: "Native helper disconnected" });
+    if (emitDisconnectError) {
+      this.emit({ type: "error", message: "Native helper disconnected" });
+    }
   }
 
   private onMessage(data: string): void {
@@ -923,21 +962,29 @@ export class NativeBridge {
       if (pending) {
         clearTimeout(pending.timer);
         this.pendingSpawns.delete(event.sessionId);
+        this.liveSessions.add(event.sessionId);
         pending.resolve();
+      }
+      else if (!this.liveSessions.has(event.sessionId)) {
+        // The caller may have timed out just before the acknowledgement. Do
+        // not leave the process orphaned in the helper.
+        try { this.send({ type: "close", sessionId: event.sessionId }); }
+        catch { /* the transport is already closing */ }
       }
     }
     else if (event.type === "error") {
       if (event.sessionId) {
         this.rejectSpawn(event.sessionId, new Error(event.message));
       }
-      else {
-        for (const sessionId of this.pendingSpawns.keys()) {
-          this.rejectSpawn(sessionId, new Error(event.message));
-        }
-      }
+      // An unscoped protocol error is informational. Rejecting every pending
+      // spawn here can make a healthy, unrelated process look as if it failed;
+      // a transport-wide failure is handled by handleSocketClosed instead.
     }
     this.emit(event);
-    if (event.type === "exit") this.outputDecoders.delete(event.sessionId);
+    if (event.type === "exit") {
+      this.liveSessions.delete(event.sessionId);
+      this.outputDecoders.delete(event.sessionId);
+    }
   }
 
   private emit(event: BridgeEvent): void {

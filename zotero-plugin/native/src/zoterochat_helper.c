@@ -27,7 +27,7 @@
 #include <unistd.h>
 #include <util.h>
 
-#define ZC_VERSION "0.2.3"
+#define ZC_VERSION "0.3.0"
 #define MCP_PROTOCOL_VERSION "2025-06-18"
 #define MAX_CLIENTS 16
 #define MAX_SESSIONS 32

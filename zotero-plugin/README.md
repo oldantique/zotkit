@@ -1,32 +1,88 @@
-# Zotkit — Zotero 里的 Codex / Claude Code 终端
+# Zotkit — Zotero 里的 Cursor 风格 Research Chat
 
-Zotkit 在 Zotero 9 PDF Reader 的右侧 Item Pane 中运行真实的本机 Codex CLI 或 Claude Code。Agent 的工作目录是当前 PDF 所在目录；论文元数据、当前页和当前选区由只读 Reader MCP 持续提供。
+Zotkit 在 Zotero 9 PDF Reader 的右侧 Item Pane 中提供结构化 Research Chat。默认界面通过本机 `codex app-server` 使用 Codex，交互方式接近 Cursor 侧栏：固定输入框、Ask/Agent 模式、模型与思考强度、每篇论文的历史会话、Plan/Tool 卡片、审批卡片、Diff/Apply、Checkpoint，以及 Markdown/LaTeX 渲染。完整的 Codex 或 Claude Code PTY 终端作为高级功能保留。
+
+插件会把当前论文的元数据、原 PDF 路径及所在目录、当前页、最近选区和用户主动添加的研究上下文交给 Codex。它不会把 PDF 复制成第二套论文库。
 
 ## 安装
 
-1. 构建或下载 `Zotkit-0.2.3.xpi`。
+1. 构建或下载 `Zotkit-<version>.xpi`。
 2. 在 Zotero 9 中选择“工具 → 插件”。
 3. 点击右上角齿轮，选择“Install Add-on From File…”。
 4. 选择 XPI；如侧栏未立即出现，重启 Zotero。
 
-插件面向 macOS 12+ 与 Zotero 9.0.x。XPI 包含 arm64 / x86_64 universal 原生 helper，以及侧栏直接使用的只读 Zotkit 元数据 CLI/MCP。运行时不要求 Node.js、Python、`pipx`、Zotero Web API key 或 `~/.config/zotkit/env`。需要本机已有并登录过 `codex` CLI；Claude Code 模式另需 `claude` CLI。
+插件面向 macOS 12+ 与 Zotero 9.0.x。XPI 包含 arm64/x86_64 universal 原生 helper，以及侧栏使用的 Zotkit 查询 CLI/MCP；运行时不要求 Node.js、Python、`pipx`、Zotero Web API key 或 `~/.config/zotkit/env`。本机需要已有 `codex` CLI。Research Chat 复用 Codex CLI 的登录状态；未登录时可在侧栏启动 Codex 的登录流程。高级 Claude Code Terminal 另需本机安装 `claude`。
 
-插件 ID 是 `zotkit@oldantique.github.io`，它是独立的 Zotkit 插件，不沿用旧 ZoteroChat ID。若旧插件仍在本机，请先停用或移除，以免 Reader 中出现重复侧栏。
+插件 ID 是 `zotkit@oldantique.github.io`，不沿用旧 ZoteroChat ID。若旧插件仍在本机，请先停用或移除，以免 Reader 中出现重复侧栏。
 
-## 使用
+`codex app-server` 仍是 Codex 的实验接口。Zotkit 会在连接失败或协议不兼容时显示错误和高级 Terminal 入口，而不是留下空白侧栏。
 
-- 在 Zotero 中打开 PDF，再展开右侧的“Zotkit Agent 终端”。只有这时 helper 和所选 Agent 才会启动。
-- 终端就是完整 xterm.js + PTY：支持 Codex TUI、ANSI、CJK 输入、快捷键和 slash commands。
-- Codex/Claude 输出 `\[...\]`、`$$...$$`、`\(...\)` 或独立 `[ ... ]` 数学块时，终端上方会出现可收起、关闭和重新打开的 KaTeX 公式预览；原始终端输出与输入位置保持不变。
-- Codex 以 PDF 原文件的父目录作为 `cwd`。如果 linked PDF 暂时不可用，才回退到 Zotero profile 中的小型上下文目录。
-- 选中 PDF 文本后点击 `Ask in Zotkit`。插件会把论文标题、作者、年份、DOI、PDF 路径、目录、页码和可见选区原文插入终端，停在“问题：”后等待用户输入，不会自动按回车。
-- 也可点击终端上方的“粘贴选区”或按 `⌘⇧J` 聚焦终端。
-- 终端会同时注册 Reader 上下文与 XPI 内置的 Zotkit 文库元数据工具，不需要检测或安装外部 `zotkit` 命令。
-- 每篇论文保留独立 session，最多保留 4 个；折叠后 15 分钟无用户操作的 session 会自动结束。关闭时 helper 使用有界的 HUP → TERM → KILL 流程，不让忽略普通退出信号的进程继续占用 CPU。
+## Research Chat 使用方法
 
-## 内置 Zotkit 文库工具
+1. 在 Zotero 中打开 PDF，展开右侧的“Zotkit Research Chat”。helper 与 app-server 只在第一次使用时按需启动。
+2. 在顶部确认当前论文、页码和已附加的上下文；需要时用 `@` 添加当前页、选区、这篇论文的批注或 PDF 文库。
+3. 选择 Ask 或 Agent、模型和思考强度，在底部输入框提问。Enter 发送，Shift+Enter 换行。
+4. Codex 的计划、工具调用、命令、审批和变更会以独立卡片显示；回答中的行内/块级 LaTeX 会直接渲染。
+5. 历史会话按论文保存。切换 PDF 后会切换到对应论文的会话；可以新建、恢复或继续旧会话。
 
-XPI 自带的只读元数据 MCP 直接向侧栏 Codex 提供四个工具：
+与 Cursor 对齐的 macOS 快捷键：
+
+| 快捷键 | 行为 |
+| --- | --- |
+| `⌘I` | 打开并聚焦 Research Chat |
+| `⌘L` | 把当前选区加入一个新会话；没有选区时打开 Chat |
+| `⌘⇧L` | 把当前选区加入当前会话 |
+| `⌘⇧J` | 打开并聚焦高级 Terminal |
+
+Reader 文字选择弹窗中的 **Ask in Zotkit** 会把选区加入当前 Research Chat。插件传递的是可提取的纯文本，并限制长度；它不会用选中文字自动批准操作。
+
+## Ask 与 Agent
+
+### Ask：默认、只读
+
+Ask 模式使用 Codex 的只读沙箱、关闭网络访问，并以 `approvalPolicy: never` 启动回合。它可以读取当前论文、页面、选区、批注、全文搜索结果和有界文库上下文，但不会获得写入工具，也不会向用户弹出“允许写入”来绕过只读模式。
+
+### Agent：私有暂存区 + 明确审批
+
+Agent 模式可在 `<Zotero Profile>/zotkit/` 下的私有论文工作区中创建或修改暂存文件。命令和文件审批显示在侧栏；插件拒绝 app-server 对原 PDF 目录的直接写入请求。论文原目录仍会作为研究上下文提供给 Codex，但不是 Agent 的可写根目录。
+
+对真实 Zotero/PDF 状态的修改只有一条受控路径：
+
+```text
+Codex 调用 zotero_propose_changes
+        ↓
+Zotkit 校验当前论文、目标与操作
+        ↓
+侧栏显示 Diff（尚未写入）
+        ↓
+用户 Reject 或 Apply
+        ↓
+Apply 前创建 checkpoint，再执行写入
+```
+
+当前支持：
+
+- 修改当前父条目的 `title`、`abstractNote`、`date`、`DOI`、`url`、`extra`；
+- 把当前条目精确设置到同一文库中已存在的 collections；
+- 重新链接 linked-file attachment（Zotero 管理的 stored attachment 不会被重链接）；
+- 用 Zotkit 私有暂存区中的已验证 PDF 替换当前 PDF。
+
+模型调用 `zotero_propose_changes` 只会产生提案，不能替用户点击 Apply。Apply 前还会再次核对当前打开论文及其快照；若条目或附件在 Diff 生成后发生变化，提案会失效。执行失败时插件会尝试自动恢复刚创建的 checkpoint。
+
+Checkpoint 保存在插件私有目录并自动回收：最多保留 20 个；PDF 备份总量最多约 1 GiB，单个可替换 PDF 上限 512 MiB。只有 PDF 替换才复制一份原 PDF 作为恢复备份，普通阅读不会产生 PDF 副本。Restore 前还会创建一个反向 checkpoint。会话 checkpoint 通过 Codex thread fork 恢复对话边界，不等同于恢复文件；真实 Zotero/PDF 恢复使用上述变更 checkpoint。
+
+## 当前上下文与文库查询
+
+Research Chat 可以按需读取：
+
+- 当前 attachment/父条目的标题、作者、年份、DOI、标签和路径；
+- 当前页与最近一次文字选区；
+- 当前 PDF 的有界全文搜索和按页读取；
+- 当前 PDF 的批注；
+- 已配置论文目录中的 PDF 名称/相对路径，以及与现有 Zotero attachment 唯一匹配的其他 PDF 的有界搜索/按页读取；
+- 当前 Zotero 条目的元数据，以及已配置 PDF 文库中的受验证论文路径。
+
+Research Chat 与高级 Terminal 共用的 XPI 内置 Zotkit 文库查询层提供：
 
 ```text
 zotkit_find_items
@@ -35,9 +91,7 @@ zotkit_list_collections
 zotkit_list_tags
 ```
 
-它们从 Zotero Desktop 的本地只读接口生成的有界快照中查找条目、读取条目元数据、列出 collections 和 tags。每个 Zotero 文库只维护一份共享快照，同一次 Zotero 运行期间默认复用 24 小时；切换到同一文库中的其他论文时不会重新枚举。它们不依赖仓库根目录中的 Python CLI，也不读取 `.env`、Web API key 或 WebDAV 凭据。
-
-同一个内置查询层也以 `zotkit` 命令放进侧栏 Codex 的 `PATH`，绝对路径同时写入 `ZOTKIT_CLI`：
+同一查询层也以 `zotkit` 命令放入高级 Terminal 的 `PATH`，绝对路径写入 `ZOTKIT_CLI`：
 
 ```text
 zotkit find [--title TEXT] [--tag TAG] [--collection COLLECTION]
@@ -46,57 +100,45 @@ zotkit collections [--query TEXT]
 zotkit tags [--query TEXT]
 ```
 
-这是为 Reader 对话设计的 XPI 内置查询 CLI，并非仓库根目录中依赖 Python/Web API 的完整 headless CLI。`create`、`tag`、`move`、`attach`、`fetch`、`delete` 等写入或文件命令不会暴露给侧栏，并会被拒绝。
+这是 XPI 自带、面向本地 Reader 的只读查询 CLI。它与仓库根目录中的 headless Python CLI 是地位相同但运行时独立的两个产品入口：前者无需 API key 并读取本机 Zotero 快照；后者通过 Zotero Web API/WebDAV 在 Zotero 外部管理文库。XPI 不会查找或调用外部 Python `zotkit`，内置查询 CLI 也不提供 `create`、`tag`、`move`、`attach`、`fetch` 或 `delete`。
 
-## 权限边界
+文库元数据按 Zotero library 共用一份有界快照；当前 Reader 状态原位更新。插件优先引用 Zotero 已有的 `.zotero-ft-cache`。仅当附件没有可用全文索引且用户请求全文操作时，才会在插件私有目录生成一份有大小上限、会自动回收的文本回退。因此浏览更多 PDF 不会产生永久堆积的 PDF 副本。
 
-交互式 Codex 终端固定使用：
+## 高级 Terminal
+
+点击顶部 Terminal 按钮或按 `⌘⇧J` 可切换到完整 xterm.js + PTY。它支持 Codex/Claude Code TUI、ANSI、CJK 输入、快捷键、slash commands 和可收起的 KaTeX 公式预览。Codex/Claude 的工作目录是当前 PDF 的原目录；linked PDF 不可用时才回退到插件私有目录。每篇论文保留独立 session，最多保留 4 个，隐藏且空闲 15 分钟后会自动结束。
+
+高级 Terminal 与结构化 Research Chat 是不同的权限面。Codex Terminal 使用：
 
 ```text
 --sandbox read-only --ask-for-approval untrusted
 ```
 
-`read-only` 是 Codex 的默认沙箱；`untrusted` 会在需要超出沙箱时请求用户审批。因此这个真实 TUI 默认只读，但不是无条件的操作系统级隔离：用户仍可以明确批准一次升级。Shell 与用户自行配置的 MCP 都保留这个审批流程；只有 XPI 内置、带明确只读标记的 `zotero_reader` 和 `zotkit_library` 自动批准，并设有 10 秒调用超时，避免审批界面无法显示时长期停在 `Working`。
+它默认只读，但用户可以在真实 Codex TUI 中批准一次升级；Claude Code 使用 `--permission-mode plan`，这不是操作系统沙箱。高级 Terminal 中由用户批准的任意 shell/MCP 写入不会经过 Research Chat 的 Diff/Apply/Checkpoint 卡片。需要可审阅、可恢复地修改 Zotero 或 PDF 时，应回到 Agent 模式并使用 `zotero_propose_changes`。
 
-Claude Code 终端使用 `--permission-mode plan`。这是 Claude Code 的规划模式，不是 Zotkit 施加的操作系统沙箱，因此不应将它视为文件系统级强制只读。
+## 本地状态与凭据
 
-仓库中另外保留的结构化 Codex app-server 实现（不是上述真实 TUI）使用 `sandbox: read-only` 和 `approvalPolicy: never`，并在客户端自动拒绝命令、文件修改与权限升级请求；这才是更强的不可审批升级路径。
-
-Zotkit 插件自身及两个内置 MCP 不修改 Zotero item、collection、tag、attachment link、annotation、note、全文索引或原 PDF。它们不会在 PDF 旁创建 `AGENTS.md`、配置、索引或笔记。这个插件边界不代表用户对交互式 Agent 明确授权后的行为。
-
-小型实时状态只写入：
+小型上下文、会话、暂存和 checkpoint 状态位于：
 
 ```text
 <Zotero Profile>/zotkit/
 ```
 
-文库元数据按 Zotero library 共用一份有界快照；当前 Reader 状态原位更新。插件优先原地引用 Zotero 已有的 `.zotero-ft-cache`，不会复制 PDF；仅当当前附件没有可用全文索引时，才在插件私有目录生成一份有大小上限、会自动回收的 `current-pdf-text.txt`。因此阅读更多 PDF 不会产生 PDF 副本或永久堆积的全文仓库。页面/选区快照有 64,000 字符上限；直接粘贴终端的选区限制为 32,000 字符，`get_current_selection` 仍可读取插件保留的有界快照。临时状态按数量与时间回收。
-
-Reader MCP 只提供以下八个只读工具；普通论文问题优先使用一次性聚合上下文，需要全文细节时先搜索再读取命中页，所有工具必须串行调用：
-
-```text
-get_reader_context
-get_active_paper
-get_current_page
-get_current_selection
-search_current_pdf
-read_pdf_pages
-list_library_files
-search_library_files
-```
-
-`get_reader_context` 一次返回当前论文、页码、当前页文本和选区，避免同一 MCP 服务的并发调度；当前页/选区两个细粒度文本工具读取插件维护的有界快照。`search_current_pdf` 只搜索当前附件的受验证全文引用，`read_pdf_pages` 只读取命中后的有界页码范围。文库工具只列出或搜索 PDF 文件名与相对路径。它不提供批注读取、跨附件全文读取、Zotero 写入或任意文件访问，也明确要求 Codex 不得用 `textutil`、`pdftotext`、Python、OCR 或 shell 作为 PDF 回退。
+Codex 登录仍由本机 Codex 管理。插件通过 app-server 的账户接口发起或退出登录，但不直接解析、复制或保存 `~/.codex/auth.json`、API key 或浏览器 cookie。更完整的安全边界见 [SECURITY.md](SECURITY.md)。
 
 ## 架构
 
 ```text
 Zotero Reader Item Pane
-└── xterm.js
-    └── authenticated local helper
-        └── real PTY → codex / claude
-            ├── cwd = dirname(original PDF)
-            ├── zotero_reader MCP (live PDF context)
-            └── bundled zotkit_library MCP (four read-only metadata tools)
+├── Research Chat（默认）
+│   └── authenticated helper pipe → codex app-server
+│       ├── Ask：read-only
+│       ├── Agent：private staging workspace
+│       ├── live Reader tools
+│       └── zotero_propose_changes → Diff → Apply → Checkpoint
+└── Advanced Terminal
+    └── authenticated local helper → real PTY → codex / claude
+        └── live Reader + bundled Zotkit query tools
 ```
 
 ## 构建与验证
@@ -109,4 +151,4 @@ npm run native:test
 npm run build
 ```
 
-构建产物位于 `dist/`，并同时生成 SHA-256 文件。构建 XPI 不需要安装仓库根目录的 Python 包；两者可以独立使用和发布。
+构建产物位于 `dist/`，并同时生成 SHA-256 文件。构建 XPI 不需要安装仓库根目录的 Python 包；headless Python CLI 与 XPI 可以独立构建、使用和发布。

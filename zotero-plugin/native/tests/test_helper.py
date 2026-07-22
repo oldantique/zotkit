@@ -233,6 +233,29 @@ class DaemonTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 1.5)
         self.assertLess(elapsed, 3.0)
 
+    def test_idle_handshakes_release_all_client_slots(self) -> None:
+        slow_clients: list[socket.socket] = []
+        try:
+            for _ in range(16):
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(4)
+                sock.connect(self.socket_path)
+                slow_clients.append(sock)
+
+            # Give the daemon time to accept the full backlog, then cross the
+            # absolute handshake deadline. A new authenticated client must not
+            # be rejected because stale HTTP clients retained every slot.
+            time.sleep(2.5)
+            ws = WebSocket(self.socket_path, TOKEN)
+            try:
+                ws.send_json({"type": "ping"})
+                self.assertEqual(ws.recv_json(), {"type": "pong"})
+            finally:
+                ws.close()
+        finally:
+            for sock in slow_clients:
+                sock.close()
+
     def test_websocket_pty_io_resize_exit_and_multiple_sessions(self) -> None:
         ws = WebSocket(self.socket_path, TOKEN)
         self.addCleanup(ws.close)
@@ -348,6 +371,52 @@ class DaemonTests(unittest.TestCase):
                     exit_event = message
             self.assertEqual(bytes(output), b'{"wrapped":{"ok":true}}\n')
             self.assertEqual(exit_event["exitCode"], 0)
+
+    def test_spawn_error_is_scoped_and_does_not_cancel_another_spawn(self) -> None:
+        ws = WebSocket(self.socket_path, TOKEN)
+        self.addCleanup(ws.close)
+        with tempfile.TemporaryDirectory() as cwd:
+            ws.send_json(
+                {
+                    "type": "spawnPipe",
+                    "sessionId": "bad-spawn",
+                    "argv": ["/bin/true"],
+                    "cwd": os.path.join(cwd, "missing"),
+                }
+            )
+            ws.send_json(
+                {
+                    "type": "spawnPipe",
+                    "sessionId": "good-spawn",
+                    "argv": ["/bin/sh", "-c", "printf 'ok\\n'"],
+                    "cwd": cwd,
+                }
+            )
+
+            bad_error = None
+            good_spawned = False
+            good_exit = None
+            output = bytearray()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and (
+                bad_error is None or not good_spawned or good_exit is None
+            ):
+                message = ws.recv_json()
+                if message.get("type") == "error" and message.get("sessionId") == "bad-spawn":
+                    bad_error = message
+                elif message.get("type") == "spawned" and message.get("sessionId") == "good-spawn":
+                    good_spawned = True
+                elif message.get("type") == "output" and message.get("sessionId") == "good-spawn":
+                    output.extend(base64.b64decode(message["data"]))
+                elif message.get("type") == "exit" and message.get("sessionId") == "good-spawn":
+                    good_exit = message
+
+            self.assertIsNotNone(bad_error)
+            self.assertIn("cwd", bad_error["message"])
+            self.assertTrue(good_spawned)
+            self.assertIsNotNone(good_exit)
+            self.assertEqual(good_exit["exitCode"], 0)
+            self.assertEqual(bytes(output), b"ok\n")
 
     def test_spawned_child_does_not_inherit_helper_descriptors(self) -> None:
         ws = WebSocket(self.socket_path, TOKEN)

@@ -28,8 +28,12 @@ import type {
   StoredTurn,
   ThreadListParams,
   ThreadListResponse,
+  ThreadForkParams,
+  ThreadForkResponse,
   ThreadReadParams,
   ThreadReadResponse,
+  ThreadRollbackParams,
+  ThreadRollbackResponse,
   ThreadResumeParams,
   ThreadResumeResponse,
   ThreadSetNameParams,
@@ -299,6 +303,19 @@ export class ThreadStore {
       changed = true;
     }
     if (changed) this.emit();
+  }
+
+  /** Replace an authoritative thread snapshot, including removal of turns. */
+  replaceThread(thread: ProtocolThread): void {
+    if (!thread || typeof thread.id !== "string") return;
+    const rawTurns = Array.isArray(thread.turns) ? thread.turns : [];
+    this.threads.set(thread.id, {
+      ...thread,
+      turns: rawTurns
+        .filter((turn): turn is ProtocolTurn => Boolean(turn && typeof turn.id === "string"))
+        .map(normalizeTurn),
+    } as StoredThread);
+    this.emit();
   }
 
   ingestTurn(threadId: string, turn: ProtocolTurn): void {
@@ -765,6 +782,21 @@ export class CodexAppServerClient {
     return result;
   }
 
+  async threadFork(params: ThreadForkParams): Promise<ThreadForkResponse> {
+    const result = await this.request<ThreadForkResponse>("thread/fork", params);
+    if (result.thread) this.store.replaceThread(result.thread);
+    return result;
+  }
+
+  async threadRollback(params: ThreadRollbackParams): Promise<ThreadRollbackResponse> {
+    if (!Number.isInteger(params.numTurns) || params.numTurns < 1) {
+      throw new RangeError("thread/rollback numTurns must be an integer >= 1");
+    }
+    const result = await this.request<ThreadRollbackResponse>("thread/rollback", params);
+    if (result.thread) this.store.replaceThread(result.thread);
+    return result;
+  }
+
   async threadList(params: ThreadListParams = {}): Promise<ThreadListResponse> {
     const result = await this.request<ThreadListResponse>("thread/list", params);
     if (Array.isArray(result.data)) this.store.ingestThreads(result.data);
@@ -865,6 +897,8 @@ export class CodexAppServerClient {
   listModels = this.modelList.bind(this);
   startThread = this.threadStart.bind(this);
   resumeThread = this.threadResume.bind(this);
+  forkThread = this.threadFork.bind(this);
+  rollbackThread = this.threadRollback.bind(this);
   listThreads = this.threadList.bind(this);
   readThread = this.threadRead.bind(this);
   setThreadName = this.threadSetName.bind(this);
@@ -921,7 +955,7 @@ export class CodexAppServerClient {
     const clientInfo: ClientInfo = {
       name: "zotkit_zotero",
       title: "Zotkit",
-      version: "0.2.3",
+      version: "0.3.0",
       ...this.options.clientInfo,
     };
     const capabilities = this.options.capabilities === null
@@ -1131,6 +1165,7 @@ export class CodexAppServerClient {
             kind: "commandExecution",
             method,
             params: typed,
+            requestId: id,
           };
           const handler = this.options.handlers?.commandApproval;
           if (handler) result = await handler(typed);
@@ -1140,7 +1175,12 @@ export class CodexAppServerClient {
         }
         case "item/fileChange/requestApproval": {
           const typed = params as FileChangeApprovalParams;
-          const generic: ApprovalRequest = { kind: "fileChange", method, params: typed };
+          const generic: ApprovalRequest = {
+            kind: "fileChange",
+            method,
+            params: typed,
+            requestId: id,
+          };
           const handler = this.options.handlers?.fileChangeApproval;
           if (handler) result = await handler(typed);
           else if (this.options.onApproval) result = await this.options.onApproval(generic);
@@ -1149,7 +1189,12 @@ export class CodexAppServerClient {
         }
         case "item/permissions/requestApproval": {
           const typed = params as PermissionsApprovalParams;
-          const generic: ApprovalRequest = { kind: "permissions", method, params: typed };
+          const generic: ApprovalRequest = {
+            kind: "permissions",
+            method,
+            params: typed,
+            requestId: id,
+          };
           const handler = this.options.handlers?.permissionsApproval;
           if (handler) result = await handler(typed);
           else if (this.options.onApproval) result = await this.options.onApproval(generic);

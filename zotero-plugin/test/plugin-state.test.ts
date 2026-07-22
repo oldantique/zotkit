@@ -5,11 +5,61 @@ import {
   MAX_SELECTION_PROMPT_CHARACTERS,
   ZoteroChatPlugin,
   buildSelectionPrompt,
+  formatPendingApprovalDescription,
   pdfDirectory,
 } from "../src/plugin";
 import type { ReaderContext } from "../src/reader-context";
 
 describe("Zotkit Reader terminal state", () => {
+  it("shows exact requested permissions in the approval description", () => {
+    const description = formatPendingApprovalDescription({
+      description: "Stage a generated PDF",
+      cwd: "/profile/papers/1-ATTACH",
+      requestedPermissions: {
+        network: { enabled: true },
+        fileSystem: {
+          entries: [{
+            access: "write",
+            path: { type: "path", path: "/profile/papers/1-ATTACH/staging" },
+          }],
+        },
+      },
+    });
+
+    expect(description).toContain("Stage a generated PDF");
+    expect(description).toContain('"network":{"enabled":true}');
+    expect(description).toContain("/profile/papers/1-ATTACH/staging");
+  });
+
+  it("matches Cursor's Reader shortcuts while leaving editable controls alone", async () => {
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.openSidebar = vi.fn();
+    plugin.openResearchChat = vi.fn(async () => {});
+    plugin.openChatWithSelection = vi.fn(async () => {});
+    plugin.openTerminal = vi.fn(async () => {});
+    plugin.terminal = { focus: vi.fn() };
+    plugin.installShortcutHandler(window);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", metaKey: true, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "l", metaKey: true, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "L", metaKey: true, shiftKey: true, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", metaKey: true, shiftKey: true, bubbles: true }));
+    await Promise.resolve();
+
+    expect(plugin.openResearchChat).toHaveBeenCalledWith(undefined, true);
+    expect(plugin.openChatWithSelection).toHaveBeenNthCalledWith(1, true);
+    expect(plugin.openChatWithSelection).toHaveBeenNthCalledWith(2, false);
+    expect(plugin.openTerminal).toHaveBeenCalledOnce();
+    expect(plugin.terminal.focus).toHaveBeenCalledOnce();
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "i", metaKey: true, bubbles: true }));
+    expect(plugin.openResearchChat).toHaveBeenCalledOnce();
+    plugin.removeShortcutHandler(window);
+    input.remove();
+  });
+
   it("treats only an expanded, connected custom section as active", () => {
     const plugin = new ZoteroChatPlugin() as any;
     const collapsed = document.createElement("collapsible-section");
@@ -72,6 +122,54 @@ describe("Zotkit Reader terminal state", () => {
     expect(calls).toEqual(["mount", "context", "snapshot", "options", "open"]);
   });
 
+  it("invalidates Reader text caches and reloads every matching Reader after a PDF mutation", async () => {
+    const originalZotero = (globalThis as any).Zotero;
+    const matchingA = { itemID: 7, reload: vi.fn(async () => {}) };
+    const matchingB = { itemID: 7, reload: vi.fn(async () => {}) };
+    const unrelated = { itemID: 8, reload: vi.fn(async () => {}) };
+    (globalThis as any).Zotero = {
+      Reader: {
+        _readers: [matchingA, unrelated, matchingB],
+        getByTabID: vi.fn(() => matchingA),
+      },
+    };
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.readerContext = {
+      invalidateAttachmentCaches: vi.fn(async () => {}),
+      ensureZotkitLibrarySnapshot: vi.fn(async () => null),
+    };
+    plugin.selectedTabID = vi.fn(() => "reader-a");
+    plugin.refreshContext = vi.fn(async () => {});
+    plugin.refreshMutationCheckpoints = vi.fn(async () => {});
+
+    try {
+      await plugin.refreshAfterMutation({
+        decision: "accepted",
+        effects: {
+          attachmentID: 7,
+          attachmentKey: "ATTACH",
+          attachmentLibraryID: 1,
+          attachmentContentChanged: true,
+          attachmentRelinked: false,
+          pdfReplaced: true,
+        },
+      });
+
+      expect(plugin.readerContext.invalidateAttachmentCaches).toHaveBeenCalledWith({
+        key: "ATTACH",
+        libraryID: 1,
+      });
+      expect(matchingA.reload).toHaveBeenCalledOnce();
+      expect(matchingB.reload).toHaveBeenCalledOnce();
+      expect(unrelated.reload).not.toHaveBeenCalled();
+      expect(plugin.refreshContext).toHaveBeenCalledOnce();
+    }
+    finally {
+      if (originalZotero === undefined) delete (globalThis as any).Zotero;
+      else (globalThis as any).Zotero = originalZotero;
+    }
+  });
+
   it("mounts and switches the terminal on the selected Reader body across A to B to A", async () => {
     const originalZotero = (globalThis as any).Zotero;
     let selectedID = "reader-a";
@@ -94,6 +192,7 @@ describe("Zotkit Reader terminal state", () => {
     const bodyA = createReaderBody("reader-a");
     const bodyB = createReaderBody("reader-b");
     const plugin = new ZoteroChatPlugin() as any;
+    plugin.paneMode = "terminal";
     plugin.views = new Set([bodyB, bodyA]);
     plugin.context = { workspace: { root: "/profile/zotkit/a" } };
     plugin.terminal = {
@@ -148,6 +247,7 @@ describe("Zotkit Reader terminal state", () => {
     document.body.append(details);
 
     const plugin = new ZoteroChatPlugin() as any;
+    plugin.paneMode = "terminal";
     plugin.views = new Set([body]);
     plugin.terminal = {
       isOpen: false,

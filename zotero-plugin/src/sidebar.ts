@@ -39,6 +39,66 @@ export interface ThreadOption {
   title: string;
   updatedAt: string;
   active: boolean;
+  status?: "idle" | "running" | "attention";
+}
+
+export type ResearchMode = "ask" | "agent";
+
+export type ResearchContextKind =
+  | "paper"
+  | "page"
+  | "selection"
+  | "annotation"
+  | "library"
+  | "collection"
+  | "external-paper";
+
+export interface ResearchContextChip {
+  id: string;
+  kind: ResearchContextKind;
+  label: string;
+  detail?: string;
+  removable?: boolean;
+}
+
+export interface ResearchContextSuggestion extends ResearchContextChip {
+  disabled?: boolean;
+}
+
+export interface ResearchPlanStep {
+  id: string;
+  title: string;
+  status: "pending" | "running" | "complete" | "failed";
+}
+
+export interface ResearchPlan {
+  id: string;
+  title?: string;
+  explanation?: string;
+  steps: ResearchPlanStep[];
+}
+
+export interface DiffReview {
+  id: string;
+  title: string;
+  summary?: string;
+  diff: string;
+  state?: "pending" | "accepted" | "rejected" | "failed";
+}
+
+export interface PendingApproval {
+  id: string;
+  title: string;
+  description?: string;
+  command?: string;
+  kind?: "tool" | "command" | "permission";
+  risk?: "low" | "medium" | "high";
+}
+
+export interface CheckpointOption {
+  id: string;
+  label: string;
+  createdAt?: string;
 }
 
 export interface SidebarState {
@@ -53,6 +113,13 @@ export interface SidebarState {
   effort: string;
   running: boolean;
   threadTitle?: string;
+  mode: ResearchMode;
+  contextChips: ResearchContextChip[];
+  contextSuggestions: ResearchContextSuggestion[];
+  plan: ResearchPlan | null;
+  reviews: DiffReview[];
+  pendingApproval: PendingApproval | null;
+  checkpoints: CheckpointOption[];
 }
 
 export interface SidebarCallbacks {
@@ -67,9 +134,15 @@ export interface SidebarCallbacks {
   onInsertSelection(): void;
   onModelChange(model: string): void;
   onEffortChange(effort: string): void;
+  onModeChange?(mode: ResearchMode): void;
+  onAddContext?(context: ResearchContextSuggestion): void;
+  onRemoveContext?(contextId: string): void;
+  onReviewDecision?(reviewId: string, decision: "accept" | "reject"): void;
+  onApprovalDecision?(approvalId: string, decision: "approve-once" | "reject"): void;
+  onRestoreCheckpoint?(checkpointId: string): void;
 }
 
-type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop";
+type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close";
 
 export class SidebarView {
   private readonly doc: Document;
@@ -80,9 +153,15 @@ export class SidebarView {
   private stopButton!: HTMLButtonElement;
   private modelSelect!: HTMLSelectElement;
   private effortSelect!: HTMLSelectElement;
+  private modeSelect!: HTMLSelectElement;
+  private safetyChip!: HTMLElement;
   private contextTitle!: HTMLElement;
   private contextMeta!: HTMLElement;
-  private selectionChip!: HTMLButtonElement;
+  private contextChips!: HTMLElement;
+  private contextMenu!: HTMLElement;
+  private contextMenuList!: HTMLElement;
+  private contextMenuEmpty!: HTMLElement;
+  private threadTabs!: HTMLElement;
   private statusArea!: HTMLElement;
   private loginLayer!: HTMLElement;
   private threadTitle!: HTMLElement;
@@ -90,6 +169,10 @@ export class SidebarView {
   private state: SidebarState;
   private readonly entryNodes = new Map<string, { fingerprint: string; node: HTMLElement }>();
   private emptyState: HTMLElement | null = null;
+  private contextMenuOpen = false;
+  private contextMenuQuery = "";
+  private contextMenuSelection = 0;
+  private contextQueryStart: number | null = null;
 
   constructor(
     body: HTMLElement,
@@ -106,8 +189,15 @@ export class SidebarView {
       threads: [],
       selectedModel: "",
       effort: "medium",
+      mode: "ask",
       running: false,
-      context: null
+      context: null,
+      contextChips: [],
+      contextSuggestions: [],
+      plan: null,
+      reviews: [],
+      pendingApproval: null,
+      checkpoints: [],
     };
     this.build();
     this.render();
@@ -147,7 +237,7 @@ export class SidebarView {
     const titles = this.doc.createElement("div");
     const product = this.doc.createElement("div");
     product.className = "zc-product-title";
-    product.textContent = "Codex";
+    product.textContent = "Research Chat";
     this.threadTitle = this.doc.createElement("div");
     this.threadTitle.className = "zc-thread-title";
     this.threadTitle.textContent = "论文助手";
@@ -158,11 +248,20 @@ export class SidebarView {
     actions.className = "zc-top-actions";
     const historyButton = this.iconButton("history", "对话历史", () => this.toggleHistoryMenu());
     const newButton = this.iconButton("new", "新对话", () => this.callbacks.onNewThread());
-    const terminalButton = this.iconButton("terminal", "打开真实 CLI 终端", () => this.callbacks.onOpenTerminal(), "CLI");
+    const terminalButton = this.iconButton(
+      "terminal",
+      "打开高级 CLI 终端",
+      () => this.callbacks.onOpenTerminal(),
+      "Terminal",
+    );
     terminalButton.classList.add("zc-terminal-button");
     this.accountButton = this.iconButton("more", "账户", () => this.toggleAccountMenu());
     actions.append(historyButton, newButton, terminalButton, this.accountButton);
     topbar.append(identity, actions);
+
+    this.threadTabs = this.doc.createElement("nav");
+    this.threadTabs.className = "zc-thread-tabs";
+    this.threadTabs.setAttribute("aria-label", "论文对话标签");
 
     const contextCard = this.doc.createElement("section");
     contextCard.className = "zc-context-card";
@@ -186,19 +285,41 @@ export class SidebarView {
     composerWrap.className = "zc-composer-wrap";
     const composer = this.doc.createElement("div");
     composer.className = "zc-composer";
-    const chips = this.doc.createElement("div");
-    chips.className = "zc-composer-chips";
-    this.selectionChip = this.doc.createElement("button");
-    this.selectionChip.type = "button";
-    this.selectionChip.className = "zc-context-chip";
-    this.selectionChip.addEventListener("click", () => this.callbacks.onInsertSelection());
-    chips.appendChild(this.selectionChip);
+    this.contextChips = this.doc.createElement("div");
+    this.contextChips.className = "zc-composer-chips";
+    const addContext = this.iconButton("context", "添加论文上下文（@）", () => {
+      this.openContextMenu("");
+      this.textarea.focus();
+    });
+    addContext.classList.add("zc-add-context-button");
+    this.contextChips.appendChild(addContext);
+
+    this.contextMenu = this.doc.createElement("section");
+    this.contextMenu.className = "zc-context-menu";
+    this.contextMenu.hidden = true;
+    const contextMenuHeader = this.doc.createElement("header");
+    contextMenuHeader.textContent = "添加上下文";
+    const contextMenuHint = this.doc.createElement("span");
+    contextMenuHint.textContent = "输入 @ 快速筛选";
+    contextMenuHeader.appendChild(contextMenuHint);
+    this.contextMenuList = this.doc.createElement("div");
+    this.contextMenuList.className = "zc-context-menu-list";
+    this.contextMenuList.setAttribute("role", "listbox");
+    this.contextMenuEmpty = this.doc.createElement("div");
+    this.contextMenuEmpty.className = "zc-context-menu-empty";
+    this.contextMenuEmpty.textContent = "没有匹配的上下文";
+    this.contextMenu.append(contextMenuHeader, this.contextMenuList, this.contextMenuEmpty);
+
     this.textarea = this.doc.createElement("textarea");
     this.textarea.className = "zc-composer-input";
     this.textarea.rows = 1;
     this.textarea.placeholder = "询问这篇论文…";
-    this.textarea.addEventListener("input", () => this.autoSizeComposer());
+    this.textarea.addEventListener("input", () => {
+      this.autoSizeComposer();
+      this.updateContextMenuFromComposer();
+    });
     this.textarea.addEventListener("keydown", (event) => {
+      if (this.handleContextMenuKeydown(event)) return;
       if (event.key === "Escape" && this.state.running && !event.isComposing) {
         event.preventDefault();
         this.callbacks.onStop();
@@ -213,6 +334,18 @@ export class SidebarView {
     composerFooter.className = "zc-composer-footer";
     const controls = this.doc.createElement("div");
     controls.className = "zc-composer-controls";
+    this.modeSelect = this.doc.createElement("select");
+    this.modeSelect.className = "zc-compact-select zc-mode-picker";
+    this.modeSelect.title = "研究模式";
+    for (const [value, label] of [["ask", "Ask"], ["agent", "Agent"]] as const) {
+      const option = this.doc.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      this.modeSelect.appendChild(option);
+    }
+    this.modeSelect.addEventListener("change", () => {
+      this.callbacks.onModeChange?.(this.modeSelect.value as ResearchMode);
+    });
     this.modelSelect = this.doc.createElement("select");
     this.modelSelect.className = "zc-compact-select";
     this.modelSelect.title = "模型";
@@ -224,11 +357,9 @@ export class SidebarView {
     this.effortSelect.className = "zc-compact-select";
     this.effortSelect.title = "思考强度";
     this.effortSelect.addEventListener("change", () => this.callbacks.onEffortChange(this.effortSelect.value));
-    const safety = this.doc.createElement("span");
-    safety.className = "zc-safety-chip";
-    safety.textContent = "只读";
-    safety.title = "Codex 只能读取插件工作区；不会修改 Zotero 文库";
-    controls.append(this.modelSelect, this.effortSelect, safety);
+    this.safetyChip = this.doc.createElement("span");
+    this.safetyChip.className = "zc-safety-chip";
+    controls.append(this.modeSelect, this.modelSelect, this.effortSelect, this.safetyChip);
     this.sendButton = this.doc.createElement("button");
     this.sendButton.type = "button";
     this.sendButton.className = "zc-send-button";
@@ -244,7 +375,7 @@ export class SidebarView {
     composerActions.style.cssText = "display:flex;align-items:center;gap:6px";
     composerActions.append(this.stopButton, this.sendButton);
     composerFooter.append(controls, composerActions);
-    composer.append(chips, this.textarea, composerFooter);
+    composer.append(this.contextChips, this.contextMenu, this.textarea, composerFooter);
     this.statusArea = this.doc.createElement("div");
     this.statusArea.className = "zc-status-area";
     composerWrap.append(composer, this.statusArea);
@@ -252,12 +383,28 @@ export class SidebarView {
     this.loginLayer = this.doc.createElement("div");
     this.loginLayer.className = "zc-login-layer";
 
-    this.root.append(topbar, contextCard, this.transcript, composerWrap, this.loginLayer);
+    this.root.append(
+      topbar,
+      this.threadTabs,
+      contextCard,
+      this.transcript,
+      composerWrap,
+      this.loginLayer,
+    );
   }
 
   private render(): void {
     this.threadTitle.textContent = this.state.threadTitle || "论文助手";
+    this.modeSelect.value = this.state.mode;
+    this.root.dataset.mode = this.state.mode;
+    this.safetyChip.textContent = this.state.mode === "ask" ? "只读" : "需审批";
+    this.safetyChip.title = this.state.mode === "ask"
+      ? "Ask 模式只读取论文与文库上下文"
+      : "Agent 模式的命令、文件或文库变更必须经过审批";
+    this.renderThreadTabs();
     this.renderContext();
+    this.renderContextChips();
+    this.renderContextMenu();
     this.renderModels();
     this.renderEfforts();
     this.renderTranscript();
@@ -279,8 +426,6 @@ export class SidebarView {
     if (!context) {
       this.contextTitle.textContent = "请先在 Zotero 中打开一篇 PDF";
       this.contextMeta.textContent = "切换论文时，对话也会自动切换";
-      this.selectionChip.textContent = "未选中文本";
-      this.selectionChip.disabled = true;
       return;
     }
     this.contextTitle.textContent = context.title || "当前 PDF";
@@ -290,10 +435,281 @@ export class SidebarView {
       context.selectionText ? `选区 ${context.selectionText.length} 字` : "未选中文本"
     ].filter(Boolean);
     this.contextMeta.textContent = pieces.join(" · ");
-    this.selectionChip.textContent = context.selectionText
-      ? `当前选区 · ${context.selectionText.length} 字`
-      : "当前 PDF";
-    this.selectionChip.disabled = false;
+  }
+
+  private renderThreadTabs(): void {
+    this.threadTabs.replaceChildren();
+    this.threadTabs.hidden = this.state.threads.length === 0;
+    if (!this.state.threads.length) return;
+    const scroller = this.doc.createElement("div");
+    scroller.className = "zc-thread-tab-scroll";
+    for (const thread of this.state.threads.slice(0, 12)) {
+      const button = this.doc.createElement("button");
+      button.type = "button";
+      button.className = "zc-thread-tab";
+      button.classList.toggle("is-active", thread.active);
+      button.dataset.threadId = thread.id;
+      button.title = thread.title || "论文对话";
+      if (thread.active) button.setAttribute("aria-current", "page");
+      const state = this.doc.createElement("span");
+      state.className = `zc-thread-tab-state is-${thread.status || "idle"}`;
+      state.setAttribute("aria-hidden", "true");
+      const label = this.doc.createElement("span");
+      label.textContent = thread.title || "论文对话";
+      button.append(state, label);
+      button.addEventListener("click", () => this.callbacks.onSelectThread(thread.id));
+      scroller.appendChild(button);
+    }
+    const add = this.iconButton("new", "新对话", () => this.callbacks.onNewThread());
+    add.classList.add("zc-thread-tab-add");
+    this.threadTabs.append(scroller, add);
+  }
+
+  private renderContextChips(): void {
+    this.contextChips.replaceChildren();
+    for (const chip of this.effectiveContextChips()) {
+      const wrapper = this.doc.createElement("span");
+      wrapper.className = `zc-context-chip is-${chip.kind}`;
+      wrapper.dataset.contextId = chip.id;
+      wrapper.title = chip.detail || chip.label;
+      const icon = this.doc.createElement("span");
+      icon.className = "zc-context-chip-icon";
+      icon.textContent = contextGlyph(chip.kind);
+      icon.setAttribute("aria-hidden", "true");
+      const label = this.doc.createElement("span");
+      label.className = "zc-context-chip-label";
+      label.textContent = chip.label;
+      wrapper.append(icon, label);
+      if (chip.removable) {
+        const remove = this.iconButton("close", `移除上下文：${chip.label}`, () => {
+          this.callbacks.onRemoveContext?.(chip.id);
+        });
+        remove.classList.add("zc-context-chip-remove");
+        wrapper.appendChild(remove);
+      }
+      this.contextChips.appendChild(wrapper);
+    }
+    const add = this.iconButton("context", "添加论文上下文（@）", () => {
+      this.openContextMenu("");
+      this.textarea.focus();
+    });
+    add.classList.add("zc-add-context-button");
+    this.contextChips.appendChild(add);
+  }
+
+  private effectiveContextChips(): ResearchContextChip[] {
+    if (this.state.contextChips.length) return this.state.contextChips;
+    const context = this.state.context;
+    if (!context) return [];
+    const chips: ResearchContextChip[] = [{
+      id: "active-paper",
+      kind: "paper",
+      label: "当前论文",
+      detail: context.title,
+      removable: false,
+    }];
+    if (context.pageLabel) {
+      chips.push({
+        id: "current-page",
+        kind: "page",
+        label: `第 ${context.pageLabel} 页`,
+        removable: true,
+      });
+    }
+    if (context.selectionText) {
+      chips.push({
+        id: "current-selection",
+        kind: "selection",
+        label: `选区 · ${context.selectionText.length} 字`,
+        removable: true,
+      });
+    }
+    return chips;
+  }
+
+  private effectiveContextSuggestions(): ResearchContextSuggestion[] {
+    if (this.state.contextSuggestions.length) return this.state.contextSuggestions;
+    const context = this.state.context;
+    const suggestions: ResearchContextSuggestion[] = [
+      {
+        id: "active-paper",
+        kind: "paper",
+        label: "当前论文",
+        detail: context?.title || "Zotero Reader 中打开的 PDF",
+        disabled: !context,
+      },
+      {
+        id: "current-page",
+        kind: "page",
+        label: context?.pageLabel ? `当前页 · 第 ${context.pageLabel} 页` : "当前页",
+        detail: "当前可见 PDF 页面的文字",
+        disabled: !context,
+      },
+      {
+        id: "current-selection",
+        kind: "selection",
+        label: "当前选区",
+        detail: context?.selectionText
+          ? `${context.selectionText.length} 字`
+          : "请先在 PDF 中选择文字",
+        disabled: !context?.selectionText,
+      },
+      {
+        id: "active-annotations",
+        kind: "annotation",
+        label: "这篇论文的批注",
+        detail: "按需读取高亮、评论与页码",
+        disabled: !context,
+      },
+      {
+        id: "zotero-library",
+        kind: "library",
+        label: "Zotero 文库",
+        detail: "搜索其他论文、分类与标签",
+      },
+    ];
+    return suggestions;
+  }
+
+  private filteredContextSuggestions(): ResearchContextSuggestion[] {
+    const query = this.contextMenuQuery.trim().toLocaleLowerCase();
+    if (!query) return this.effectiveContextSuggestions();
+    return this.effectiveContextSuggestions().filter((suggestion) => [
+      suggestion.label,
+      suggestion.detail || "",
+      suggestion.kind,
+    ].join(" ").toLocaleLowerCase().includes(query));
+  }
+
+  private renderContextMenu(): void {
+    const suggestions = this.filteredContextSuggestions();
+    this.contextMenu.hidden = !this.contextMenuOpen;
+    this.contextMenuList.replaceChildren();
+    this.contextMenuEmpty.hidden = suggestions.length > 0;
+    if (!this.contextMenuOpen) return;
+    this.contextMenuSelection = Math.min(
+      this.contextMenuSelection,
+      Math.max(0, suggestions.length - 1),
+    );
+    if (suggestions[this.contextMenuSelection]?.disabled) {
+      const enabledIndex = suggestions.findIndex((suggestion) => !suggestion.disabled);
+      if (enabledIndex >= 0) this.contextMenuSelection = enabledIndex;
+    }
+    suggestions.forEach((suggestion, index) => {
+      const button = this.doc.createElement("button");
+      button.type = "button";
+      button.className = "zc-context-option";
+      button.classList.toggle("is-selected", index === this.contextMenuSelection);
+      button.disabled = Boolean(suggestion.disabled);
+      button.dataset.contextId = suggestion.id;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(index === this.contextMenuSelection));
+      const mark = this.doc.createElement("span");
+      mark.className = `zc-context-option-mark is-${suggestion.kind}`;
+      mark.textContent = contextGlyph(suggestion.kind);
+      const copy = this.doc.createElement("span");
+      const title = this.doc.createElement("strong");
+      title.textContent = suggestion.label;
+      const detail = this.doc.createElement("small");
+      detail.textContent = suggestion.detail || contextKindLabel(suggestion.kind);
+      copy.append(title, detail);
+      button.append(mark, copy);
+      button.addEventListener("mouseenter", () => {
+        this.contextMenuSelection = index;
+        for (const [optionIndex, option] of [
+          ...this.contextMenuList.querySelectorAll<HTMLElement>(".zc-context-option"),
+        ].entries()) {
+          const selected = optionIndex === index;
+          option.classList.toggle("is-selected", selected);
+          option.setAttribute("aria-selected", String(selected));
+        }
+      });
+      button.addEventListener("click", () => this.chooseContextSuggestion(suggestion));
+      this.contextMenuList.appendChild(button);
+    });
+  }
+
+  private openContextMenu(query: string, queryStart: number | null = null): void {
+    this.contextMenuOpen = true;
+    this.contextMenuQuery = query;
+    this.contextQueryStart = queryStart;
+    this.contextMenuSelection = 0;
+    this.renderContextMenu();
+  }
+
+  private closeContextMenu(): void {
+    this.contextMenuOpen = false;
+    this.contextMenuQuery = "";
+    this.contextQueryStart = null;
+    this.contextMenuSelection = 0;
+    this.renderContextMenu();
+  }
+
+  private updateContextMenuFromComposer(): void {
+    const cursor = this.textarea.selectionStart ?? this.textarea.value.length;
+    const beforeCursor = this.textarea.value.slice(0, cursor);
+    const match = /(?:^|\s)@([^\s@]*)$/u.exec(beforeCursor);
+    if (!match) {
+      if (this.contextQueryStart !== null) this.closeContextMenu();
+      return;
+    }
+    const query = match[1] || "";
+    const queryStart = cursor - query.length - 1;
+    this.openContextMenu(query, queryStart);
+  }
+
+  private handleContextMenuKeydown(event: KeyboardEvent): boolean {
+    if (!this.contextMenuOpen || event.isComposing) return false;
+    const suggestions = this.filteredContextSuggestions();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.closeContextMenu();
+      return true;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!suggestions.length) return true;
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      let index = this.contextMenuSelection;
+      for (let attempts = 0; attempts < suggestions.length; attempts++) {
+        index = (index + direction + suggestions.length) % suggestions.length;
+        if (!suggestions[index]?.disabled) break;
+      }
+      this.contextMenuSelection = index;
+      this.renderContextMenu();
+      return true;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const suggestion = suggestions[this.contextMenuSelection];
+      if (!suggestion || suggestion.disabled) {
+        this.closeContextMenu();
+        return true;
+      }
+      this.chooseContextSuggestion(suggestion);
+      return true;
+    }
+    return false;
+  }
+
+  private chooseContextSuggestion(suggestion: ResearchContextSuggestion): void {
+    if (suggestion.disabled) return;
+    if (this.contextQueryStart !== null) {
+      const cursor = this.textarea.selectionStart ?? this.textarea.value.length;
+      const before = this.textarea.value.slice(0, this.contextQueryStart);
+      const after = this.textarea.value.slice(cursor);
+      const spacer = before && !/\s$/u.test(before) && after && !/^\s/u.test(after) ? " " : "";
+      this.textarea.value = before + spacer + after;
+      const nextCursor = before.length + spacer.length;
+      this.textarea.setSelectionRange(nextCursor, nextCursor);
+      this.autoSizeComposer();
+    }
+    this.callbacks.onAddContext?.(suggestion);
+    if (!this.callbacks.onAddContext && suggestion.kind === "selection") {
+      this.callbacks.onInsertSelection();
+    }
+    this.closeContextMenu();
+    this.textarea.focus();
   }
 
   private renderModels(): void {
@@ -339,7 +755,13 @@ export class SidebarView {
     const stickToBottom = !this.transcript.childElementCount || distanceFromBottom < 48;
     const desired: HTMLElement[] = [];
     const activeIDs = new Set<string>();
-    if (!this.state.entries.length && this.state.phase === "ready") {
+    const hasWorkbenchCards = Boolean(
+      this.state.plan
+      || this.state.reviews.length
+      || this.state.pendingApproval
+      || this.state.checkpoints.length,
+    );
+    if (!this.state.entries.length && !hasWorkbenchCards && this.state.phase === "ready") {
       this.emptyState ||= this.createEmptyState();
       const title = this.emptyState.querySelector("h2");
       const subtitle = this.emptyState.querySelector("p");
@@ -352,6 +774,14 @@ export class SidebarView {
       desired.push(this.emptyState);
     }
 
+    if (this.state.plan) {
+      const plan = this.state.plan;
+      const id = `research-plan:${plan.id}`;
+      const fingerprint = JSON.stringify(plan);
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderPlanCard(plan)));
+    }
+
     for (const entry of this.state.entries) {
       activeIDs.add(entry.id);
       const fingerprint = JSON.stringify([
@@ -360,23 +790,54 @@ export class SidebarView {
         entry.title || "",
         entry.state || ""
       ]);
-      const existing = this.entryNodes.get(entry.id);
-      if (existing?.fingerprint === fingerprint) {
-        desired.push(existing.node);
-        continue;
-      }
-      const node = this.renderEntry(entry);
-      const previousDetails = existing?.node.querySelector("details");
-      const nextDetails = node.querySelector("details");
-      if (previousDetails && nextDetails) nextDetails.open = previousDetails.open;
-      this.entryNodes.set(entry.id, { fingerprint, node });
-      desired.push(node);
+      desired.push(this.cachedEntryNode(entry.id, fingerprint, () => this.renderEntry(entry)));
+    }
+
+    for (const review of this.state.reviews) {
+      const id = `diff-review:${review.id}`;
+      const fingerprint = JSON.stringify(review);
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderDiffReview(review)));
+    }
+
+    if (this.state.pendingApproval) {
+      const approval = this.state.pendingApproval;
+      const id = `approval:${approval.id}`;
+      const fingerprint = JSON.stringify(approval);
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderApprovalCard(approval)));
+    }
+
+    if (this.state.checkpoints.length) {
+      const id = "research-checkpoints";
+      const fingerprint = JSON.stringify(this.state.checkpoints);
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(
+        id,
+        fingerprint,
+        () => this.renderCheckpointCard(this.state.checkpoints),
+      ));
     }
     for (const id of this.entryNodes.keys()) {
       if (!activeIDs.has(id)) this.entryNodes.delete(id);
     }
     reconcileChildren(this.transcript, desired);
     if (stickToBottom) this.transcript.scrollTop = this.transcript.scrollHeight;
+  }
+
+  private cachedEntryNode(
+    id: string,
+    fingerprint: string,
+    create: () => HTMLElement,
+  ): HTMLElement {
+    const existing = this.entryNodes.get(id);
+    if (existing?.fingerprint === fingerprint) return existing.node;
+    const node = create();
+    const previousDetails = existing?.node.querySelector("details");
+    const nextDetails = node.querySelector("details");
+    if (previousDetails && nextDetails) nextDetails.open = previousDetails.open;
+    this.entryNodes.set(id, { fingerprint, node });
+    return node;
   }
 
   private createEmptyState(): HTMLElement {
@@ -398,6 +859,175 @@ export class SidebarView {
     }
     empty.append(mark, title, subtitle, suggestions);
     return empty;
+  }
+
+  private renderPlanCard(plan: ResearchPlan): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = "zc-entry zc-plan-card";
+    article.dataset.entryId = `research-plan:${plan.id}`;
+    const details = this.doc.createElement("details");
+    details.open = true;
+    const summary = this.doc.createElement("summary");
+    const title = this.doc.createElement("span");
+    title.textContent = plan.title || "研究计划";
+    const progress = this.doc.createElement("small");
+    const complete = plan.steps.filter((step) => step.status === "complete").length;
+    progress.textContent = `${complete}/${plan.steps.length}`;
+    summary.append(title, progress);
+    const body = this.doc.createElement("div");
+    body.className = "zc-plan-body";
+    if (plan.explanation) {
+      const explanation = this.doc.createElement("p");
+      explanation.textContent = plan.explanation;
+      body.appendChild(explanation);
+    }
+    const list = this.doc.createElement("ol");
+    for (const step of plan.steps) {
+      const item = this.doc.createElement("li");
+      item.className = `is-${step.status}`;
+      item.dataset.planStepId = step.id;
+      const state = this.doc.createElement("span");
+      state.className = "zc-plan-step-state";
+      state.textContent = step.status === "complete" ? "✓"
+        : step.status === "failed" ? "!"
+          : step.status === "running" ? "◌" : "";
+      const label = this.doc.createElement("span");
+      label.textContent = step.title;
+      item.append(state, label);
+      list.appendChild(item);
+    }
+    body.appendChild(list);
+    details.append(summary, body);
+    article.appendChild(details);
+    return article;
+  }
+
+  private renderDiffReview(review: DiffReview): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = `zc-entry zc-review-card is-${review.state || "pending"}`;
+    article.dataset.entryId = `diff-review:${review.id}`;
+    const details = this.doc.createElement("details");
+    details.open = review.state === undefined || review.state === "pending";
+    const summary = this.doc.createElement("summary");
+    const identity = this.doc.createElement("span");
+    identity.textContent = review.title;
+    const badge = this.doc.createElement("small");
+    badge.textContent = review.state === "accepted" ? "已接受"
+      : review.state === "rejected" ? "已忽略"
+        : review.state === "failed" ? "应用失败" : "Review";
+    summary.append(identity, badge);
+    const body = this.doc.createElement("div");
+    body.className = "zc-review-body";
+    if (review.summary) {
+      const description = this.doc.createElement("p");
+      description.textContent = review.summary;
+      body.appendChild(description);
+    }
+    const diff = this.doc.createElement("pre");
+    diff.className = "zc-diff-view";
+    for (const line of review.diff.replace(/\r\n?/g, "\n").split("\n")) {
+      const row = this.doc.createElement("span");
+      row.className = line.startsWith("+") && !line.startsWith("+++") ? "is-addition"
+        : line.startsWith("-") && !line.startsWith("---") ? "is-deletion"
+          : line.startsWith("@@") ? "is-hunk" : "is-context";
+      row.textContent = line || " ";
+      diff.append(row, this.doc.createTextNode("\n"));
+    }
+    const actions = this.doc.createElement("div");
+    actions.className = "zc-review-actions";
+    const reject = this.doc.createElement("button");
+    reject.type = "button";
+    reject.textContent = "忽略";
+    reject.disabled = Boolean(review.state && review.state !== "pending");
+    reject.addEventListener("click", () => this.callbacks.onReviewDecision?.(review.id, "reject"));
+    const accept = this.doc.createElement("button");
+    accept.type = "button";
+    accept.className = "is-primary";
+    accept.textContent = "接受建议";
+    accept.disabled = Boolean(review.state && review.state !== "pending");
+    accept.addEventListener("click", () => this.callbacks.onReviewDecision?.(review.id, "accept"));
+    actions.append(reject, accept);
+    body.append(diff, actions);
+    details.append(summary, body);
+    article.appendChild(details);
+    return article;
+  }
+
+  private renderApprovalCard(approval: PendingApproval): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = `zc-entry zc-approval-card is-${approval.risk || "medium"}`;
+    article.dataset.entryId = `approval:${approval.id}`;
+    const heading = this.doc.createElement("div");
+    heading.className = "zc-approval-heading";
+    const badge = this.doc.createElement("span");
+    badge.textContent = approval.kind === "command" ? "命令审批"
+      : approval.kind === "tool" ? "工具审批" : "需要确认";
+    const title = this.doc.createElement("strong");
+    title.textContent = approval.title;
+    heading.append(badge, title);
+    article.appendChild(heading);
+    if (approval.description) {
+      const description = this.doc.createElement("p");
+      description.textContent = approval.description;
+      article.appendChild(description);
+    }
+    if (approval.command) {
+      const command = this.doc.createElement("code");
+      command.textContent = approval.command;
+      article.appendChild(command);
+    }
+    const actions = this.doc.createElement("div");
+    actions.className = "zc-approval-actions";
+    const reject = this.doc.createElement("button");
+    reject.type = "button";
+    reject.textContent = "拒绝";
+    reject.addEventListener("click", () => {
+      this.callbacks.onApprovalDecision?.(approval.id, "reject");
+    });
+    const approve = this.doc.createElement("button");
+    approve.type = "button";
+    approve.className = "is-primary";
+    approve.textContent = "仅允许这一次";
+    approve.addEventListener("click", () => {
+      this.callbacks.onApprovalDecision?.(approval.id, "approve-once");
+    });
+    actions.append(reject, approve);
+    article.appendChild(actions);
+    return article;
+  }
+
+  private renderCheckpointCard(checkpoints: CheckpointOption[]): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = "zc-entry zc-checkpoint-card";
+    article.dataset.entryId = "research-checkpoints";
+    const heading = this.doc.createElement("div");
+    heading.className = "zc-checkpoint-heading";
+    const title = this.doc.createElement("strong");
+    title.textContent = "Checkpoints";
+    const detail = this.doc.createElement("small");
+    detail.textContent = "恢复到先前的研究上下文";
+    heading.append(title, detail);
+    const list = this.doc.createElement("div");
+    list.className = "zc-checkpoint-list";
+    for (const checkpoint of checkpoints.slice(0, 4)) {
+      const row = this.doc.createElement("div");
+      const copy = this.doc.createElement("span");
+      const label = this.doc.createElement("strong");
+      label.textContent = checkpoint.label;
+      const time = this.doc.createElement("small");
+      time.textContent = formatDateTime(checkpoint.createdAt);
+      copy.append(label, time);
+      const restore = this.doc.createElement("button");
+      restore.type = "button";
+      restore.textContent = "Restore";
+      restore.addEventListener("click", () => {
+        this.callbacks.onRestoreCheckpoint?.(checkpoint.id);
+      });
+      row.append(copy, restore);
+      list.appendChild(row);
+    }
+    article.append(heading, list);
+    return article;
   }
 
   private renderEntry(entry: ChatEntry): HTMLElement {
@@ -465,7 +1095,7 @@ export class SidebarView {
     }
     else if (this.state.phase === "signed-out") {
       title.textContent = "在 Zotero 中使用 Codex";
-      detail.textContent = "使用 ChatGPT 登录。登录状态与 Codex CLI、Cursor 共享；插件不会读取或保存令牌。";
+      detail.textContent = "使用 ChatGPT 登录。登录状态由本机 Codex CLI 管理；插件不会读取或保存令牌。";
       button.textContent = "使用 ChatGPT 登录";
       button.addEventListener("click", () => this.callbacks.onLogin());
     }
@@ -476,6 +1106,14 @@ export class SidebarView {
       button.addEventListener("click", () => this.callbacks.onRefreshContext());
     }
     card.append(icon, title, detail, button);
+    if (this.state.phase === "unavailable" || this.state.phase === "error") {
+      const terminal = this.doc.createElement("button");
+      terminal.type = "button";
+      terminal.className = "zc-login-secondary";
+      terminal.textContent = "打开高级 Terminal";
+      terminal.addEventListener("click", () => this.callbacks.onOpenTerminal());
+      card.appendChild(terminal);
+    }
     this.loginLayer.appendChild(card);
   }
 
@@ -490,7 +1128,9 @@ export class SidebarView {
     const label = this.doc.createElement("div");
     label.textContent = this.state.accountLabel || "Codex";
     const readonly = this.doc.createElement("small");
-    readonly.textContent = "文库访问：只读";
+    readonly.textContent = this.state.mode === "ask"
+      ? "Ask：文库只读"
+      : "Agent：变更需审批并生成 Checkpoint";
     const logout = this.doc.createElement("button");
     logout.type = "button";
     logout.textContent = "退出 Codex 登录";
@@ -542,6 +1182,7 @@ export class SidebarView {
   private submit(): void {
     const text = this.textarea.value.trim();
     if (!text || this.state.phase !== "ready") return;
+    this.closeContextMenu();
     this.textarea.value = "";
     this.autoSizeComposer();
     this.callbacks.onSend(text);
@@ -586,7 +1227,9 @@ const SIDEBAR_ICON_PATHS: Record<SidebarIcon, string[]> = {
   more: ["M5 12h.01", "M12 12h.01", "M19 12h.01"],
   refresh: ["M20 6v5h-5", "M4 18v-5h5", "M18.2 9a7 7 0 0 0-11.7-2.5L4 11", "M5.8 15a7 7 0 0 0 11.7 2.5L20 13"],
   send: ["M12 19V5", "m6 6-6-6-6 6"],
-  stop: ["M8 8h8v8H8z"]
+  stop: ["M8 8h8v8H8z"],
+  context: ["M12 5v14", "M5 12h14", "M4 4h16v16H4z"],
+  close: ["m7 7 10 10", "m17 7-10 10"],
 };
 
 function createSidebarIcon(doc: Document, icon: SidebarIcon): SVGElement {
@@ -628,6 +1271,44 @@ function effortLabel(effort: string): string {
     ultra: "Ultra"
   };
   return labels[effort] || effort;
+}
+
+function contextGlyph(kind: ResearchContextKind): string {
+  const glyphs: Record<ResearchContextKind, string> = {
+    paper: "P",
+    page: "§",
+    selection: "“",
+    annotation: "✦",
+    library: "⌘",
+    collection: "#",
+    "external-paper": "P",
+  };
+  return glyphs[kind];
+}
+
+function contextKindLabel(kind: ResearchContextKind): string {
+  const labels: Record<ResearchContextKind, string> = {
+    paper: "论文",
+    page: "PDF 页面",
+    selection: "Reader 选区",
+    annotation: "Zotero 批注",
+    library: "文库",
+    collection: "分类",
+    "external-paper": "其他论文",
+  };
+  return labels[kind];
+}
+
+function formatDateTime(value: string | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function reconcileChildren(parent: HTMLElement, desired: readonly HTMLElement[]): void {

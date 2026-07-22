@@ -87,4 +87,31 @@ describe("NativeSessionSocket", () => {
     socket.close(1000, "again");
     expect(bridge.closed).toEqual(["appserver-2"]);
   });
+
+  it("ignores errors scoped to a different native session", async () => {
+    const bridge = new MockBridge();
+    const socket = new NativeSessionSocket(bridge as any, "appserver-3");
+    const errors = vi.fn();
+    socket.addEventListener("error", errors);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    bridge.emit({
+      type: "error",
+      sessionId: "terminal-paper-a",
+      message: "terminal input failed",
+    });
+    expect(errors).not.toHaveBeenCalled();
+
+    bridge.emit({
+      type: "error",
+      sessionId: "appserver-3",
+      message: "app-server pipe failed",
+    });
+    bridge.emit({
+      type: "error",
+      message: "native helper protocol failed",
+    });
+    expect(errors).toHaveBeenNthCalledWith(1, { message: "app-server pipe failed" });
+    expect(errors).toHaveBeenNthCalledWith(2, { message: "native helper protocol failed" });
+  });
 });

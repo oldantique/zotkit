@@ -1,8 +1,8 @@
 {
   "name": "zotkit-zotero-plugin",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
-  "description": "A real Codex or Claude Code terminal with bounded, read-only PDF context inside Zotero Reader.",
+  "description": "A Cursor-style Codex research chat and advanced local terminal inside Zotero Reader.",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

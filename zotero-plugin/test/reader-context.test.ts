@@ -377,6 +377,76 @@ describe("ReaderContextService", () => {
     });
   });
 
+  it("invalidates in-memory and private full-text caches after PDF bytes or links change", async () => {
+    let revision = "old";
+    const readPdfWorkerText = vi.fn(async () => ({
+      text: `${revision} page one\f${revision} page two`,
+      extractedPages: 2,
+      totalPages: 2,
+    }));
+    const { adapter, reader, attachment } = makeAdapter({
+      getIndexedFullTextReference: vi.fn(async () => null),
+      readIndexedFullText: vi.fn(async () => null),
+      readPdfWorkerText,
+    });
+    const service = new ReaderContextService(adapter, host);
+    const first = await service.acceptReaderHook({ reader, item: attachment });
+    await service.ensureCurrentPdfTextReference();
+    expect(host.files.get(first.workspace!.pdfText)).toContain("old page one");
+
+    revision = "new";
+    await service.invalidateAttachmentCaches({ key: "ATTACH01", libraryID: 1 });
+    expect(host.files.get(first.workspace!.pdfText)).toBe("");
+    const refreshed = await service.refresh();
+    expect(refreshed.pdfText).toBeNull();
+    await service.ensureCurrentPdfTextReference();
+
+    expect(readPdfWorkerText).toHaveBeenCalledTimes(2);
+    expect(host.files.get(first.workspace!.pdfText)).toContain("new page one");
+  });
+
+  it("clears an old private fallback after switching to Zotero indexed full text", async () => {
+    let indexedFullTextAvailable = false;
+    const indexedPath = "/Users/test/Zotero/storage/ATTACH01/.zotero-ft-cache";
+    const getIndexedFullTextReference = vi.fn(
+      async (): Promise<PdfTextReference | null> => indexedFullTextAvailable
+        ? {
+          schemaVersion: 1,
+          path: indexedPath,
+          source: "indexed-fulltext",
+          totalPages: 3,
+          truncated: false,
+        }
+        : null,
+    );
+    const { adapter, reader, attachment } = makeAdapter({
+      getIndexedFullTextReference,
+      readIndexedFullText: vi.fn(async () => null),
+      readPdfWorkerText: vi.fn(async () => ({
+        text: "fallback page one\ffallback page two",
+        extractedPages: 2,
+        totalPages: 2,
+      })),
+    });
+    const service = new ReaderContextService(adapter, host);
+
+    const first = await service.acceptReaderHook({ reader, item: attachment });
+    await service.ensureCurrentPdfTextReference();
+    expect(host.files.get(first.workspace!.pdfText)).toContain("fallback page one");
+
+    indexedFullTextAvailable = true;
+    const indexed = await service.acceptReaderHook({ reader, item: attachment });
+    expect(indexed.pdfText).toMatchObject({
+      path: indexedPath,
+      source: "indexed-fulltext",
+    });
+    expect(host.files.get(first.workspace!.pdfText)).toContain("fallback page one");
+
+    await service.invalidateAttachmentCaches({ key: "ATTACH01", libraryID: 1 });
+
+    expect(host.files.get(first.workspace!.pdfText)).toBe("");
+  });
+
   it("evicts a pruned fallback reference and rebuilds it when that paper is reopened", async () => {
     let nowMs = Date.parse("2026-07-22T10:00:00.000Z");
     const paperA: MockItem = { id: 17, key: "ATTACH01", kind: "attachment" };
@@ -550,6 +620,85 @@ describe("ReaderContextService", () => {
     expect(buildZotkitLibrarySnapshot).toHaveBeenCalledTimes(1);
     await service.ensureZotkitLibrarySnapshot();
     expect(buildZotkitLibrarySnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("exposes bundled Zotkit metadata discovery tools through the shared bounded snapshot", async () => {
+    const buildZotkitLibrarySnapshot = vi.fn(async (libraryID): Promise<ZotkitLibrarySnapshot> => ({
+      schemaVersion: 1,
+      libraryID,
+      generatedAt: "2026-07-22T10:00:00.000Z",
+      complete: true,
+      collections: [
+        {
+          key: "COLLROOT",
+          name: "Quantum Dynamics",
+          parentKey: null,
+          path: "Quantum Dynamics",
+          version: 4,
+        },
+        {
+          key: "COLLCZ01",
+          name: "CZ gates",
+          parentKey: "COLLROOT",
+          path: "Quantum Dynamics / CZ gates",
+          version: 2,
+        },
+      ],
+      tags: [
+        { tag: "rydberg", count: 7 },
+        { tag: "geometric-gates", count: 3 },
+      ],
+      items: [{
+        _topLevel: true,
+        key: "PARENT01",
+        itemType: "journalArticle",
+        title: "Geometric quantum gates via dark paths in Rydberg atoms",
+        creators: [{ firstName: "Xin", lastName: "Jin", creatorType: "author" }],
+        date: "2024",
+        publicationTitle: "Physical Review Applied",
+        DOI: "10.1103/example",
+        url: "https://example.test/paper",
+        abstractNote: "A robust Rydberg gate proposal.",
+        language: "en",
+        tags: ["rydberg", "geometric-gates"],
+        collections: ["CZ gates"],
+        collectionKeys: ["COLLCZ01"],
+        version: 5,
+      }],
+    }));
+    const { adapter } = makeAdapter({ buildZotkitLibrarySnapshot });
+    const service = new ReaderContextService(adapter, host);
+
+    await expect(service.invokeTool("zotkit_find_items", {
+      query: "Rydberg",
+    })).resolves.toMatchObject({
+      libraryID: 1,
+      complete: true,
+      matches: [{
+        key: "PARENT01",
+        title: "Geometric quantum gates via dark paths in Rydberg atoms",
+        collectionKeys: ["COLLCZ01"],
+        collectionPaths: ["Quantum Dynamics / CZ gates"],
+      }],
+    });
+    await expect(service.invokeTool("zotkit_get_item", {
+      key: "parent01",
+    })).resolves.toMatchObject({
+      key: "PARENT01",
+      creators: [{ firstName: "Xin", lastName: "Jin" }],
+      collections: [{ key: "COLLCZ01", path: "Quantum Dynamics / CZ gates" }],
+    });
+    await expect(service.invokeTool("zotkit_list_collections", {
+      query: "CZ",
+    })).resolves.toMatchObject({
+      collections: [{ key: "COLLCZ01", parentKey: "COLLROOT" }],
+    });
+    await expect(service.invokeTool("zotkit_list_tags", {
+      query: "gate",
+    })).resolves.toMatchObject({
+      tags: [{ tag: "geometric-gates", count: 3 }],
+    });
+    expect(buildZotkitLibrarySnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("persists a failed built-in Zotkit snapshot warning in the active workspace", async () => {

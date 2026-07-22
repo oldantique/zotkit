@@ -1,28 +1,57 @@
 # Security model
 
-Zotero plugins run with elevated local privileges, so Zotkit keeps the paper-assistant path deliberately narrow:
+Zotero extensions run with broad privileges inside the desktop application. Zotkit therefore treats the XPI, its bundled native helper, and the locally installed Codex/Claude executable as trusted local software. The controls below reduce accidental or prompt-driven changes; they are not a formal sandbox for a compromised macOS account, a malicious add-on, or a hostile locally installed CLI/MCP server.
 
-- It never calls Zotero item save, collection mutation, attachment relink, annotation/note creation, database write, or index-update APIs.
-- Reader access is observational. Automatic context capture reads only the visible PDF.js page or Zotero's existing indexed text. When terminal activation finds no usable Zotero index for the active attachment, PDFWorker may prepare the bounded private fallback described below. The terminal MCP exposes bounded context, active-PDF search/page reads, and filename/path discovery only.
-- The interactive Codex terminal starts with `sandbox: read-only` and `approvalPolicy: untrusted`. This is read-only by default, but it is not unconditional OS-level containment: the user can explicitly approve an escalation. Only the two XPI-bundled, annotated read-only MCP servers are pre-approved; shell commands and user-configured MCP servers retain the visible approval path.
-- The Claude Code terminal starts with `--permission-mode plan`. Plan mode is a Claude Code policy, not an OS sandbox imposed by Zotkit, and is not advertised as filesystem-level read-only containment.
-- The separate structured Codex app-server implementation uses `sandbox: read-only` with `approvalPolicy: never`; its client handlers decline command and file-change requests and grant no requested permissions. Unlike the interactive TUI, that path does not offer an approval route to escalation.
-- The real Codex PTY runs behind the authenticated native helper. It opens no TCP port: transport uses a mode-0600 Unix-domain socket inside the plugin's mode-0700 profile runtime directory, rejects pre-existing socket nodes, and verifies the connecting peer UID with `getpeereid()`.
-- Each launch receives a fresh high-entropy secret through a mode-0600 temporary file that is consumed and unlinked. The Reader WebSocket protocol authenticates plugin and helper with per-connection HMAC proofs tied to the WebSocket key; that protocol never places the secret in process arguments, URLs, headers, or socket payloads. The helper's optional diagnostic `/health` endpoint separately accepts an `Authorization: Bearer` header over the same private Unix socket and is not used by the plugin.
-- Helper, accepted-client, PTY, pipe, token, and directory descriptors are close-on-exec, so Codex and Claude children inherit only standard input/output/error. The helper terminates owned child processes when Zotero or the client disconnects.
-- Login remains owned by the installed Codex CLI. Zotkit never opens, parses, copies, or persists `~/.codex/auth.json`, API keys, or browser cookies.
-- Generated context, shared library snapshots, and session files are confined below a mode-0700 `<Zotero Profile>/zotkit/` directory; sensitive context and terminal MCP files are additionally mode 0600. Original PDFs are never copied. Existing Zotero `.zotero-ft-cache` text is referenced in place; only when an active attachment lacks an index may one bounded `current-pdf-text.txt` fallback be created in the private, automatically pruned workspace. Each Zotero library has one bounded metadata snapshot rather than per-paper metadata copies, and cleanup fails closed on symlinks or unknown files.
-- Original attachment folders, Zotero `storage`, attachment links, and configured external PDF folders are read-only references. Zotkit never places helper files beside a PDF.
-- External-library discovery returns PDF filename/path metadata only. Hidden components, traversal, non-PDF files, off-root canonical paths, and symlinks are rejected.
+## Surfaces and trust boundaries
 
-Zotkit's own Reader integration and bundled tools are observational and do not mutate the Zotero library or paper files. Agent execution has the distinct policies described above: interactive Codex is read-only unless the user approves escalation, Claude Code is in plan mode without a Zotkit-enforced OS sandbox, and the structured app-server path is read-only with escalation automatically declined. The XPI-bundled `zotkit_library` MCP surface exposes exactly four discovery-only tools: `zotkit_find_items`, `zotkit_get_item`, `zotkit_list_collections`, and `zotkit_list_tags`. It reads a local Zotero Desktop metadata snapshot and requires no Python runtime, external Zotkit installation, Zotero Web API key, `.env`, or WebDAV credentials.
+Zotkit exposes two agent surfaces with different policies:
 
-The native Reader MCP exposes exactly eight annotated read-only tools: the recommended atomic
-`get_reader_context` call plus `get_active_paper`, `get_current_page`,
-`get_current_selection`, `search_current_pdf`, `read_pdf_pages`,
-`list_library_files`, and `search_library_files`. Full-text tools accept only the
-validated active-attachment text reference and enforce query, result, page-range,
-file-size, and output limits. It does not expose annotations, cross-attachment page
-reads, Zotero writes, or arbitrary filesystem access.
+| Surface | Default access | How writes happen |
+| --- | --- | --- |
+| Research Chat — Ask | Codex app-server, read-only sandbox, network disabled, `approvalPolicy: never` | No mutation tool and no write approval path |
+| Research Chat — Agent | Codex app-server, network disabled, workspace-write limited to Zotkit's private staging workspace | Private-workspace command/file approvals are shown to the user; Zotero/PDF changes require a separate Diff and Apply |
+| Advanced Codex Terminal | Real PTY, `--sandbox read-only --ask-for-approval untrusted` | The user can approve escalation in the Codex TUI |
+| Advanced Claude Terminal | Real PTY, `--permission-mode plan` | Claude's plan mode is a CLI policy, not an OS sandbox |
 
-The bundled universal helper receives a local ad-hoc signature. Public distribution outside this local build should additionally use an Apple Developer ID signature and notarization.
+The active PDF directory is supplied as research context. It is not a writable root for structured Agent mode. Requests from app-server to write outside the private staging workspace are rejected. This restriction does not apply to an operation the user separately approves in the advanced PTY: the Terminal is deliberately a full CLI surface, and its shell or user-configured MCP actions do not pass through Research Chat's Apply cards.
+
+`codex app-server` is an experimental Codex interface and may change. Zotkit fails visibly when the local protocol is unavailable or incompatible and offers the advanced Terminal as a fallback; protocol compatibility is not itself a security guarantee.
+
+## Reader context and prompt injection
+
+Reader tools are observational. They expose bounded metadata, current-page/selection snapshots, current-PDF search/page reads, annotations, and validated library-PDF discovery/read operations. The XPI-bundled Zotkit query tools inspect a bounded local metadata snapshot. They do not perform writes.
+
+PDF text, annotations, bibliographic fields, filenames, and model output are untrusted content. They may contain instructions intended to manipulate the model. Zotkit does not treat any of that content as user approval. In Ask mode it cannot activate a write path. In Agent mode a model may prepare a proposal, but it cannot click Apply or approve its own command request.
+
+Library-file tools reject hidden components, traversal, non-PDF files, off-root canonical paths, and symlinks, and cross-PDF text access requires a unique match to an existing Zotero attachment. Results, queries, page ranges, file sizes, and serialized outputs are bounded. These checks narrow accidental exposure; a user should still avoid configuring a library root that contains unrelated sensitive PDFs.
+
+## Reviewed Zotero and PDF changes
+
+Structured Agent mode exposes one mutation proposal tool, `zotero_propose_changes`. Calling it validates and displays a Diff but does not write. Only an explicit user **Apply** action can continue.
+
+Supported operations are deliberately narrow:
+
+- selected bibliographic fields on the active parent item;
+- exact membership in existing collections from the same Zotero library;
+- relinking an active linked-file attachment to an existing validated PDF;
+- replacing the active PDF with a validated staged PDF from Zotkit's private workspace.
+
+Immediately before Apply, Zotkit checks that the same paper is active and that its relevant metadata, collection membership, attachment path, and link mode still match the reviewed snapshot. A mismatch invalidates the proposal. Zotkit then creates a checkpoint and applies through Zotero item/collection/attachment APIs or an atomic temporary-file replacement for PDF bytes. If Apply throws, it attempts to restore that checkpoint. Recovery is best-effort: checkpoints are not a substitute for Zotero sync history, filesystem backups, or testing bulk changes on disposable data.
+
+Checkpoints live below the mode-0700 `<Zotero Profile>/zotkit/checkpoints/` tree; manifests and PDF backups are restricted to the current user where the platform APIs permit it. Retention is bounded to 20 checkpoints and approximately 1 GiB of PDF backups, and an individual PDF larger than 512 MiB is refused. A PDF is copied only when an approved PDF replacement needs a recovery copy. Ordinary reading, metadata changes, collection changes, and relinking do not copy the original PDF. Restore creates a new undo checkpoint first, then restores the recorded Zotero state and, when present, PDF bytes.
+
+Conversation checkpoints are different: they fork a Codex thread before an earlier turn. They restore conversation history, not files or Zotero data. Only mutation checkpoints restore an applied Zotero/PDF proposal.
+
+## Local helper and process isolation
+
+The native helper uses a mode-0600 Unix-domain socket inside a mode-0700 profile runtime directory rather than an unauthenticated TCP listener. It rejects pre-existing socket nodes, checks the connecting peer UID on supported macOS versions, and authenticates each connection using a fresh secret delivered through a restricted temporary file. Sensitive context and helper files are created with restrictive permissions where supported.
+
+Helper, client, PTY, pipe, token, and directory descriptors are marked close-on-exec, and automated tests cover unintended descriptor inheritance and child cleanup. The helper also uses bounded HUP → TERM → KILL shutdown for owned children. These are defense-in-depth controls, not a claim that an agent process is isolated from every resource available to the logged-in user. The selected CLI, its configuration, and any user-installed MCP servers retain their own capabilities.
+
+## Credentials and local state
+
+Research Chat uses Codex app-server account methods and shares the installed Codex CLI's authentication. Zotkit does not need a Zotero Web API key for its local Reader/query workflow and does not directly read or copy `~/.codex/auth.json`, API keys, or browser cookies. Login UI can ask Codex to start or cancel its normal login flow; Codex remains the credential owner.
+
+Generated context, one shared metadata snapshot per Zotero library, session history, staging files, and checkpoints are confined below `<Zotero Profile>/zotkit/`. Existing Zotero `.zotero-ft-cache` text is normally referenced in place. If an active attachment has no usable index, an explicit full-text operation may create one bounded, automatically pruned text fallback in the private workspace. Zotkit does not place generated context, indexes, prompts, or notes beside the original PDF.
+
+The installable helper is locally ad-hoc signed. Public redistribution should use an Apple Developer ID signature and notarization. Install XPI files only from a source you trust, review every Diff and approval card, and keep independent backups before material library or PDF changes.

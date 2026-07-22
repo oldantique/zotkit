@@ -56,6 +56,7 @@ export class NativeSessionSocket implements WebSocketLike {
 
   private onBridgeEvent(event: BridgeEvent): void {
     if (event.type === "error") {
+      if (event.sessionId && event.sessionId !== this.sessionId) return;
       this.dispatch("error", { message: event.message });
       return;
     }

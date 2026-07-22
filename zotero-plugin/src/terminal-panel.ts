@@ -46,6 +46,7 @@ export interface TerminalPaperOptions {
 export interface TerminalPanelCallbacks {
   onPasteSelection?(): void;
   onRefreshContext?(): void;
+  onOpenChat?(): void;
 }
 
 interface TerminalSession {
@@ -227,6 +228,12 @@ export class TerminalPanel {
     });
     const terminalTools = doc.createElement("div");
     terminalTools.className = "zc-terminal-tools";
+    const chatButton = doc.createElement("button");
+    chatButton.type = "button";
+    chatButton.className = "zc-terminal-chat-button";
+    chatButton.textContent = "Chat";
+    chatButton.title = "返回 Research Chat（⌘I）";
+    chatButton.addEventListener("click", () => this.callbacks.onOpenChat?.());
     this.mathPreviewToggle = doc.createElement("button");
     this.mathPreviewToggle.type = "button";
     this.mathPreviewToggle.className = "zc-math-preview-toggle";
@@ -240,7 +247,7 @@ export class TerminalPanel {
       this.renderMathPreview(this.current);
       requestAnimationFrame(() => this.fitCurrent());
     });
-    terminalTools.append(this.mathPreviewToggle, this.agentPicker);
+    terminalTools.append(chatButton, this.mathPreviewToggle, this.agentPicker);
     bar.append(traffic, this.title, terminalTools);
 
     const context = doc.createElement("div");
@@ -529,6 +536,11 @@ export class TerminalPanel {
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(new WebLinksAddon((_event, uri) => Zotero.launchURL(uri)));
+    // xterm measures its character cell while `open()` runs. Opening a
+    // detached element leaves the renderer at 0 x 0 in Zotero even after the
+    // surrounding pane becomes visible, so attach it to the flexible terminal
+    // surface before asking xterm to initialize.
+    this.surface!.replaceChildren(element);
     terminal.open(element);
     const session: TerminalSession = {
       key,

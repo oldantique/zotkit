@@ -359,6 +359,54 @@ describe("Codex protocol convenience API", () => {
     await read;
     expect(client.store.getThread("thread-l")?.turns[0]?.id).toBe("turn-l");
   });
+
+  it("forks at a checkpoint boundary and replaces rollback snapshots", async () => {
+    const { client, socket } = await connectedClient();
+    client.store.ingestThread({
+      id: "thread-source",
+      turns: [
+        { id: "turn-1", status: "completed", items: [] },
+        { id: "turn-2", status: "completed", items: [] },
+      ],
+    });
+
+    const fork = client.threadFork({
+      threadId: "thread-source",
+      beforeTurnId: "turn-2",
+      cwd: "/papers",
+      sandbox: "workspace-write",
+      approvalPolicy: "untrusted",
+    });
+    let request = socket.last();
+    expect(request).toMatchObject({
+      method: "thread/fork",
+      params: { threadId: "thread-source", beforeTurnId: "turn-2" },
+    });
+    socket.receive({
+      id: request.id,
+      result: { thread: { id: "thread-fork", turns: [{ id: "turn-1", items: [] }] } },
+    });
+    await fork;
+    expect(client.store.getThread("thread-fork")?.turns.map((turn) => turn.id))
+      .toEqual(["turn-1"]);
+
+    const rollback = client.threadRollback({ threadId: "thread-source", numTurns: 1 });
+    request = socket.last();
+    expect(request).toMatchObject({
+      method: "thread/rollback",
+      params: { threadId: "thread-source", numTurns: 1 },
+    });
+    socket.receive({
+      id: request.id,
+      result: { thread: { id: "thread-source", turns: [{ id: "turn-1", items: [] }] } },
+    });
+    await rollback;
+    expect(client.store.getThread("thread-source")?.turns.map((turn) => turn.id))
+      .toEqual(["turn-1"]);
+
+    await expect(client.threadRollback({ threadId: "thread-source", numTurns: 0 }))
+      .rejects.toThrow("integer >= 1");
+  });
 });
 
 describe("server-initiated requests", () => {
@@ -421,6 +469,39 @@ describe("server-initiated requests", () => {
     expect(socket.last()).toEqual({
       id: 42,
       error: { code: -32601, message: "Unknown method: future/request" },
+    });
+  });
+
+  it("exposes the JSON-RPC request id to an asynchronous generic approval queue", async () => {
+    const deferredApproval: { resolve?: (value: { decision: "decline" }) => void } = {};
+    const onApproval = vi.fn(() => new Promise<{ decision: "decline" }>((resolve) => {
+      deferredApproval.resolve = resolve;
+    }));
+    const { socket } = await connectedClient({ onApproval });
+
+    socket.receive({
+      id: "approval-async",
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-file",
+        startedAtMs: 10,
+        reason: "Apply the reviewed PDF metadata update",
+      },
+    });
+    await flushAsyncHandlers();
+    expect(onApproval).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "fileChange",
+      requestId: "approval-async",
+    }));
+    expect(socket.last()).not.toEqual(expect.objectContaining({ id: "approval-async" }));
+
+    deferredApproval.resolve?.({ decision: "decline" });
+    await flushAsyncHandlers();
+    expect(socket.last()).toEqual({
+      id: "approval-async",
+      result: { decision: "decline" },
     });
   });
 });
@@ -496,6 +577,23 @@ describe("ThreadStore streaming aggregation", () => {
         },
       },
       {
+        method: "turn/plan/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          explanation: "Inspect, compare, answer",
+          plan: [{ step: "Inspect", status: "completed" }],
+        },
+      },
+      {
+        method: "turn/diff/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          diff: "--- a/metadata.json\n+++ b/metadata.json",
+        },
+      },
+      {
         method: "item/completed",
         params: {
           threadId: "thread-1",
@@ -536,5 +634,10 @@ describe("ThreadStore streaming aggregation", () => {
       .toBe("page 7 text");
     expect(turn?.items.find((item) => item.id === "tool-1")?.progress)
       .toEqual(["Reading PDF"]);
+    expect(turn).toMatchObject({
+      planExplanation: "Inspect, compare, answer",
+      plan: [{ step: "Inspect", status: "completed" }],
+      diff: "--- a/metadata.json\n+++ b/metadata.json",
+    });
   });
 });

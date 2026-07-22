@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+- Made a Cursor-style Research Chat the default Reader surface while retaining the real Codex/Claude terminal as an advanced mode with a one-click return to Chat.
+- Connected the structured UI to the local Codex `app-server`, reusing the Codex CLI login and adding streaming Markdown/LaTeX, model and reasoning controls, paper-scoped history, plans, tool cards, approvals, and conversation checkpoints.
+- Added Cursor-compatible Reader shortcuts: `⌘I` focuses Chat, `⌘L` starts a new chat with the PDF selection, `⌘⇧L` attaches the selection to the current chat, and `⌘⇧J` opens Terminal.
+- Automatically supplies the active paper metadata, original PDF path and directory, current page text, selection, annotations, and library tools without copying PDFs into the profile workspace.
+- Added Agent-mode Zotero changes through `zotero_propose_changes`: metadata, collection membership, linked-attachment paths, and staged PDF replacements are validated, shown as a Diff, applied only after a user click, and checkpointed immediately beforehand.
+- Kept Ask mode read-only and constrained Agent filesystem writes to the private staging workspace; requests to write directly outside it are rejected so original-library mutations cannot bypass Apply/Checkpoint.
+- Marked paper/page/selection material as untrusted app-server context, canonicalized modern filesystem approval grants (including symlinks), and bound every staged PDF Diff to its size and SHA-256 before Apply.
+- Invalidated Zotero and plugin full-text caches and reloaded matching Reader views after approved PDF/link changes; failed applies keep a visible checkpoint and report any rollback failure.
+- Bounded retained checkpoints to 20 entries and 1 GiB of PDF backups; normal reading still creates no PDF copies, and restore itself first creates an undo checkpoint.
+- Coalesced streaming UI updates to reduce CPU use and kept Reader refreshes scoped to an expanded Zotkit pane.
+
 ## 0.2.3
 
 - Replaced the loopback TCP bridge with a profile-private Unix-domain socket, verified the local peer identity, kept the bearer token out of URLs, and rejected pre-existing socket nodes.
