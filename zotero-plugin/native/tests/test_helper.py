@@ -423,6 +423,12 @@ class McpTests(unittest.TestCase):
                     "method": "tools/call",
                     "params": {"name": "get_current_selection", "arguments": {}},
                 },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "tools/call",
+                    "params": {"name": "get_reader_context", "arguments": {}},
+                },
             ]
         )
         self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "zotkit-reader")
@@ -431,6 +437,7 @@ class McpTests(unittest.TestCase):
         self.assertEqual(
             names,
             {
+                "get_reader_context",
                 "get_active_paper",
                 "get_current_page",
                 "get_current_selection",
@@ -441,6 +448,10 @@ class McpTests(unittest.TestCase):
         self.assertEqual(responses[2]["result"]["structuredContent"]["activePaper"]["title"], "Alpha Paper")
         self.assertEqual(responses[3]["result"]["structuredContent"]["text"], "page four")
         self.assertEqual(responses[4]["result"]["structuredContent"]["text"], "selection one")
+        combined = responses[5]["result"]["structuredContent"]
+        self.assertEqual(combined["activePaper"]["title"], "Alpha Paper")
+        self.assertEqual(combined["currentPageText"], "page four")
+        self.assertEqual(combined["currentSelectionText"], "selection one")
 
     def test_library_boundary_listing_and_search(self) -> None:
         responses = self.call(

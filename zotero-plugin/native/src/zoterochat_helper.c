@@ -25,7 +25,7 @@
 #include <unistd.h>
 #include <util.h>
 
-#define ZC_VERSION "0.2.0"
+#define ZC_VERSION "0.2.1"
 #define MAX_CLIENTS 16
 #define MAX_SESSIONS 32
 #define MAX_HTTP 16384
@@ -2020,6 +2020,11 @@ typedef struct {
   int tok_count;
 } McpContext;
 
+enum {
+  MCP_CONTEXT_LIBRARY_ROOT = 1u << 0,
+  MCP_CONTEXT_SNAPSHOT = 1u << 1,
+};
+
 static bool path_within(const char *root, const char *path) {
   size_t n = strlen(root);
   return !strncmp(root, path, n) &&
@@ -2133,7 +2138,7 @@ static void mcp_load_snapshot_reference(McpContext *c) {
   free(raw);
 }
 
-static bool mcp_context_reload(McpContext *c, bool validate_library_root,
+static bool mcp_context_reload(McpContext *c, unsigned load_flags,
                                char *err, size_t errn) {
   mcp_context_clear(c);
   c->json = read_regular_file(c->context_path, MAX_CONTEXT_FILE, &c->json_len);
@@ -2155,7 +2160,8 @@ static bool mcp_context_reload(McpContext *c, bool validate_library_root,
     return false;
   }
   int ri = obj_get(c->json, c->toks, c->tok_count, 0, "libraryRoot");
-  if (validate_library_root && ri >= 0 && c->toks[ri].type != JT_NULL) {
+  if ((load_flags & MCP_CONTEXT_LIBRARY_ROOT) && ri >= 0 &&
+      c->toks[ri].type != JT_NULL) {
     char *root = tok_strdup(c->json, &c->toks[ri], PATH_MAX - 1);
     if (!root || !root[0]) {
       free(root);
@@ -2176,12 +2182,13 @@ static bool mcp_context_reload(McpContext *c, bool validate_library_root,
     }
     strlcpy(c->library_root, resolved, sizeof(c->library_root));
   }
-  mcp_load_snapshot_reference(c);
+  if (load_flags & MCP_CONTEXT_SNAPSHOT)
+    mcp_load_snapshot_reference(c);
   return true;
 }
 
 static bool mcp_context_init(McpContext *c, const char *input,
-                             bool validate_library_root, char *err,
+                             unsigned load_flags, char *err,
                              size_t errn) {
   char resolved[PATH_MAX];
   if (!realpath(input, resolved)) {
@@ -2214,7 +2221,7 @@ static bool mcp_context_init(McpContext *c, const char *input,
     snprintf(err, errn, "context path is not a file or directory");
     return false;
   }
-  return mcp_context_reload(c, validate_library_root, err, errn);
+  return mcp_context_reload(c, load_flags, err, errn);
 }
 
 static bool mcp_write_raw_id(StrBuf *b, const char *js, const JTok *t) {
@@ -2322,6 +2329,36 @@ static char *active_paper_payload(McpContext *c) {
     append_context_raw(c, &b, context_index(c, "pdfPath", NULL));
     sb_append(&b, "}");
   }
+  sb_append(&b, "}");
+  return b.data;
+}
+
+static char *reader_context_payload(McpContext *c) {
+  int active = context_index(c, "activePaper", NULL);
+  StrBuf b = {0};
+  sb_append(&b, "{\"activePaper\":");
+  if (active >= 0)
+    append_context_raw(c, &b, active);
+  else {
+    sb_append(&b, "{\"attachment\":");
+    append_context_raw(c, &b, context_index(c, "attachment", NULL));
+    sb_append(&b, ",\"parent\":");
+    append_context_raw(c, &b, context_index(c, "parent", NULL));
+    sb_append(&b, ",\"pdfPath\":");
+    append_context_raw(c, &b, context_index(c, "pdfPath", NULL));
+    sb_append(&b, "}");
+  }
+  sb_append(&b, ",\"currentPage\":");
+  append_context_raw(c, &b, context_index(c, "currentPage", "page"));
+  sb_append(&b, ",\"currentPageText\":");
+  if (!sibling_text(c, "current-page.md", &b))
+    sb_append(&b, "null");
+  sb_append(&b, ",\"currentSelection\":");
+  append_context_raw(c, &b,
+                     context_index(c, "currentSelection", "selection"));
+  sb_append(&b, ",\"currentSelectionText\":");
+  if (!sibling_text(c, "current-selection.md", &b))
+    sb_append(&b, "null");
   sb_append(&b, "}");
   return b.data;
 }
@@ -2989,6 +3026,10 @@ static char *zotkit_tool_payload(McpContext *c, const char *name,
 
 static const char tools_list_json[] =
     "{\"tools\":["
+    "{\"name\":\"get_reader_context\",\"description\":\"Recommended single "
+    "read of the active paper, current page, and current selection. Do not call "
+    "this server concurrently.\",\"inputSchema\":{\"type\":\"object\","
+    "\"additionalProperties\":false}},"
     "{\"name\":\"get_active_paper\",\"description\":\"Return the active Zotero "
     "Reader paper metadata from "
     "context.json.\",\"inputSchema\":{\"type\":\"object\","
@@ -3091,11 +3132,11 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
                     "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{"
                     "\"tools\":{\"listChanged\":false}},\"serverInfo\":{"
                     "\"name\":\"zotkit-reader\",\"version\":\"" ZC_VERSION
-                    "\"},\"instructions\":\"Authoritative read-only context for the "
-                    "active Zotero PDF Reader. Use get_active_paper for metadata and "
-                    "the original PDF path; use get_current_page and "
-                    "get_current_selection for references such as this, here, or the "
-                    "selected passage. Cite one-based PDF pages. Never modify the "
+                    "\"},\"instructions\":\"Use get_reader_context once for ordinary "
+                    "paper questions. Never call tools from this server concurrently "
+                    "or through Promise.all; await any granular calls serially. This "
+                    "is authoritative read-only context for the active Zotero PDF "
+                    "Reader. Cite one-based PDF pages. Never modify the "
                     "original PDF, its directory, Zotero items, collections, tags, "
                     "annotations, links, or storage.\"}");
   } else if (!strcmp(method, "ping"))
@@ -3112,11 +3153,24 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
       mcp_emit_error(line, id, -32602, "tools/call requires params.name");
     } else {
       char err[256] = "out of memory";
-      if (!mcp_context_reload(c, !zotkit_only, err, sizeof(err)))
+      unsigned load_flags = zotkit_only
+                                ? MCP_CONTEXT_SNAPSHOT
+                                : ((!strcmp(name, "list_library_files") ||
+                                    !strcmp(name, "search_library_files"))
+                                       ? MCP_CONTEXT_LIBRARY_ROOT
+                                       : 0);
+      if (!mcp_context_reload(c, load_flags, err, sizeof(err)))
         mcp_emit_tool_error(line, id, err);
       else if (zotkit_only) {
         char *p = zotkit_tool_payload(c, name, line, t, count, args, err,
                                       sizeof(err));
+        if (p) {
+          mcp_emit_tool(line, id, p);
+          free(p);
+        } else
+          mcp_emit_tool_error(line, id, err);
+      } else if (!strcmp(name, "get_reader_context")) {
+        char *p = reader_context_payload(c);
         if (p) {
           mcp_emit_tool(line, id, p);
           free(p);
@@ -3167,7 +3221,9 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
 static int run_mcp(const char *context, bool zotkit_only) {
   McpContext c = {0};
   char err[256];
-  if (!mcp_context_init(&c, context, !zotkit_only, err, sizeof(err))) {
+  if (!mcp_context_init(&c, context,
+                        zotkit_only ? MCP_CONTEXT_SNAPSHOT : 0, err,
+                        sizeof(err))) {
     fprintf(stderr, "zoterochat-helper: %s\n", err);
     mcp_context_clear(&c);
     return 1;
@@ -3354,7 +3410,8 @@ static int run_zotkit_cli(int argc, char **argv) {
   McpContext c = {0};
   char err[256];
   if (context) {
-    if (!mcp_context_init(&c, context, false, err, sizeof(err))) {
+    if (!mcp_context_init(&c, context, MCP_CONTEXT_SNAPSHOT, err,
+                          sizeof(err))) {
       fprintf(stderr, "zotkit: %s\n", err);
       sb_free(&args);
       mcp_context_clear(&c);

@@ -9,9 +9,12 @@ export type TerminalAgent = "codex" | "claude";
 export const MAX_TERMINAL_SESSIONS = 4;
 export const TERMINAL_SESSION_IDLE_MS = 15 * 60 * 1000;
 export const TERMINAL_SCROLLBACK_LINES = 5_000;
+export const TERMINAL_READY_TIMEOUT_MS = 60_000;
+export const MAX_PENDING_TERMINAL_INPUT = 128 * 1_024;
 export const CODEX_READER_DEVELOPER_INSTRUCTIONS = [
   "You are the research assistant embedded in Zotero's PDF Reader by Zotkit.",
-  "The zotero_reader MCP server exposes exactly five read-only tools: get_active_paper for active-paper metadata and PDF path; get_current_page for the bounded current-page snapshot; get_current_selection for the bounded latest-selection snapshot; and list_library_files/search_library_files for PDF filenames and relative paths below the configured library root.",
+  "For ordinary questions about the open PDF, call zotero_reader.get_reader_context once; it returns the active-paper metadata, current page, and current selection together.",
+  "Never call tools from the same zotero_reader MCP server concurrently or through Promise.all. Await any granular get_active_paper, get_current_page, get_current_selection, list_library_files, or search_library_files calls serially.",
   "The built-in zotkit_library MCP server exposes exactly four read-only tools: zotkit_find_items, zotkit_get_item, zotkit_list_collections, and zotkit_list_tags.",
   "A bundled read-only zotkit CLI with find, get, collections, and tags commands is also on PATH and its absolute path is in ZOTKIT_CLI; it needs no Python install, API key, or external configuration.",
   "Treat the original PDF and its containing directory as read-only. Never create, edit, rename, move, or delete files there.",
@@ -50,9 +53,13 @@ interface TerminalSession {
   fit: FitAddon;
   element: HTMLElement;
   started: boolean;
+  ready: boolean;
   exited: boolean;
   disposed: boolean;
   startPromise: Promise<void> | null;
+  readyTimer: ReturnType<typeof setTimeout> | null;
+  startupOutput: string;
+  pendingInput: string;
   zotkitAvailable: boolean | null;
   lastUsed: number;
 }
@@ -92,7 +99,9 @@ export class TerminalPanel {
         if (session) {
           // Process redraws (notably spinners) are not user activity. Hidden
           // sessions are therefore still eligible for idle cleanup.
-          session.terminal.write(this.bridge.decodeOutput(event.sessionId, event.data));
+          const output = this.bridge.decodeOutput(event.sessionId, event.data);
+          session.terminal.write(output);
+          this.observeStartupOutput(session, output);
         }
       }
       else if (event.type === "exit") {
@@ -100,6 +109,8 @@ export class TerminalPanel {
         if (session) {
           const remaining = this.bridge.flushOutput(event.sessionId);
           if (remaining) session.terminal.write(remaining);
+          this.clearReadyTimer(session);
+          session.pendingInput = "";
           session.exited = true;
           session.terminal.writeln(
             `\r\n\x1b[90m[process exited${event.exitCode === null ? "" : ` with code ${event.exitCode}`} ]\x1b[0m`,
@@ -284,7 +295,19 @@ export class TerminalPanel {
   insert(text: string, submit = false): void {
     if (!this.current || this.current.exited || !this.current.started) return;
     this.touchSession(this.current);
-    this.bridge.input(this.current.sessionId, text + (submit ? "\r" : ""));
+    const input = text + (submit ? "\r" : "");
+    if (!this.current.ready) {
+      const available = MAX_PENDING_TERMINAL_INPUT - this.current.pendingInput.length;
+      if (available <= 0) {
+        this.showError("CLI 启动期间等待插入的文本过长，请在终端就绪后重试");
+        return;
+      }
+      this.current.pendingInput += input.slice(0, available);
+      if (input.length > available) {
+        this.showError("CLI 启动期间的插入文本已限制为 128 KiB");
+      }
+    }
+    else this.bridge.input(this.current.sessionId, input);
     this.focus();
   }
 
@@ -409,9 +432,13 @@ export class TerminalPanel {
       fit,
       element,
       started: false,
+      ready: false,
       exited: false,
       disposed: false,
       startPromise: null,
+      readyTimer: null,
+      startupOutput: "",
+      pendingInput: "",
       zotkitAvailable: null,
       lastUsed: Date.now(),
     };
@@ -459,6 +486,7 @@ export class TerminalPanel {
       argv = [
         executable,
         "--no-alt-screen",
+        "--disable", "code_mode_host",
         "--sandbox", "read-only",
         "--ask-for-approval", "untrusted",
         "--cd", session.workingDirectory,
@@ -492,7 +520,20 @@ export class TerminalPanel {
       cols: session.terminal.cols || 52,
     });
     session.started = true;
-    if (session.disposed) this.bridge.closeSession(session.sessionId);
+    if (session.disposed) {
+      this.bridge.closeSession(session.sessionId);
+      return;
+    }
+    if (session.ready) this.flushPendingInput(session);
+    else if (session.agent === "claude") {
+      // Codex has a stable `›` prompt marker, so never force queued paper text
+      // into its startup stream. Claude gets a conservative compatibility
+      // fallback in case a future release changes its prompt glyph.
+      session.readyTimer = setTimeout(() => {
+        session.readyTimer = null;
+        this.markSessionReady(session);
+      }, TERMINAL_READY_TIMEOUT_MS);
+    }
   }
 
   private async ensureSessionStarted(session: TerminalSession): Promise<void> {
@@ -579,6 +620,34 @@ export class TerminalPanel {
     this.scheduleIdleCleanup();
   }
 
+  private observeStartupOutput(session: TerminalSession, output: string): void {
+    if (session.ready || session.disposed || session.exited) return;
+    session.startupOutput = (session.startupOutput + output).slice(-8_192);
+    const prompt = session.agent === "codex" ? "›" : "❯";
+    if (session.startupOutput.includes(prompt)) this.markSessionReady(session);
+  }
+
+  private markSessionReady(session: TerminalSession): void {
+    if (session.ready || session.disposed || session.exited) return;
+    session.ready = true;
+    session.startupOutput = "";
+    this.clearReadyTimer(session);
+    this.flushPendingInput(session);
+  }
+
+  private flushPendingInput(session: TerminalSession): void {
+    if (!session.started || !session.ready || !session.pendingInput) return;
+    const input = session.pendingInput;
+    session.pendingInput = "";
+    this.bridge.input(session.sessionId, input);
+  }
+
+  private clearReadyTimer(session: TerminalSession): void {
+    if (session.readyTimer === null) return;
+    clearTimeout(session.readyTimer);
+    session.readyTimer = null;
+  }
+
   private closeIdleSessions(now = Date.now()): void {
     for (const session of [...this.sessions.values()]) {
       const isVisible = this.visible && this.current === session && Boolean(this.root?.isConnected);
@@ -607,6 +676,8 @@ export class TerminalPanel {
   private disposeSession(session: TerminalSession, closeProcess: boolean): void {
     if (session.disposed) return;
     session.disposed = true;
+    this.clearReadyTimer(session);
+    session.pendingInput = "";
     if (closeProcess && session.started && !session.exited) {
       this.bridge.closeSession(session.sessionId);
     }
@@ -647,12 +718,17 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-function prependExecutableDirectory(executable: string): string {
+export function prependExecutableDirectory(executable: string): string {
   const separator = executable.lastIndexOf("/");
   const directory = separator > 0 ? executable.slice(0, separator) : executable;
   let inherited = "";
   try { inherited = Services.env.get("PATH") || ""; }
   catch { /* use the minimal macOS path below */ }
   const fallback = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-  return `${directory}:${inherited || fallback}`;
+  // Finder-launched GUI apps often inherit a non-empty but incomplete PATH
+  // such as /usr/bin:/bin. Always add the standard Homebrew/local locations
+  // so the user's existing Codex MCP commands (for example `node`) still work.
+  return [...new Set(
+    [directory, ...inherited.split(":"), ...fallback.split(":")].filter(Boolean),
+  )].join(":");
 }

@@ -81,7 +81,10 @@ describe("Zotero 9 runtime compatibility", () => {
     );
     expect(terminal).toContain('"--sandbox", "read-only"');
     expect(terminal).toContain('"--ask-for-approval", "untrusted"');
+    expect(terminal).toContain('"--disable", "code_mode_host"');
     expect(terminal).toContain("CODEX_READER_DEVELOPER_INSTRUCTIONS");
+    expect(terminal).toContain("zotero_reader.get_reader_context once");
+    expect(terminal).toContain("Never call tools from the same zotero_reader MCP server concurrently");
     expect(terminal).toContain(
       'args: ["--zotkit-mcp", "--context", session.workspace]',
     );

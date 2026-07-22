@@ -76,8 +76,8 @@ helper 和 Codex 才会启动。XPI 已内置侧栏所用的只读 Zotkit 元数
 
 Codex 固定使用 `--sandbox read-only --ask-for-approval untrusted`。插件不会修改
 Zotero 分类、标签、附件链接、批注、原 PDF 或 PDF 同目录文件；小型有界上下文只放在
-插件自己的 `<Zotero Profile>/zotkit/` 目录。Reader MCP 只有五个只读能力：当前论文、
-当前页、最近选区，以及 PDF 文件名/相对路径的列出与搜索。XPI 内置的 Zotkit 元数据
+插件自己的 `<Zotero Profile>/zotkit/` 目录。Reader MCP 只有六个只读能力：一次聚合读取
+当前论文/当前页/最近选区，以及细粒度上下文和 PDF 文件名/相对路径的列出与搜索。XPI 内置的 Zotkit 元数据
 MCP 另提供四个只读 `zotkit_*` 工具，用于查询条目、分类和标签；同一 Zotero 文库只
 维护一份共享快照，不会给每篇论文复制一套文库数据。插件 ID 为
 `zotkit@oldantique.github.io`。详见

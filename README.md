@@ -106,9 +106,9 @@ installation.
 The Codex process is fixed to `--sandbox read-only --ask-for-approval untrusted`. The
 add-on never modifies Zotero collections, tags, attachment links, annotations, the
 original PDF, or files beside it; bounded context files remain under the add-on's
-private `<Zotero Profile>/zotkit/` directory. Its Reader MCP has five read-only tools
-for the active paper, current page, latest selection, and PDF filename/path
-listing/search.
+private `<Zotero Profile>/zotkit/` directory. Its Reader MCP has six read-only tools,
+including one atomic active-paper/page/selection read plus granular context and PDF
+filename/path listing/search tools.
 The bundled Zotkit metadata MCP adds four discovery-only `zotkit_*` tools for items,
 collections, and tags. Metadata is reused from one shared snapshot per Zotero library,
 not duplicated for each paper. The add-on ID is

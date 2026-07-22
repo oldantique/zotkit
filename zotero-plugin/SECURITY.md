@@ -3,7 +3,7 @@
 Zotero plugins run with elevated local privileges, so Zotkit keeps the paper-assistant path deliberately narrow:
 
 - It never calls Zotero item save, collection mutation, attachment relink, annotation/note creation, database write, or index-update APIs.
-- Reader access is observational. Context capture reads the visible PDF.js page (or one PDFWorker page as fallback); the terminal MCP exposes only the resulting bounded current-page and latest-selection snapshots.
+- Reader access is observational. Automatic context capture reads only the visible PDF.js page or Zotero's existing indexed text; PDFWorker extraction is reserved for explicit user-requested search. The terminal MCP exposes only bounded current-page and latest-selection snapshots.
 - The interactive Codex terminal is fixed to `sandbox: read-only` and `approvalPolicy: untrusted`.
 - The real Codex PTY runs behind the authenticated native helper. No unauthenticated Codex TCP or WebSocket listener is exposed.
 - The helper listens only on `127.0.0.1`, requires a fresh high-entropy bearer token, and terminates child processes when Zotero or the client disconnects.
@@ -15,9 +15,10 @@ Zotero plugins run with elevated local privileges, so Zotkit keeps the paper-ass
 
 The right Item Pane terminal starts Codex read-only with untrusted-command approvals; Claude Code starts in plan mode. The XPI-bundled `zotkit_library` MCP surface exposes exactly four discovery-only tools: `zotkit_find_items`, `zotkit_get_item`, `zotkit_list_collections`, and `zotkit_list_tags`. It reads a local Zotero Desktop metadata snapshot and requires no Python runtime, external Zotkit installation, Zotero Web API key, `.env`, or WebDAV credentials.
 
-The native Reader MCP exposes exactly five read-only tools: `get_active_paper`,
-`get_current_page`, `get_current_selection`, `list_library_files`, and
-`search_library_files`. It does not expose annotations, arbitrary PDF page reads,
-whole-PDF extraction, Zotero writes, or arbitrary filesystem access.
+The native Reader MCP exposes exactly six read-only tools: the recommended atomic
+`get_reader_context` call plus `get_active_paper`, `get_current_page`,
+`get_current_selection`, `list_library_files`, and `search_library_files`. It does
+not expose annotations, arbitrary PDF page reads, automatic whole-PDF extraction,
+Zotero writes, or arbitrary filesystem access.
 
 The bundled universal helper receives a local ad-hoc signature. Public distribution outside this local build should additionally use an Apple Developer ID signature and notarization.

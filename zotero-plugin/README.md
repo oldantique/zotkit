@@ -4,7 +4,7 @@ Zotkit 在 Zotero 9 PDF Reader 的右侧 Item Pane 中运行真实的本机 Code
 
 ## 安装
 
-1. 构建或下载 `Zotkit-0.2.0.xpi`。
+1. 构建或下载 `Zotkit-0.2.1.xpi`。
 2. 在 Zotero 9 中选择“工具 → 插件”。
 3. 点击右上角齿轮，选择“Install Add-on From File…”。
 4. 选择 XPI；如侧栏未立即出现，重启 Zotero。
@@ -34,7 +34,7 @@ zotkit_list_collections
 zotkit_list_tags
 ```
 
-它们从 Zotero Desktop 的本地只读接口生成的有界快照中查找条目、读取条目元数据、列出 collections 和 tags。每个 Zotero 文库只维护一份共享快照，切换到同一文库中的其他论文时直接复用。它们不依赖仓库根目录中的 Python CLI，也不读取 `.env`、Web API key 或 WebDAV 凭据。
+它们从 Zotero Desktop 的本地只读接口生成的有界快照中查找条目、读取条目元数据、列出 collections 和 tags。每个 Zotero 文库只维护一份共享快照，同一次 Zotero 运行期间默认复用 24 小时；切换到同一文库中的其他论文时不会重新枚举。它们不依赖仓库根目录中的 Python CLI，也不读取 `.env`、Web API key 或 WebDAV 凭据。
 
 同一个内置查询层也以 `zotkit` 命令放进侧栏 Codex 的 `PATH`，绝对路径同时写入 `ZOTKIT_CLI`：
 
@@ -65,9 +65,10 @@ Codex 固定使用：
 
 文库元数据按 Zotero library 共用一份有界快照；当前 Reader 状态原位更新。PDF、全文和整套文库数据不会按论文复制，因此阅读更多 PDF 不会产生一份份 PDF 副本。页面/选区快照有 64,000 字符上限；直接粘贴终端的选区限制为 32,000 字符，`get_current_selection` 仍可读取插件保留的有界快照。临时状态按数量与时间回收。
 
-Reader MCP 只提供以下五个只读工具：
+Reader MCP 只提供以下六个只读工具；普通论文问题优先使用一次性聚合上下文，细粒度工具必须串行调用：
 
 ```text
+get_reader_context
 get_active_paper
 get_current_page
 get_current_selection
@@ -75,7 +76,7 @@ list_library_files
 search_library_files
 ```
 
-当前页/选区两个文本工具读取插件维护的有界快照；文库工具只列出或搜索 PDF 文件名与相对路径。它不提供批注读取、任意 PDF 页读取、全文提取、Zotero 写入或任意文件访问。
+`get_reader_context` 一次返回当前论文、页码、当前页文本和选区，避免同一 MCP 服务的并发调度；当前页/选区两个细粒度文本工具读取插件维护的有界快照。文库工具只列出或搜索 PDF 文件名与相对路径。它不提供批注读取、任意 PDF 页读取、自动全文提取、Zotero 写入或任意文件访问；只有用户明确要求全文搜索时才按需运行全文提取。
 
 ## 架构
 

@@ -511,16 +511,14 @@ const DEFAULT_OPTIONS: Required<
   workspaceCachePruneIntervalMs: 60 * 60 * 1_000,
   maxWorkspaceTextCharacters: 64_000,
   maxFullTextCacheEntries: 3,
-  librarySnapshotTtlMs: 5 * 60 * 1_000,
+  // Library metadata changes far less often than page/selection context. A
+  // once-per-day in-memory refresh avoids re-enumerating large Zotero libraries
+  // whenever the user collapses and reopens the terminal.
+  librarySnapshotTtlMs: 24 * 60 * 60 * 1_000,
   maxLibrarySnapshotItems: 20_000,
   maxLibrarySnapshotCollections: 5_000,
   maxLibrarySnapshotCharacters: 16_000_000,
 };
-
-// Zotero.PDFWorker.getFullText(itemID, maxPages) extracts a prefix rather than
-// one random-access page. Keep automatic Reader fallback bounded; explicit PDF
-// search tools may still request more work on demand.
-const MAX_INTERACTIVE_WORKER_PREFIX_PAGES = 24;
 
 const DATABASE_SUFFIXES = [
   ".db",
@@ -533,6 +531,8 @@ const DATABASE_SUFFIXES = [
   ".sqlite-wal",
   ".sqlite3",
 ] as const;
+
+const ZOTKIT_SNAPSHOT_WARNING_PREFIX = "Built-in Zotkit library snapshot unavailable:";
 
 function cleanText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
@@ -849,11 +849,13 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
     const active = this.snapshot;
     const sequence = this.captureSequence;
     if (
-      reference
-      && active?.context.workspace
+      active?.context.workspace
       && snapshotLibraryKey(active.context.attachment.libraryID)
         === snapshotLibraryKey(libraryID)
     ) {
+      // A failed build records a bounded warning on the active context. Sync
+      // even when there is no cached reference so that warning is visible to
+      // the terminal agent and survives in context.json.
       await this.enqueueWorkspaceSync(sequence, active.context, active.context.workspace);
     }
     return reference;
@@ -1624,15 +1626,6 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
       }
     }
 
-    if (!text && stats.pageIndex < MAX_INTERACTIVE_WORKER_PREFIX_PAGES) {
-      const pageWorker = await this.safePdfWorker(attachment, [stats.pageIndex], warnings);
-      const workerPage = pageTextFromWorkerResult(pageWorker, [stats.pageIndex], stats.pageIndex);
-      if (workerPage) {
-        text = workerPage;
-        source = "pdf-worker";
-      }
-    }
-
     const pageWarnings = text
       ? []
       : [`No text could be extracted for PDF page ${stats.pageNumber}`];
@@ -1791,12 +1784,18 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
           reference,
           expiresAt: nowMs + this.options.librarySnapshotTtlMs,
         });
+        const active = this.snapshot?.context;
+        if (active && snapshotLibraryKey(active.attachment.libraryID) === key) {
+          active.warnings = active.warnings.filter(
+            (warning) => !warning.startsWith(ZOTKIT_SNAPSHOT_WARNING_PREFIX),
+          );
+        }
         return reference;
       }
       catch (error) {
         const active = this.snapshot?.context;
         if (active && snapshotLibraryKey(active.attachment.libraryID) === key) {
-          const warning = `Built-in Zotkit library snapshot unavailable: ${boundedErrorMessage(error)}`;
+          const warning = `${ZOTKIT_SNAPSHOT_WARNING_PREFIX} ${boundedErrorMessage(error)}`;
           if (!active.warnings.includes(warning)) active.warnings.push(warning);
         }
         return cached?.reference ?? null;
@@ -2280,6 +2279,11 @@ export interface Zotero9Runtime {
       includeDeleted?: boolean,
       asIDs?: boolean,
     ) => Promise<unknown[]>;
+    /**
+     * Public bulk loader for lazily loaded item data. Items.getAll() only
+     * guarantees primary data, while metadata getters require these types.
+     */
+    loadDataTypes?: (objects: unknown[], dataTypes?: string[]) => Promise<void>;
   };
   Libraries?: {
     userLibraryID?: number | string;
@@ -2751,6 +2755,9 @@ export function createZotero9ReadAdapter(
 
     async buildZotkitLibrarySnapshot(libraryID, limits) {
       if (!items?.getAll) throw new Error("Zotero Items.getAll is unavailable");
+      if (!items.loadDataTypes) {
+        throw new Error("Zotero Items.loadDataTypes is unavailable");
+      }
       const rawCollections = collections?.getByLibrary
         ? await collections.getByLibrary(libraryID, true, false)
         : [];
@@ -2816,10 +2823,20 @@ export function createZotero9ReadAdapter(
       const itemRecords: ZotkitLibraryItem[] = [];
       const tagCounts = new Map<string, number>();
       for (let itemIndex = 0; itemIndex < selectedItems.length; itemIndex += 1) {
-        if (itemIndex > 0 && itemIndex % 250 === 0) {
-          // Yield between bounded batches so first expansion does not monopolize
-          // Zotero's UI thread for a large local library.
-          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (itemIndex % 250 === 0) {
+          if (itemIndex > 0) {
+            // Yield between bounded batches so first expansion does not monopolize
+            // Zotero's UI thread for a large local library.
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          }
+          // Zotero.Items.getAll() resolves through DataObjects#getAsync(), which
+          // loads primaryData only. getField(), getCreators(), getTags(), and
+          // getCollections() require these lazy data types and otherwise throw.
+          // Load only the bounded batch that is about to be serialized.
+          await items.loadDataTypes(
+            selectedItems.slice(itemIndex, itemIndex + 250),
+            ["creators", "tags", "itemData", "collections"],
+          );
         }
         const item = selectedItems[itemIndex]!;
         if (property(item, "deleted")) continue;

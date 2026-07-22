@@ -4,9 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { NativeBridge } from "../src/native-bridge";
 import {
+  MAX_PENDING_TERMINAL_INPUT,
   MAX_TERMINAL_SESSIONS,
+  TERMINAL_READY_TIMEOUT_MS,
   TERMINAL_SESSION_IDLE_MS,
   TerminalPanel,
+  prependExecutableDirectory,
 } from "../src/terminal-panel";
 
 function bridgeStub(): NativeBridge {
@@ -29,17 +32,33 @@ function fakeSession(key: string, lastUsed: number, started = true) {
     workspace: `/profile/${key}`,
     workingDirectory: `/papers/${key}`,
     pdfPath: `/papers/${key}/paper.pdf`,
-    terminal: { dispose: vi.fn(), focus: vi.fn(), options: {} },
+    terminal: { dispose: vi.fn(), focus: vi.fn(), writeln: vi.fn(), options: {} },
     fit: { fit: vi.fn() },
     element: document.createElement("div"),
     started,
+    ready: true,
     exited: false,
     disposed: false,
+    readyTimer: null,
+    startupOutput: "",
+    pendingInput: "",
     lastUsed,
   };
 }
 
 describe("TerminalPanel right-sidebar lifecycle", () => {
+  it("adds Homebrew paths even when a Finder-launched Zotero has a non-empty PATH", () => {
+    vi.stubGlobal("Services", { env: { get: () => "/usr/bin:/bin" } });
+
+    const path = prependExecutableDirectory("/profile/zotkit/bin/zotkit").split(":");
+
+    expect(path[0]).toBe("/profile/zotkit/bin");
+    expect(path).toContain("/opt/homebrew/bin");
+    expect(path).toContain("/usr/local/bin");
+    expect(path.filter((entry) => entry === "/usr/bin")).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
   it("mounts a lightweight terminal frame without starting the helper", () => {
     const bridge = bridgeStub();
     const panel = new TerminalPanel(bridge, 420);
@@ -78,6 +97,76 @@ describe("TerminalPanel right-sidebar lifecycle", () => {
     panel.insert("literal selection", false);
 
     expect(bridge.input).toHaveBeenCalledWith("session-paper", "literal selection");
+  });
+
+  it("queues a selection until the Codex prompt is ready, then flushes it once", () => {
+    let listener!: (event: any) => void;
+    const bridge = {
+      ...bridgeStub(),
+      onEvent: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+      decodeOutput: vi.fn((_sessionId, data) => data),
+    } as unknown as NativeBridge;
+    const panel = new TerminalPanel(bridge, 420) as any;
+    const session: any = fakeSession("paper", Date.now());
+    session.ready = false;
+    session.terminal = { ...session.terminal, write: vi.fn() };
+    panel.current = session;
+    panel.sessions.set(session.key, session);
+
+    panel.insert("selected passage", false);
+    expect(bridge.input).not.toHaveBeenCalled();
+
+    listener({ type: "output", sessionId: session.sessionId, data: "Codex is loading\r\n› " });
+    expect(bridge.input).toHaveBeenCalledOnce();
+    expect(bridge.input).toHaveBeenCalledWith("session-paper", "selected passage");
+
+    listener({ type: "output", sessionId: session.sessionId, data: "\r\n› " });
+    expect(bridge.input).toHaveBeenCalledOnce();
+  });
+
+  it("flushes queued input after the startup timeout and clears the timer on disposal", () => {
+    vi.useFakeTimers();
+    const bridge = bridgeStub();
+    const panel = new TerminalPanel(bridge, 420) as any;
+    const session: any = fakeSession("paper", Date.now());
+    session.agent = "claude";
+    session.ready = false;
+    session.pendingInput = "selected passage";
+    session.readyTimer = setTimeout(() => {
+      session.readyTimer = null;
+      panel.markSessionReady(session);
+    }, TERMINAL_READY_TIMEOUT_MS);
+    panel.current = session;
+    panel.sessions.set(session.key, session);
+
+    vi.advanceTimersByTime(TERMINAL_READY_TIMEOUT_MS);
+    expect(bridge.input).toHaveBeenCalledWith("session-paper", "selected passage");
+
+    session.ready = false;
+    session.readyTimer = setTimeout(vi.fn(), TERMINAL_READY_TIMEOUT_MS);
+    panel.disposeSession(session, true);
+    expect(session.readyTimer).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("does not force a Codex selection into startup output and bounds the queue", () => {
+    vi.useFakeTimers();
+    const bridge = bridgeStub();
+    const panel = new TerminalPanel(bridge, 420) as any;
+    const session: any = fakeSession("paper", Date.now());
+    session.ready = false;
+    session.pendingInput = "x".repeat(MAX_PENDING_TERMINAL_INPUT - 2);
+    panel.current = session;
+
+    panel.insert("abcd", false);
+    vi.advanceTimersByTime(TERMINAL_READY_TIMEOUT_MS * 2);
+
+    expect(session.pendingInput).toHaveLength(MAX_PENDING_TERMINAL_INPUT);
+    expect(bridge.input).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("surfaces native input errors instead of failing silently", () => {

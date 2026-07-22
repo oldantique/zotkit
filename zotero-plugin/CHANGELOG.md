@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+- Added one atomic `get_reader_context` call and explicit serial-call guidance to prevent Codex MCP queue deadlocks.
+- Disabled the embedded Codex `code_mode_host` feature, which was issuing concurrent calls against the same Reader server.
+- Completed the Finder-launched Zotero `PATH` with standard Homebrew/local locations so existing Node-based Codex MCP plugins can start normally.
+- Queued bounded PDF selections until the Codex/Claude prompt is ready, so startup output can no longer overwrite the inserted passage; Codex never force-flushes queued text on a timer.
+- Removed automatic PDFWorker fallback from page-change refreshes; whole-PDF extraction now remains an explicit search-only operation.
+- Fixed bundled Zotkit snapshots by bulk-loading Zotero 9's lazy item metadata before serialization and surfacing snapshot failures in `context.json`.
+- Reused each in-memory Zotero library snapshot for 24 hours unless the user explicitly refreshes it, avoiding repeated large-library enumeration.
+- Avoided PDF-directory and snapshot filesystem validation on basic live Reader context calls.
+
 ## 0.2.0
 
 - Replaced the custom app-server chat UI with a real PTY-backed Codex terminal directly in Zotero's right Item Pane.

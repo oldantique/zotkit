@@ -388,6 +388,44 @@ describe("ReaderContextService", () => {
     expect(buildZotkitLibrarySnapshot).toHaveBeenCalledTimes(2);
   });
 
+  it("persists a failed built-in Zotkit snapshot warning in the active workspace", async () => {
+    let shouldFail = true;
+    const buildZotkitLibrarySnapshot = vi.fn(async (libraryID): Promise<ZotkitLibrarySnapshot> => {
+      if (shouldFail) throw new Error("lazy item metadata could not be loaded");
+      return {
+        schemaVersion: 1,
+        libraryID,
+        generatedAt: "2026-07-22T10:00:00.000Z",
+        complete: true,
+        collections: [],
+        tags: [],
+        items: [],
+      };
+    });
+    const { adapter, reader, attachment } = makeAdapter({ buildZotkitLibrarySnapshot });
+    const service = new ReaderContextService(adapter, host);
+    const context = await service.acceptReaderHook({ reader, item: attachment });
+
+    await expect(service.ensureZotkitLibrarySnapshot()).resolves.toBeNull();
+
+    const warning = "Built-in Zotkit library snapshot unavailable: lazy item metadata could not be loaded";
+    expect(service.getCachedContext()?.warnings).toContain(warning);
+    const diskContext = JSON.parse(host.files.get(context.workspace!.context)!);
+    expect(diskContext.warnings).toContain(warning);
+    expect(diskContext.zotkitLibrarySnapshot).toBeNull();
+    expect(host.files.get(context.workspace!.currentPage)).toContain("PDF page: 2");
+
+    shouldFail = false;
+    await expect(service.ensureZotkitLibrarySnapshot(true)).resolves.toMatchObject({
+      libraryID: 1,
+      complete: true,
+    });
+    expect(service.getCachedContext()?.warnings).not.toContain(warning);
+    const recoveredContext = JSON.parse(host.files.get(context.workspace!.context)!);
+    expect(recoveredContext.warnings).not.toContain(warning);
+    expect(recoveredContext.zotkitLibrarySnapshot).toMatchObject({ libraryID: 1 });
+  });
+
   it("never writes an old page back when a library snapshot finishes after a Reader refresh", async () => {
     let pageIndex = 1;
     let finishSnapshot!: (snapshot: ZotkitLibrarySnapshot) => void;
@@ -482,7 +520,7 @@ describe("ReaderContextService", () => {
     expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
   });
 
-  it("keeps automatic PDFWorker page fallback to a small prefix", async () => {
+  it("never starts PDFWorker during automatic refresh of a late page", async () => {
     const getPageStats = vi.fn(async () => ({
       pageIndex: 79,
       pageNumber: 80,
@@ -503,7 +541,7 @@ describe("ReaderContextService", () => {
     expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
   });
 
-  it("uses PDFWorker for an early page only when PDF.js and indexed text are unavailable", async () => {
+  it("never starts PDFWorker during automatic refresh of an early page", async () => {
     const { adapter, reader, attachment } = makeAdapter({
       extractPdfJsPage: vi.fn(async () => null),
       readIndexedFullText: vi.fn(async () => null),
@@ -511,9 +549,10 @@ describe("ReaderContextService", () => {
     const service = new ReaderContextService(adapter, host);
     const context = await service.acceptReaderHook({ reader, item: attachment });
 
-    expect(context.page.text).toBe("worker second");
-    expect(context.page.source).toBe("pdf-worker");
-    expect(adapter.readPdfWorkerText).toHaveBeenCalledWith(attachment, [1]);
+    expect(context.page.text).toBe("");
+    expect(context.page.source).toBe("none");
+    expect(context.page.warnings).toContain("No text could be extracted for PDF page 2");
+    expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
   });
 
   it("bounds mirrored page/selection text and prunes stale paper caches", async () => {
@@ -718,8 +757,8 @@ describe("ReaderContextService", () => {
     const context = await service.acceptReaderHook({ reader, item: attachment });
 
     expect(context.fullText).toMatchObject({ source: "deferred", characters: 0 });
-    expect(context.page).toMatchObject({ text: "worker second", source: "pdf-worker" });
-    expect(adapter.readPdfWorkerText).toHaveBeenCalledWith(attachment, [1]);
+    expect(context.page).toMatchObject({ text: "", source: "none" });
+    expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
     await expect(service.searchCurrentPdf("worker")).resolves.toMatchObject({
       source: "pdf-worker",
       matches: [{ pageNumber: 1 }, { pageNumber: 2 }, { pageNumber: 3 }],
@@ -750,8 +789,8 @@ describe("ReaderContextService", () => {
     const context = await service.acceptReaderHook({ reader, item: attachment });
 
     expect(context.fullText.source).toBe("deferred");
-    expect(worker).toHaveBeenCalledWith(attachment, [1]);
-    expect(context.page.text).toBe("bounded page 2");
+    expect(worker).not.toHaveBeenCalled();
+    expect(context.page.text).toBe("");
     await service.searchCurrentPdf("complete");
     expect(worker).toHaveBeenCalledWith(attachment, null);
     expect(context.fullText).toMatchObject({
@@ -1524,9 +1563,10 @@ describe("createZotero9ReadAdapter", () => {
       getTags: () => [{ tag: "attachment-only" }],
     };
     const getAll = vi.fn(async () => [parent, attachment]);
+    const loadDataTypes = vi.fn(async () => undefined);
     const getByLibrary = vi.fn(async () => [parentCollection, childCollection]);
     const adapter = createZotero9ReadAdapter({
-      Items: { getAll },
+      Items: { getAll, loadDataTypes },
       Collections: { getByLibrary },
     }, { now: () => new Date("2026-07-22T10:00:00.000Z") });
 
@@ -1536,6 +1576,10 @@ describe("createZotero9ReadAdapter", () => {
     });
 
     expect(getAll).toHaveBeenCalledWith(1, false, false, false);
+    expect(loadDataTypes).toHaveBeenCalledWith(
+      [parent, attachment],
+      ["creators", "tags", "itemData", "collections"],
+    );
     expect(getByLibrary).toHaveBeenCalledWith(1, true, false);
     expect(snapshot.collections).toEqual([
       expect.objectContaining({ key: "COLL0001", path: "Physics" }),
@@ -1557,6 +1601,38 @@ describe("createZotero9ReadAdapter", () => {
       }),
     ]);
     expect(snapshot.tags).toEqual([{ tag: "topic:quantum", count: 1 }]);
+  });
+
+  it("rejects a library snapshot instead of silently emitting unloaded item metadata", async () => {
+    const getField = vi.fn(() => "should not be read");
+    const item = {
+      id: 10,
+      key: "PARENT01",
+      libraryID: 1,
+      itemType: "journalArticle",
+      isTopLevelItem: () => true,
+      getField,
+      getCreators: () => [],
+      getTags: () => [],
+      getCollections: () => [],
+    };
+    const loadDataTypes = vi.fn(async () => {
+      throw new Error("Zotero lazy data load failed");
+    });
+    const adapter = createZotero9ReadAdapter({
+      Items: {
+        getAll: vi.fn(async () => [item]),
+        loadDataTypes,
+      },
+      Collections: { getByLibrary: vi.fn(() => []) },
+    });
+
+    await expect(adapter.buildZotkitLibrarySnapshot!(1, {
+      maxItems: 100,
+      maxCollections: 100,
+    })).rejects.toThrow("Zotero lazy data load failed");
+    expect(loadDataTypes).toHaveBeenCalledOnce();
+    expect(getField).not.toHaveBeenCalled();
   });
 });
 

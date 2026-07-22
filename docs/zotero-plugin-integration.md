@@ -65,15 +65,18 @@ external `zotkit` executable or Python runtime. Its deliberately small tool surf
 - `zotkit_list_collections`
 - `zotkit_list_tags`
 
-The native Reader MCP likewise has an intentionally fixed five-tool surface:
+The native Reader MCP likewise has an intentionally fixed six-tool surface. Ordinary
+paper questions should use the atomic first tool; granular calls must be awaited
+serially:
 
+- `get_reader_context`
 - `get_active_paper`
 - `get_current_page`
 - `get_current_selection`
 - `list_library_files`
 - `search_library_files`
 
-It does not expose annotations, arbitrary PDF page reads, whole-PDF extraction, Zotero
+It does not expose annotations, arbitrary PDF page reads, automatic whole-PDF extraction, Zotero
 writes, or arbitrary filesystem access. Page and selection text come from bounded
 profile snapshots maintained by the plugin; the two library tools return PDF filenames
 and relative paths only.
