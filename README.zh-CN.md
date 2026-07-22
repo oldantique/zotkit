@@ -2,6 +2,19 @@
 
 [English](README.md) | **简体中文**
 
+## Zotero Reader XPI（桌面端主流程）
+
+安装 [`zotero-plugin/`](zotero-plugin/README.md) 中的 XPI，即可在 Zotero 9 PDF
+Reader 右侧使用真实 Codex 终端。插件自动提供当前论文元数据、PDF 所在目录、当前页和
+选中文字，并在 XPI 内置供 Codex 使用的只读 `zotkit` 查询 CLI/MCP（`find`、`get`、
+`collections`、`tags`）。用户不需要安装 Python 包、填写 Zotero Web API key、配置
+`.env` 或另装 Zotkit 命令；Reader 插件也不暴露会修改文库或附件的命令。
+
+运行 `make bootstrap && make package` 即可构建，然后在 Zotero 插件管理器安装
+`zotero-plugin/dist/Zotkit-<version>.xpi`。唯一额外前提是本机已有并登录过 Codex CLI。
+
+## 可选的独立 headless 包（XPI 不使用）
+
 **不打开 Zotero,也能管理你的文献库。**
 
 zotkit 是一个命令行工具 + Python 库,直接对接 Zotero Web API:搜索、建条目、打标签、
@@ -40,6 +53,36 @@ pipx install zotkit        # 或 pip install zotkit / uv tool install zotkit
 ```bash
 zotkit doctor
 ```
+
+## Zotero Reader 插件（macOS）
+
+仓库的 [`zotero-plugin/`](zotero-plugin/README.md) 是可直接安装到 Zotero 9 的
+XPI 插件。它在 PDF Reader 右侧放入真实的 Codex 终端，以当前 PDF
+所在目录作为只读工作目录，并通过本地 Reader MCP 提供当前论文元数据、受长度限制的
+当前页快照和最近选区快照。
+
+在 macOS 构建并安装：
+
+```bash
+make plugin-install
+make plugin-build
+```
+
+然后打开 Zotero 的“工具 → 插件”，选择“Install Add-on From File…”，安装
+`zotero-plugin/dist/Zotkit-<version>.xpi`。打开 PDF 并展开“Zotkit Codex 终端”后，
+helper 和 Codex 才会启动。XPI 已内置侧栏所用的只读 Zotkit 元数据 CLI/MCP；插件
+用户不需要另装 Python、`pipx`，也不需要 Zotero Web API key、
+`~/.config/zotkit/env` 或其他 Zotkit 安装。
+
+Codex 固定使用 `--sandbox read-only --ask-for-approval untrusted`。插件不会修改
+Zotero 分类、标签、附件链接、批注、原 PDF 或 PDF 同目录文件；小型有界上下文只放在
+插件自己的 `<Zotero Profile>/zotkit/` 目录。Reader MCP 只有五个只读能力：当前论文、
+当前页、最近选区，以及 PDF 文件名/相对路径的列出与搜索。XPI 内置的 Zotkit 元数据
+MCP 另提供四个只读 `zotkit_*` 工具，用于查询条目、分类和标签；同一 Zotero 文库只
+维护一份共享快照，不会给每篇论文复制一套文库数据。插件 ID 为
+`zotkit@oldantique.github.io`。详见
+[`zotero-plugin` 使用说明](zotero-plugin/README.md)和
+[插件整合与安全边界](docs/zotero-plugin-integration.md)。
 
 ## 常用命令
 

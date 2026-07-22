@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ZoteroChat UI Preview</title>
+  <link rel="stylesheet" href="../../src/styles.css?v=compact-pane-2">
+  <style>
+    body { margin: 0; padding: 8px; min-height: 100vh; display: grid; place-items: center; background: #e9e8ed; }
+    .preview-shell { width: min(410px, calc(100vw - 16px)); height: min(790px, calc(100vh - 16px)); overflow: hidden; border: 1px solid rgba(0,0,0,.12); border-radius: 13px; background: white; box-shadow: 0 22px 70px rgba(31,27,48,.22); }
+    .preview-shell .zc-sidebar { height: 100%; max-height: none; }
+  </style>
+</head>
+<body>
+  <div class="preview-shell">
+    <section class="zc-sidebar">
+      <header class="zc-topbar">
+        <div class="zc-identity">
+          <img src="../../assets/icon.svg" alt="">
+          <div><div class="zc-product-title">Codex</div><div class="zc-thread-title">Quantum Advantage with Shallow Circuits</div></div>
+        </div>
+        <div class="zc-top-actions">
+          <button class="zc-icon-button" title="对话历史">☷</button>
+          <button class="zc-icon-button" title="新对话">＋</button>
+          <button class="zc-icon-button zc-terminal-button" title="终端"><img class="zc-button-icon" src="../../assets/terminal.svg" alt=""><span class="zc-button-label">CLI</span></button>
+          <button class="zc-icon-button" title="账户">⋯</button>
+        </div>
+      </header>
+      <section class="zc-context-card">
+        <div class="zc-pdf-icon">PDF</div>
+        <div class="zc-context-copy">
+          <div class="zc-context-title">Quantum Advantage with Shallow Circuits</div>
+          <div class="zc-context-meta">第 7 页 · 共 24 页 · 选区 328 字</div>
+        </div>
+        <button class="zc-icon-button">↻</button>
+      </section>
+      <main class="zc-transcript">
+        <article class="zc-entry zc-entry-user"><div class="zc-user-bubble">解释这里为什么可以忽略四阶项，并联系前面的定义。</div></article>
+        <article class="zc-entry zc-entry-tool">
+          <details class="zc-tool-card">
+            <summary><span class="zc-tool-state complete">✓</span><span>zotero_get_current_selection</span></summary>
+          </details>
+        </article>
+        <article class="zc-entry zc-entry-reasoning">
+          <details class="zc-tool-card">
+            <summary><span class="zc-tool-state complete">✓</span><span>思考过程</span></summary>
+          </details>
+        </article>
+        <article class="zc-entry zc-entry-assistant">
+          <img class="zc-entry-avatar" src="../../assets/icon.svg" alt="Codex">
+          <div class="zc-entry-content">
+            <p>这里忽略四阶项的关键，是作者正在使用二阶有效哈密顿量展开。</p>
+            <h3>为什么四阶项可忽略</h3>
+            <ol><li>前文把小参数定义为 <code>λ = g / Δ</code>。</li><li>当前结论只保留到 <code>O(λ²)</code>。</li><li>四阶修正因此被统一放进误差项。</li></ol>
+            <blockquote>对应 PDF 第 7 页的 lightcone lemma 之后一段。</blockquote>
+            <p>如果你愿意，我也可以继续检查这个近似在后续定理中是否仍然成立。</p>
+          </div>
+        </article>
+      </main>
+      <footer class="zc-composer-wrap">
+        <div class="zc-composer">
+          <div class="zc-composer-chips"><button class="zc-context-chip">⌁ 当前选区 · 328 字</button></div>
+          <textarea class="zc-composer-input" rows="1" placeholder="询问这篇论文…"></textarea>
+          <div class="zc-composer-footer">
+            <div class="zc-composer-controls">
+              <select class="zc-compact-select"><option>GPT-5.2-Codex</option></select>
+              <select class="zc-compact-select"><option>思考 中</option></select>
+              <span class="zc-safety-chip">只读</span>
+            </div>
+            <button class="zc-send-button"><svg class="zc-button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg></button>
+          </div>
+        </div>
+        <div class="zc-status-area">Codex 可能会出错，请核对论文原文与页码。</div>
+      </footer>
+    </section>
+  </div>
+</body>
+</html>

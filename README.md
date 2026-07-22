@@ -4,9 +4,25 @@
 [![Python](https://img.shields.io/pypi/pyversions/zotkit)](https://pypi.org/project/zotkit/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Headless Zotero library management — no desktop app required.**
-
 **English** | [简体中文](README.zh-CN.md)
+
+## Zotero Reader XPI (primary desktop workflow)
+
+Install the XPI from [`zotero-plugin/`](zotero-plugin/README.md) to place a real Codex
+terminal in Zotero 9's PDF Reader sidebar. The active paper metadata, PDF directory,
+current page, and selected text are supplied automatically. The XPI embeds the
+read-only `zotkit` query CLI/MCP used by Codex (`find`, `get`, `collections`, `tags`),
+so plugin users need no Python package, Zotero Web API key, `.env`, or separately
+installed Zotkit command. Mutating library and attachment commands are deliberately
+not exposed by the Reader plugin.
+
+Build it with `make bootstrap && make package`, then install
+`zotero-plugin/dist/Zotkit-<version>.xpi` from Zotero's Add-ons manager. A logged-in
+local Codex CLI is the only external runtime prerequisite.
+
+## Optional standalone headless package (not used by the XPI)
+
+**Headless Zotero library management — no desktop app required.**
 
 "Headless" simply means zotkit never needs the Zotero app (or any window) open: it is a
 Python library + CLI that talks straight to the
@@ -63,6 +79,42 @@ Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 `conventions.toml` next to your `.env` to define a namespaced tag taxonomy
 (`field:physics`, `status:to-read`, …). With it in place, `zotkit create` / `zotkit tag`
 **reject** violations; without it, tags are unrestricted.
+
+## Zotero Reader plugin (macOS)
+
+The repository also contains an installable Zotero 9 add-on in
+[`zotero-plugin/`](zotero-plugin/README.md). It places a real Codex terminal in the PDF
+Reader's right Item Pane, uses the active PDF's containing directory as the read-only
+working directory, and supplies current-paper metadata, the bounded current-page
+snapshot, and the latest bounded text-selection snapshot through a local Reader MCP
+server.
+
+To build and install it on macOS:
+
+```bash
+make plugin-install
+make plugin-build
+```
+
+Then open Zotero **Tools → Add-ons**, choose **Install Add-on From File…**, and select
+`zotero-plugin/dist/Zotkit-<version>.xpi`. Open a PDF and expand **Zotkit Codex
+Terminal**. The helper and Codex start only on first expansion. The XPI already embeds
+the read-only Zotkit metadata CLI/MCP used by the sidebar: plugin users do **not** need
+Python, `pipx`, a Zotero Web API key, `~/.config/zotkit/env`, or any other Zotkit
+installation.
+
+The Codex process is fixed to `--sandbox read-only --ask-for-approval untrusted`. The
+add-on never modifies Zotero collections, tags, attachment links, annotations, the
+original PDF, or files beside it; bounded context files remain under the add-on's
+private `<Zotero Profile>/zotkit/` directory. Its Reader MCP has five read-only tools
+for the active paper, current page, latest selection, and PDF filename/path
+listing/search.
+The bundled Zotkit metadata MCP adds four discovery-only `zotkit_*` tools for items,
+collections, and tags. Metadata is reused from one shared snapshot per Zotero library,
+not duplicated for each paper. The add-on ID is
+`zotkit@oldantique.github.io`. See the
+[`zotero-plugin` guide](zotero-plugin/README.md) and the
+[integration/security boundary](docs/zotero-plugin-integration.md) for details.
 
 ## Quickstart
 

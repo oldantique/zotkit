@@ -1,0 +1,9 @@
+node_modules/
+build/
+dist/
+coverage/
+*.log
+.DS_Store
+native/build/
+native/dist/
+native/zoterochat-helper

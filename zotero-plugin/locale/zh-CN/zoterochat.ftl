@@ -1,0 +1,12 @@
+zotkit-pane-header =
+    .label = Zotkit Codex 终端
+    .aria-label = Zotkit Codex 终端
+zotkit-pane-sidenav =
+    .tooltiptext = Zotkit Codex 终端
+    .aria-label = Zotkit Codex 终端
+zotkit-section-new-chat =
+    .tooltiptext = 粘贴当前 PDF 选区
+    .aria-label = 粘贴当前 PDF 选区
+zotkit-section-terminal =
+    .tooltiptext = 聚焦 Codex CLI 终端
+    .aria-label = 聚焦 Codex CLI 终端

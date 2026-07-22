@@ -1,0 +1,12 @@
+zotkit-pane-header =
+    .label = Zotkit Codex Terminal
+    .aria-label = Zotkit Codex Terminal
+zotkit-pane-sidenav =
+    .tooltiptext = Zotkit Codex Terminal
+    .aria-label = Zotkit Codex Terminal
+zotkit-section-new-chat =
+    .tooltiptext = Paste current PDF selection
+    .aria-label = Paste current PDF selection
+zotkit-section-terminal =
+    .tooltiptext = Focus the Codex CLI terminal
+    .aria-label = Focus the Codex CLI terminal
