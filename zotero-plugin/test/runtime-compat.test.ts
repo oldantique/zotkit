@@ -90,6 +90,10 @@ describe("Zotero 9 runtime compatibility", () => {
     );
     expect(terminal.match(/command: this\.bridge\.helperPath/g)).toHaveLength(2);
     expect(terminal.match(/mcp_servers\.\$\{name\}\.enabled=true/g)).toHaveLength(1);
+    expect(terminal).toContain(
+      "mcp_servers.${name}.default_tools_approval_mode=${tomlString(\"approve\")}",
+    );
+    expect(terminal).toContain("mcp_servers.${name}.tool_timeout_sec=10");
     expect(terminal).toContain("this.bridge.zotkitPath");
     expect(terminal).toContain("ZOTKIT_CLI: this.bridge.zotkitPath");
     expect(terminal).toContain("librarySnapshotPath: this.current.librarySnapshotPath");

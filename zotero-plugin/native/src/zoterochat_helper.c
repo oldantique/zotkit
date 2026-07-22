@@ -25,7 +25,8 @@
 #include <unistd.h>
 #include <util.h>
 
-#define ZC_VERSION "0.2.1"
+#define ZC_VERSION "0.2.2"
+#define MCP_PROTOCOL_VERSION "2025-06-18"
 #define MAX_CLIENTS 16
 #define MAX_SESSIONS 32
 #define MAX_HTTP 16384
@@ -2253,13 +2254,47 @@ static void mcp_emit_result(const char *js, const JTok *id,
   fflush(stdout);
   sb_free(&b);
 }
+
+static bool sb_append_compact_json(StrBuf *b, const char *json) {
+  bool in_string = false, escaped = false;
+  for (const unsigned char *p = (const unsigned char *)json; *p; p++) {
+    unsigned char ch = *p;
+    if (in_string) {
+      if (!sb_append_n(b, (const char *)p, 1))
+        return false;
+      if (escaped)
+        escaped = false;
+      else if (ch == '\\')
+        escaped = true;
+      else if (ch == '"')
+        in_string = false;
+    } else if (ch == '"') {
+      if (!sb_append_n(b, (const char *)p, 1))
+        return false;
+      in_string = true;
+    } else if (!isspace(ch)) {
+      if (!sb_append_n(b, (const char *)p, 1))
+        return false;
+    }
+  }
+  return !in_string && !escaped;
+}
+
+static void mcp_emit_tool_error(const char *js, const JTok *id,
+                                const char *message);
+
 static void mcp_emit_tool(const char *js, const JTok *id, const char *payload) {
   StrBuf b = {0};
-  sb_append(&b, "{\"content\":[{\"type\":\"text\",\"text\":");
-  sb_json_string(&b, payload);
-  sb_append(&b, "}],\"structuredContent\":");
-  sb_append(&b, payload);
-  sb_append(&b, ",\"isError\":false}");
+  bool ok = sb_append(&b, "{\"content\":[{\"type\":\"text\",\"text\":") &&
+            sb_json_string(&b, payload) &&
+            sb_append(&b, "}],\"structuredContent\":") &&
+            sb_append_compact_json(&b, payload) &&
+            sb_append(&b, ",\"isError\":false}");
+  if (!ok) {
+    sb_free(&b);
+    mcp_emit_tool_error(js, id, "could not serialize tool result");
+    return;
+  }
   mcp_emit_result(js, id, b.data);
   sb_free(&b);
 }
@@ -3024,32 +3059,42 @@ static char *zotkit_tool_payload(McpContext *c, const char *name,
   return NULL;
 }
 
+#define MCP_READ_ONLY_ANNOTATIONS                                             \
+  ",\"annotations\":{\"readOnlyHint\":true,\"destructiveHint\":false,"     \
+  "\"idempotentHint\":true,\"openWorldHint\":false}"
+
 static const char tools_list_json[] =
     "{\"tools\":["
     "{\"name\":\"get_reader_context\",\"description\":\"Recommended single "
     "read of the active paper, current page, and current selection. Do not call "
-    "this server concurrently.\",\"inputSchema\":{\"type\":\"object\","
+    "this server concurrently.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\","
     "\"additionalProperties\":false}},"
     "{\"name\":\"get_active_paper\",\"description\":\"Return the active Zotero "
     "Reader paper metadata from "
-    "context.json.\",\"inputSchema\":{\"type\":\"object\","
+    "context.json.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\","
     "\"additionalProperties\":false}},"
     "{\"name\":\"get_current_page\",\"description\":\"Return current page "
     "metadata and the read-only current-page.md "
-    "snapshot.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":"
+    "snapshot.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":"
     "false}},"
     "{\"name\":\"get_current_selection\",\"description\":\"Return current "
     "selection metadata and the read-only current-selection.md "
-    "snapshot.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":"
+    "snapshot.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":"
     "false}},"
     "{\"name\":\"list_library_files\",\"description\":\"List non-hidden PDF files "
     "below libraryRoot without following "
-    "symlinks.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":"
+    "symlinks.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":"
     "{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,"
     "\"maximum\":500}},\"additionalProperties\":false}},"
     "{\"name\":\"search_library_files\",\"description\":\"Case-insensitively "
     "search non-hidden PDF paths below libraryRoot without following "
-    "symlinks.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"query\"],"
+    "symlinks.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\",\"required\":[\"query\"],"
     "\"properties\":{\"query\":{\"type\":\"string\",\"minLength\":1,"
     "\"maxLength\":256},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":"
     "\"integer\",\"minimum\":1,\"maximum\":500}},\"additionalProperties\":"
@@ -3060,7 +3105,8 @@ static const char zotkit_tools_list_json[] =
     "{\"tools\":["
     "{\"name\":\"zotkit_find_items\",\"description\":\"Search top-level "
     "Zotero library items by title substring, exact tag, and/or collection. "
-    "This tool is read-only.\",\"inputSchema\":{\"type\":\"object\","
+    "This tool is read-only.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\","
     "\"properties\":{\"title\":{\"type\":\"string\",\"maxLength\":4096,\"description\":"
     "\"Case-insensitive title substring.\"},\"tag\":{\"type\":\"string\",\"maxLength\":4096,"
     "\"description\":\"Exact Zotero tag.\"},\"collection\":{\"type\":"
@@ -3069,19 +3115,22 @@ static const char zotkit_tools_list_json[] =
     "200,\"default\":50}},\"additionalProperties\":false}},"
     "{\"name\":\"zotkit_get_item\",\"description\":\"Get stable "
     "bibliographic metadata for one Zotero item key. This tool is read-only and "
-    "does not download attachments.\",\"inputSchema\":{\"type\":\"object\","
+    "does not download attachments.\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\","
     "\"properties\":{\"key\":{\"type\":\"string\",\"minLength\":8,"
     "\"maxLength\":8,\"pattern\":\"^[A-Za-z0-9]{8}$\",\"description\":"
     "\"Eight-character Zotero item key (case-insensitive).\"}},\"required\":"
     "[\"key\"],\"additionalProperties\":false}},"
     "{\"name\":\"zotkit_list_collections\",\"description\":\"List Zotero "
     "collections with keys, parent keys, and full paths. This tool is read-only."
-    "\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"limit\":{"
+    "\"" MCP_READ_ONLY_ANNOTATIONS
+    ",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"limit\":{"
     "\"type\":\"integer\",\"minimum\":1,\"maximum\":500,\"default\":200}},"
     "\"additionalProperties\":false}},"
     "{\"name\":\"zotkit_list_tags\",\"description\":\"List tags used by "
     "top-level Zotero items and their item counts. Optionally filter by a "
-    "case-insensitive substring. This tool is read-only.\",\"inputSchema\":{"
+    "case-insensitive substring. This tool is read-only.\""
+    MCP_READ_ONLY_ANNOTATIONS ",\"inputSchema\":{"
     "\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"maxLength\":4096,"
     "\"description\":\"Optional tag substring.\"},\"limit\":{\"type\":"
     "\"integer\",\"minimum\":1,\"maximum\":500,\"default\":200}},"
@@ -3121,7 +3170,8 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
   if (!strcmp(method, "initialize")) {
     if (zotkit_only)
       mcp_emit_result(line, id,
-                      "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{"
+                      "{\"protocolVersion\":\"" MCP_PROTOCOL_VERSION
+                      "\",\"capabilities\":{"
                       "\"tools\":{\"listChanged\":false}},\"serverInfo\":{"
                       "\"name\":\"zotkit-library\",\"version\":\"" ZC_VERSION
                       "\"},\"instructions\":\"Built-in, read-only Zotero Desktop "
@@ -3129,7 +3179,8 @@ static void mcp_handle(McpContext *c, const char *line, size_t len,
                       "move, upload, download, or delete library data.\"}");
     else
       mcp_emit_result(line, id,
-                    "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{"
+                    "{\"protocolVersion\":\"" MCP_PROTOCOL_VERSION
+                    "\",\"capabilities\":{"
                     "\"tools\":{\"listChanged\":false}},\"serverInfo\":{"
                     "\"name\":\"zotkit-reader\",\"version\":\"" ZC_VERSION
                     "\"},\"instructions\":\"Use get_reader_context once for ordinary "

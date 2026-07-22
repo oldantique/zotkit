@@ -384,7 +384,9 @@ class McpTests(unittest.TestCase):
             "currentPage": {"page": 4},
             "currentSelection": {"page": 4, "length": len(selection)},
         }
-        (self.context / "context.json").write_text(json.dumps(value), encoding="utf-8")
+        (self.context / "context.json").write_text(
+            json.dumps(value, indent=2), encoding="utf-8"
+        )
         (self.context / "current-page.md").write_text("page four", encoding="utf-8")
         (self.context / "current-selection.md").write_text(selection, encoding="utf-8")
 
@@ -398,12 +400,28 @@ class McpTests(unittest.TestCase):
             timeout=5,
             check=True,
         )
-        return [json.loads(line) for line in result.stdout.splitlines()]
+        lines = result.stdout.splitlines()
+        expected_responses = sum("id" in request for request in requests)
+        self.assertEqual(
+            len(lines),
+            expected_responses,
+            "each JSON-RPC response must occupy exactly one physical stdout line",
+        )
+        return [json.loads(line) for line in lines]
 
     def test_initialize_tools_and_read_only_context(self) -> None:
         responses = self.call(
             [
-                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "zotkit-test", "version": "1.0"},
+                    },
+                },
                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
                 {
                     "jsonrpc": "2.0",
@@ -432,6 +450,7 @@ class McpTests(unittest.TestCase):
             ]
         )
         self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "zotkit-reader")
+        self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-06-18")
         self.assertIn("active Zotero PDF Reader", responses[0]["result"]["instructions"])
         names = {tool["name"] for tool in responses[1]["result"]["tools"]}
         self.assertEqual(
@@ -445,6 +464,16 @@ class McpTests(unittest.TestCase):
                 "search_library_files",
             },
         )
+        for tool in responses[1]["result"]["tools"]:
+            self.assertEqual(
+                tool["annotations"],
+                {
+                    "readOnlyHint": True,
+                    "destructiveHint": False,
+                    "idempotentHint": True,
+                    "openWorldHint": False,
+                },
+            )
         self.assertEqual(responses[2]["result"]["structuredContent"]["activePaper"]["title"], "Alpha Paper")
         self.assertEqual(responses[3]["result"]["structuredContent"]["text"], "page four")
         self.assertEqual(responses[4]["result"]["structuredContent"]["text"], "selection one")
@@ -534,6 +563,11 @@ class McpTests(unittest.TestCase):
         self.assertEqual(second["result"]["structuredContent"]["text"], "selection two")
         process.stdin.close()
         self.assertEqual(process.wait(timeout=3), 0)
+        self.assertEqual(
+            process.stdout.read(),
+            "",
+            "continuous calls must not leave fragmented response lines behind",
+        )
         process.stdout.close()
         process.stderr.close()
 
@@ -546,7 +580,9 @@ class McpTests(unittest.TestCase):
             "page": {"pageIndex": 2, "pageNumber": 3},
             "selection": {"text": "workspace selection", "pageNumber": 3},
         }
-        (self.context / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (self.context / "context.json").write_text(
+            json.dumps(context, indent=2), encoding="utf-8"
+        )
         responses = self.call(
             [
                 {
@@ -712,7 +748,9 @@ class BundledZotkitTests(unittest.TestCase):
                 "complete": True,
             },
         }
-        (self.context / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (self.context / "context.json").write_text(
+            json.dumps(context, indent=2), encoding="utf-8"
+        )
 
         self.zotkit = root / "bin" / "zotkit"
         self.zotkit.parent.mkdir()
@@ -747,7 +785,14 @@ class BundledZotkitTests(unittest.TestCase):
             check=True,
             env=self.cli_env if via_cli else None,
         )
-        return [json.loads(line) for line in result.stdout.splitlines()]
+        lines = result.stdout.splitlines()
+        expected_responses = sum("id" in request for request in requests)
+        self.assertEqual(
+            len(lines),
+            expected_responses,
+            "each JSON-RPC response must occupy exactly one physical stdout line",
+        )
+        return [json.loads(line) for line in lines]
 
     def cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -761,7 +806,16 @@ class BundledZotkitTests(unittest.TestCase):
     def test_zotkit_mcp_exposes_exactly_four_read_only_tools(self) -> None:
         responses = self.mcp_call(
             [
-                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "zotkit-test", "version": "1.0"},
+                    },
+                },
                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
                 {
                     "jsonrpc": "2.0",
@@ -772,6 +826,7 @@ class BundledZotkitTests(unittest.TestCase):
             ]
         )
         initialized = responses[0]["result"]
+        self.assertEqual(initialized["protocolVersion"], "2025-06-18")
         self.assertEqual(initialized["serverInfo"]["name"], "zotkit-library")
         self.assertIn("read-only", initialized["instructions"])
 
@@ -785,6 +840,16 @@ class BundledZotkitTests(unittest.TestCase):
                 "zotkit_list_tags",
             },
         )
+        for tool in tools:
+            self.assertEqual(
+                tool["annotations"],
+                {
+                    "readOnlyHint": True,
+                    "destructiveHint": False,
+                    "idempotentHint": True,
+                    "openWorldHint": False,
+                },
+            )
         self.assertEqual(len(tools), 4)
         self.assertTrue(all("read-only" in tool["description"] for tool in tools))
         self.assertTrue(responses[2]["result"]["isError"])

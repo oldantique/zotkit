@@ -32,6 +32,11 @@ real `codex` CLI
   └── live Reader MCP + bundled read-only Zotkit metadata MCP
 ```
 
+The global `untrusted` policy remains in force for shell commands and user MCPs. The
+two XPI-bundled servers alone use `default_tools_approval_mode = "approve"`, accurate
+read-only annotations, and a 10-second tool timeout so Zotero context reads cannot be
+held behind an invisible approval prompt.
+
 The terminal starts lazily when the user opens the assistant, rather than starting
 one process for every viewed paper. The PDF's containing directory is used as the
 working directory so that Codex sees the same local research context the user sees.

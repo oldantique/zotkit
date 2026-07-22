@@ -711,6 +711,12 @@ function codexMcpArguments(
     "-c", `mcp_servers.${name}.command=${tomlString(server.command)}`,
     "-c", `mcp_servers.${name}.args=[${server.args.map(tomlString).join(",")}]`,
     "-c", `mcp_servers.${name}.enabled=true`,
+    // Both XPI-bundled servers expose query-only tools. Approve only these two
+    // servers up front so Codex 0.145 does not hide an MCP approval request
+    // inside unified exec; shell commands and the user's other MCPs retain the
+    // global untrusted approval policy.
+    "-c", `mcp_servers.${name}.default_tools_approval_mode=${tomlString("approve")}`,
+    "-c", `mcp_servers.${name}.tool_timeout_sec=10`,
   ];
 }
 

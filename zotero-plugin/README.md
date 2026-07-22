@@ -4,7 +4,7 @@ Zotkit 在 Zotero 9 PDF Reader 的右侧 Item Pane 中运行真实的本机 Code
 
 ## 安装
 
-1. 构建或下载 `Zotkit-0.2.1.xpi`。
+1. 构建或下载 `Zotkit-0.2.2.xpi`。
 2. 在 Zotero 9 中选择“工具 → 插件”。
 3. 点击右上角齿轮，选择“Install Add-on From File…”。
 4. 选择 XPI；如侧栏未立即出现，重启 Zotero。
@@ -54,6 +54,8 @@ Codex 固定使用：
 ```text
 --sandbox read-only --ask-for-approval untrusted
 ```
+
+Shell 与用户自行配置的 MCP 仍遵循 `untrusted` 审批；只有 XPI 内置、带明确只读标记的 `zotero_reader` 和 `zotkit_library` 自动批准，并设有 10 秒调用超时，避免审批界面无法显示时长期停在 `Working`。
 
 插件不修改 Zotero item、collection、tag、attachment link、annotation、note、全文索引或原 PDF。它不会在 PDF 旁创建 `AGENTS.md`、配置、索引或笔记。
 

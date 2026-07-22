@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2
+
+- Fixed MCP stdio JSONL framing so pretty-printed Reader context can never split one JSON-RPC response across physical lines.
+- Pre-approved only the two XPI-bundled read-only MCP servers and added a 10-second tool timeout, eliminating hidden multi-minute approval waits while preserving approval rules for shell commands and user MCPs.
+- Marked all bundled Reader and Zotkit tools with explicit read-only, non-destructive, idempotent, closed-world annotations.
+- Negotiated MCP `2025-06-18`, the protocol revision that defines structured tool results, and fail closed if a result cannot be serialized as one valid JSONL message.
+- Loaded Zotero annotation data before item data when building the bundled Zotkit library snapshot, matching Zotero 9's required lazy-data order.
+- Preserved useful messages from cross-realm Zotero exceptions so snapshot failures no longer appear only as “unknown error”.
+
 ## 0.2.1
 
 - Added one atomic `get_reader_context` call and explicit serial-call guidance to prevent Codex MCP queue deadlocks.

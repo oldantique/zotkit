@@ -391,7 +391,11 @@ describe("ReaderContextService", () => {
   it("persists a failed built-in Zotkit snapshot warning in the active workspace", async () => {
     let shouldFail = true;
     const buildZotkitLibrarySnapshot = vi.fn(async (libraryID): Promise<ZotkitLibrarySnapshot> => {
-      if (shouldFail) throw new Error("lazy item metadata could not be loaded");
+      if (shouldFail) {
+        // Zotero chrome objects can throw Errors from another JS realm, so the
+        // value has the standard Error shape without passing instanceof Error.
+        throw { name: "Error", message: "lazy item metadata could not be loaded" };
+      }
       return {
         schemaVersion: 1,
         libraryID,
@@ -1578,7 +1582,7 @@ describe("createZotero9ReadAdapter", () => {
     expect(getAll).toHaveBeenCalledWith(1, false, false, false);
     expect(loadDataTypes).toHaveBeenCalledWith(
       [parent, attachment],
-      ["creators", "tags", "itemData", "collections"],
+      ["creators", "tags", "annotation", "itemData", "collections"],
     );
     expect(getByLibrary).toHaveBeenCalledWith(1, true, false);
     expect(snapshot.collections).toEqual([

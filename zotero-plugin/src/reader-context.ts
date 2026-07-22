@@ -540,7 +540,23 @@ function cleanText(value: unknown): string {
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  return typeof error === "string" ? error : "unknown error";
+  if (typeof error === "string") return error;
+  // Errors thrown by Zotero chrome objects can originate in another JS realm,
+  // where `instanceof Error` is false even though the object has the standard
+  // Error shape. Preserve that diagnostic instead of reporting "unknown error".
+  if (typeof error === "object" && error !== null) {
+    try {
+      const record = error as { message?: unknown; name?: unknown };
+      const message = cleanText(record.message);
+      if (message) return message;
+      const name = cleanText(record.name);
+      if (name) return name;
+    }
+    catch {
+      // A cross-realm property getter can itself throw; use the fallback below.
+    }
+  }
+  return "unknown error";
 }
 
 function boundedErrorMessage(error: unknown): string {
@@ -2835,7 +2851,7 @@ export function createZotero9ReadAdapter(
           // Load only the bounded batch that is about to be serialized.
           await items.loadDataTypes(
             selectedItems.slice(itemIndex, itemIndex + 250),
-            ["creators", "tags", "itemData", "collections"],
+            ["creators", "tags", "annotation", "itemData", "collections"],
           );
         }
         const item = selectedItems[itemIndex]!;
