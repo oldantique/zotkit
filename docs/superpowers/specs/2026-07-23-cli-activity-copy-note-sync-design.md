@@ -10,12 +10,15 @@
 
 同时:回答内容缺少一键复制;KaTeX 公式已能渲染但无法拿回 LaTeX 源码;对话内容离开 Zotero 即丢失,没有沉淀为条目笔记。
 
+另经用户实测发现:AI 可读的全文只覆盖 PDF 前 100 页。根源有二:Zotero 建索引默认只索引前 100 页(`extensions.zotero.fulltext.pdfMaxPages`);而 `readIndexedFullText()` 把 `totalPages` 报告成缓存自身的页数,截断检测"拿缓存和自己比"永远判定完整,设计好的 PDFWorker 全量抽取兜底(`maxPages: null`,不限页)从不触发。此外长 PDF 缺少结构导航手段(PDFTriage 式的目录工具)。
+
 ## 用户决策(已确认)
 
 1. 运行中:过程事件收敛为一行原位更新的小字转圈状态行;结束后只留回答 + 一行可点击展开过程明细的耗时小字。
 2. 浮窗与侧边栏统一采用此交互。
 3. Zotero note 只保存问答(Q + 最终回答 + 元信息),不含思考过程与工具明细。
 4. 一条 note 挂在论文条目下,按线程分节组织。
+5. 本轮一并修复全文 100 页截断 bug,并新增 PDF 大纲(目录)工具;RAPTOR 式层级摘要("论文地图")记入 roadmap,本轮不做。
 
 ## 设计
 
@@ -110,7 +113,27 @@
 - **表格不用 `<table>`**(Zotero 笔记编辑器 schema 不支持):整个表格块以 markdown 原文放入 `<pre>`。
 - 所有文本 HTML 转义。
 
-### 4. 不改的部分
+### 4. 长 PDF:全文截断修复与大纲工具
+
+**4.1 全文截断修复(reader-context.ts)。**
+
+- `readIndexedFullText()` 不再从缓存内容推算 `totalPages`(返回 `totalPages: undefined`,保留 `extractedPages` = 缓存页数)。
+- Zotero 适配器新增可选方法 `getFullTextPageCounts?(attachment): Promise<{ indexedPages?: number; totalPages?: number } | null>`,实现调用 `Zotero.Fulltext.getPages(itemID)`(fulltextItems 表存有权威的 `indexedPages`/`totalPages`);API 缺失或出错时返回 `null`。
+- `loadFullText()` 的完整性判定改用权威页数:
+  - `knownPageCount = pageStats.pageCount ?? dbCounts?.totalPages ?? undefined`
+  - `indexedPageCount = dbCounts?.indexedPages ?? 缓存页数`
+  - 截断(`indexedPageCount < knownPageCount`)→ 走既有 `safePdfWorker(attachment, null, …)` 全量抽取;两个页数都未知且缓存存在 → 维持现状视为完整(DB 通常能给出总页数,此分支实际很少命中)。
+- 现有"Indexed full text contains X of Y pages"警告保留。
+- 搜索保序:`searchPageText` 已按页序返回匹配,加回归测试锁定(乱序即视为回归)。
+
+**4.2 大纲工具 `zotero_get_pdf_outline`。**
+
+- 新只读工具,仅作用于**当前打开的 PDF**(文库 PDF 未加载进 PDF.js,PDFWorker 无大纲 API,不支持——工具描述中说明)。
+- 适配器新增 `extractPdfOutline(reader): Promise<OutlineItem[] | null>`:经 `PDFViewerApplication.pdfDocument.getOutline()` 取书签树,展平为 `{ title, page, depth }`(page 为 1 起页码;dest 为命名目标时先 `getDestination()` 解析,再 `getPageIndex(ref)`;单条解析失败则该条 `page: null`,不中断)。
+- 工具返回 `{ items, totalPages, warnings }`;条目超过 300 时截断并加 warning;无大纲时返回空 items + 提示改用全文检索。
+- 工具描述引导模型:长 PDF 先取大纲规划,再按章节页码用 `zotero_read_pdf_pages` 精读(PDFTriage 模式)。
+
+### 5. 不改的部分
 
 会话/线程模型、codex app-server 协议、审批/diff/plan/checkpoint 卡片、上下文芯片、模型与推理力度选择器、终端面板。不新增 npm 依赖(KaTeX 已在)。
 
@@ -123,6 +146,9 @@
 - **markdownToNoteHtml**:标题降级、公式保留源码、表格进 `<pre>`、HTML 转义、链接白名单。
 - **mergeChatNoteHtml**:新建、单分节重建、多分节保序、未知分节保留、`data-zotkit-thread` 丢失时按标题回退。
 - **syncChatNote**:打桩 Zotero item API 验证找 note/建 note/打标签/`saveTx`;库不可写时静默跳过;`noteSync=false` 时不执行。
+- **全文截断**:打桩截断缓存(如 100/250 页)→ 期望回退 pdf-worker 全量;完整缓存 → indexed-fulltext;`pageStats` 缺失时用 DB 页数;`getFullTextPageCounts` 缺失/出错时不崩溃。
+- **搜索保序**:多页多匹配输入,断言结果页码单调不减。
+- **大纲工具**:嵌套书签展平(depth 正确)、命名目标解析、单条失败不中断、超 300 条截断加 warning、无大纲提示。
 - 既有 195 项测试保持全绿;`tsc --noEmit` 零错误。
 
 ## 约束
