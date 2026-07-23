@@ -48,6 +48,13 @@ interface PluginStartupData {
   rootURI: string;
 }
 
+/** Timing/model metadata recorded once a turn completes, keyed by its opening user entry. */
+interface TurnMeta {
+  elapsedMs: number;
+  completedAt: string;
+  model: string;
+}
+
 export const MAX_SELECTION_PROMPT_CHARACTERS = 32_000;
 
 /** Keep the historical class name as a source-level compatibility shim. */
@@ -82,6 +89,8 @@ export class ZoteroChatPlugin {
   private mutationCheckpoints: CheckpointOption[] = [];
   private contextRequestSequence = 0;
   private destroyed = false;
+  private readonly turnStartedAt = new Map<string, number>();
+  private readonly turnMeta = new Map<string, Map<string, TurnMeta>>();
 
   async startup(data: PluginStartupData): Promise<void> {
     this.settings = await loadSettings();
@@ -799,6 +808,10 @@ export class ZoteroChatPlugin {
             pageNumber: context.selection.pageNumber ?? context.page.pageNumber,
           }
           : null,
+        turnStartedAt: this.codex.state.running
+          ? this.turnStartedAt.get(this.codex.state.activeThreadId ?? "") ?? null
+          : null,
+        turnDurations: this.turnDurationsForActiveThread(),
       });
     }
   }
@@ -853,7 +866,48 @@ export class ZoteroChatPlugin {
     this.codex?.setInteractionContext(interaction);
   }
 
+  turnDurationsForActiveThread(): Record<string, number> {
+    const threadId = this.codex?.state.activeThreadId;
+    const meta = threadId ? this.turnMeta.get(threadId) : undefined;
+    const out: Record<string, number> = {};
+    if (meta) for (const [id, value] of meta) out[id] = value.elapsedMs;
+    return out;
+  }
+
+  /** Starts the clock when a turn begins running and records its duration once it stops. */
+  private trackTurnTiming(): void {
+    const threadId = this.codex?.state.activeThreadId;
+    if (!threadId) return;
+    const running = Boolean(this.codex?.state.running);
+    const started = this.turnStartedAt.get(threadId);
+    if (running && started === undefined) {
+      this.turnStartedAt.set(threadId, Date.now());
+      return;
+    }
+    if (!running && started !== undefined) {
+      this.turnStartedAt.delete(threadId);
+      const entries = this.codex?.getChatEntries() ?? [];
+      let lastUserId: string | null = null;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (entries[i]!.kind === "user") { lastUserId = entries[i]!.id; break; }
+      }
+      if (!lastUserId) return;
+      const perThread = this.turnMeta.get(threadId) ?? new Map<string, TurnMeta>();
+      perThread.set(lastUserId, {
+        elapsedMs: Date.now() - started,
+        completedAt: new Date().toISOString(),
+        model: this.selectedModel,
+      });
+      this.turnMeta.set(threadId, perThread);
+      this.onTurnCompleted(threadId);
+    }
+  }
+
+  /** Hook for future turn-completion consumers (Task 8); intentionally empty for now. */
+  protected onTurnCompleted(_threadId: string): void {}
+
   private renderChatViews(): void {
+    this.trackTurnTiming();
     if (!this.codex) return;
     const context = this.context;
     const plan = normalizePlan(this.codex.getActivePlan());
@@ -922,6 +976,10 @@ export class ZoteroChatPlugin {
         reviews: [...mutationReviews, ...workspaceDiffs],
         pendingApproval,
         checkpoints,
+        turnStartedAt: this.codex.state.running
+          ? this.turnStartedAt.get(this.codex.state.activeThreadId ?? "") ?? null
+          : null,
+        turnDurations: this.turnDurationsForActiveThread(),
       });
     }
     this.renderFloatPanels();

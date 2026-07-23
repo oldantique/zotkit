@@ -120,6 +120,8 @@ export interface SidebarState {
   reviews: DiffReview[];
   pendingApproval: PendingApproval | null;
   checkpoints: CheckpointOption[];
+  turnStartedAt: number | null;
+  turnDurations: Record<string, number>;
 }
 
 export interface SidebarCallbacks {
@@ -198,6 +200,8 @@ export class SidebarView {
       reviews: [],
       pendingApproval: null,
       checkpoints: [],
+      turnStartedAt: null,
+      turnDurations: {},
     };
     this.build();
     this.render();

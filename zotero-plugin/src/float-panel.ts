@@ -20,6 +20,8 @@ export interface FloatPanelState {
   selection: FloatSelectionInfo | null;
   models: ModelOption[];
   selectedModel: string;
+  turnStartedAt: number | null;
+  turnDurations: Record<string, number>;
 }
 
 export interface FloatPanelCallbacks {
@@ -60,6 +62,8 @@ export class FloatPanelView {
     selection: null,
     models: [],
     selectedModel: "",
+    turnStartedAt: null,
+    turnDurations: {},
   };
   private position: { left: number; top: number } | null = null;
   private readonly handleResize = () => {

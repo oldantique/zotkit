@@ -175,6 +175,45 @@ describe("Zotkit Reader terminal state", () => {
     (globalThis as any).Zotero = previousZotero;
   });
 
+  it("records turn duration keyed by the opening user entry when running flips off", () => {
+    vi.useFakeTimers();
+    try {
+      const plugin = new ZoteroChatPlugin() as any;
+      plugin.codex = {
+        setInteractionContext: vi.fn(),
+        state: {
+          activeThreadId: "th1",
+          running: true,
+          fallbackReason: null,
+          models: [],
+          mode: "ask",
+        },
+        getChatEntries: () => [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "a1", kind: "assistant", text: "答" },
+        ],
+        getActivePlan: () => null,
+        getActiveDiffs: () => [],
+        getPendingApprovals: () => [],
+        getCheckpoints: () => [],
+        getThreadOptions: () => [],
+        isSignedIn: () => false,
+      };
+
+      vi.setSystemTime(new Date("2026-07-23T10:00:00Z"));
+      plugin.renderChatViews();
+
+      vi.setSystemTime(new Date("2026-07-23T10:00:28Z"));
+      plugin.codex.state.running = false;
+      plugin.renderChatViews();
+
+      expect(plugin.turnDurationsForActiveThread()).toEqual({ u1: 28_000 });
+    }
+    finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("onMainWindowUnload destroys the window's float panel", async () => {
     const previousZotero = (globalThis as any).Zotero;
     (globalThis as any).Zotero = { getMainWindow: () => window };
