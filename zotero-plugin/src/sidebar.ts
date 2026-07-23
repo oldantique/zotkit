@@ -142,7 +142,7 @@ export interface SidebarCallbacks {
   onRestoreCheckpoint?(checkpointId: string): void;
 }
 
-type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close";
+export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close";
 
 export class SidebarView {
   private readonly doc: Document;
@@ -1232,7 +1232,7 @@ const SIDEBAR_ICON_PATHS: Record<SidebarIcon, string[]> = {
   close: ["m7 7 10 10", "m17 7-10 10"],
 };
 
-function createSidebarIcon(doc: Document, icon: SidebarIcon): SVGElement {
+export function createSidebarIcon(doc: Document, icon: SidebarIcon): SVGElement {
   const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.classList.add("zc-button-icon");
   svg.setAttribute("viewBox", "0 0 24 24");
