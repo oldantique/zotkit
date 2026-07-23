@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown";
+import { copyToClipboard } from "./platform";
 import {
   activityLabel,
   contentEntries,
@@ -152,7 +153,7 @@ export interface SidebarCallbacks {
   onRestoreCheckpoint?(checkpointId: string): void;
 }
 
-export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close";
+export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close" | "copy";
 
 export class SidebarView {
   private readonly doc: Document;
@@ -1199,9 +1200,30 @@ export class SidebarView {
     avatar.alt = "Codex";
     const content = this.doc.createElement("div");
     content.className = "zc-entry-content";
-    content.appendChild(renderMarkdown(this.doc, entry.text));
+    const markdownBody = this.doc.createElement("div");
+    markdownBody.className = "zc-markdown";
+    markdownBody.appendChild(renderMarkdown(this.doc, entry.text));
+    content.append(markdownBody, this.createCopyAnswerButton(entry.text));
     article.append(avatar, content);
     return article;
+  }
+
+  private createCopyAnswerButton(text: string): HTMLButtonElement {
+    const button = this.doc.createElement("button");
+    button.type = "button";
+    button.className = "zc-copy-answer";
+    button.title = "复制回答";
+    button.replaceChildren(createSidebarIcon(this.doc, "copy"));
+    button.addEventListener("click", () => {
+      if (!copyToClipboard(text)) return;
+      button.classList.add("is-copied");
+      button.title = "已复制";
+      this.doc.defaultView?.setTimeout(() => {
+        button.classList.remove("is-copied");
+        button.title = "复制回答";
+      }, 1500);
+    });
+    return button;
   }
 
   private renderLoginLayer(): void {
@@ -1360,6 +1382,7 @@ const SIDEBAR_ICON_PATHS: Record<SidebarIcon, string[]> = {
   stop: ["M8 8h8v8H8z"],
   context: ["M12 5v14", "M5 12h14", "M4 4h16v16H4z"],
   close: ["m7 7 10 10", "m17 7-10 10"],
+  copy: ["M9 9h10v12H9z", "M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"],
 };
 
 export function createSidebarIcon(doc: Document, icon: SidebarIcon): SVGElement {

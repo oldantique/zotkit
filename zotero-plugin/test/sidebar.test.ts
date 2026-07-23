@@ -3,8 +3,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+vi.mock("../src/platform", () => ({
+  copyToClipboard: vi.fn(() => true),
+}));
+
 import { SidebarView, type SidebarCallbacks } from "../src/sidebar";
 import { renderMarkdown } from "../src/markdown";
+import { copyToClipboard } from "../src/platform";
 
 function callbacks(): SidebarCallbacks {
   return {
@@ -226,6 +232,58 @@ describe("SidebarView", () => {
 
     expect(body.querySelector<HTMLDetailsElement>('[data-entry-id="tool-1"] details')?.open).toBe(true);
     expect(body.querySelector<HTMLElement>('[data-entry-id="answer-1"]')).toBe(stable);
+  });
+
+  describe("answer copy button", () => {
+    beforeEach(() => {
+      vi.mocked(copyToClipboard).mockClear();
+      vi.mocked(copyToClipboard).mockReturnValue(true);
+    });
+
+    it("copies the raw answer text via the privileged clipboard helper and shows a transient confirmation", () => {
+      vi.useFakeTimers();
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const view = new SidebarView(body, callbacks());
+      view.setState({
+        phase: "ready",
+        entries: [
+          { id: "a1", kind: "assistant", text: "**Result:** page 7" }
+        ]
+      });
+
+      const button = body.querySelector<HTMLButtonElement>(".zc-copy-answer")!;
+      expect(button).not.toBeNull();
+      expect(button.title).toBe("复制回答");
+
+      button.click();
+
+      expect(copyToClipboard).toHaveBeenCalledWith("**Result:** page 7");
+      expect(button.classList.contains("is-copied")).toBe(true);
+      expect(button.title).toBe("已复制");
+
+      vi.advanceTimersByTime(1500);
+      expect(button.classList.contains("is-copied")).toBe(false);
+      expect(button.title).toBe("复制回答");
+      vi.useRealTimers();
+    });
+
+    it("does not add the copied state when the clipboard helper reports failure", () => {
+      vi.mocked(copyToClipboard).mockReturnValue(false);
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const view = new SidebarView(body, callbacks());
+      view.setState({
+        phase: "ready",
+        entries: [{ id: "a1", kind: "assistant", text: "answer" }]
+      });
+
+      const button = body.querySelector<HTMLButtonElement>(".zc-copy-answer")!;
+      button.click();
+
+      expect(button.classList.contains("is-copied")).toBe(false);
+      expect(button.title).toBe("复制回答");
+    });
   });
 
   it("submits with Enter and keeps Shift+Enter available for multiline input", () => {

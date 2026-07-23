@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown";
+import { copyToClipboard } from "./platform";
 import {
   createSidebarIcon,
   type ChatEntry,
@@ -424,9 +425,30 @@ export class FloatPanelView {
     }
     const content = this.doc.createElement("div");
     content.className = "zc-entry-content";
-    content.appendChild(renderMarkdown(this.doc, entry.text));
+    const markdownBody = this.doc.createElement("div");
+    markdownBody.className = "zc-markdown";
+    markdownBody.appendChild(renderMarkdown(this.doc, entry.text));
+    content.append(markdownBody, this.createCopyAnswerButton(entry.text));
     article.appendChild(content);
     return article;
+  }
+
+  private createCopyAnswerButton(text: string): HTMLButtonElement {
+    const button = this.doc.createElement("button");
+    button.type = "button";
+    button.className = "zc-copy-answer";
+    button.title = "复制回答";
+    button.replaceChildren(createSidebarIcon(this.doc, "copy"));
+    button.addEventListener("click", () => {
+      if (!copyToClipboard(text)) return;
+      button.classList.add("is-copied");
+      button.title = "已复制";
+      this.doc.defaultView?.setTimeout(() => {
+        button.classList.remove("is-copied");
+        button.title = "复制回答";
+      }, 1500);
+    });
+    return button;
   }
 
   private submit(): void {

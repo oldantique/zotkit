@@ -114,6 +114,32 @@ export async function findExecutable(name: "codex" | "claude"): Promise<string |
   return null;
 }
 
+export function copyToClipboard(text: string): boolean {
+  try {
+    const components = (globalThis as Record<string, unknown>).Components as any;
+    const helper = components?.classes?.["@mozilla.org/widget/clipboardhelper;1"]
+      ?.getService(components.interfaces.nsIClipboardHelper);
+    if (helper?.copyString) {
+      helper.copyString(text);
+      return true;
+    }
+  }
+  catch {
+    /* fall through */
+  }
+  try {
+    const clipboard = (globalThis as any).navigator?.clipboard;
+    if (clipboard?.writeText) {
+      void clipboard.writeText(text);
+      return true;
+    }
+  }
+  catch {
+    /* ignore */
+  }
+  return false;
+}
+
 export function launchURL(url: string): void {
   if (!/^https:\/\//i.test(url)) throw new Error("Only HTTPS login URLs may be opened");
   Zotero.launchURL(url);

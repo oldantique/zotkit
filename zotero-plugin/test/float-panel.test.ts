@@ -1,11 +1,17 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../src/platform", () => ({
+  copyToClipboard: vi.fn(() => true),
+}));
+
 import {
   FloatPanelView,
   latestExchange,
   type FloatPanelCallbacks,
 } from "../src/float-panel";
+import { copyToClipboard } from "../src/platform";
 
 function callbacks(): FloatPanelCallbacks {
   return {
@@ -154,6 +160,32 @@ describe("FloatPanelView selection chip and transcript", () => {
     transcript.querySelector<HTMLButtonElement>(".zc-turn-summary")?.click();
     expect(transcript.textContent).toContain("zotero_get_current_selection");
     expect(transcript.querySelector("strong")?.textContent).toBe("核心");
+  });
+
+  it("copies the raw answer text via the privileged clipboard helper and shows a transient confirmation", () => {
+    vi.mocked(copyToClipboard).mockClear();
+    vi.mocked(copyToClipboard).mockReturnValue(true);
+    vi.useFakeTimers();
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      entries: [{ id: "a1", kind: "assistant", text: "**核心** 是注意力" }],
+    });
+
+    const button = host.querySelector<HTMLButtonElement>(".zc-copy-answer")!;
+    expect(button).not.toBeNull();
+    expect(button.title).toBe("复制回答");
+
+    button.click();
+
+    expect(copyToClipboard).toHaveBeenCalledWith("**核心** 是注意力");
+    expect(button.classList.contains("is-copied")).toBe(true);
+    expect(button.title).toBe("已复制");
+
+    vi.advanceTimersByTime(1500);
+    expect(button.classList.contains("is-copied")).toBe(false);
+    expect(button.title).toBe("复制回答");
+    vi.useRealTimers();
   });
 
   it("hides the transcript when there is no exchange yet", () => {
