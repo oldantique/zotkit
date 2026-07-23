@@ -115,3 +115,82 @@ describe("latestExchange", () => {
     expect(latestExchange([{ id: "s", kind: "status", text: "hi" }])).toEqual([]);
   });
 });
+
+describe("FloatPanelView selection chip and transcript", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("shows the selection chip with size and page, and forwards removal", () => {
+    const { host, view, handlers } = mount();
+    view.setState({ selection: { text: "a".repeat(128), pageNumber: 3 } });
+    const chip = host.querySelector<HTMLElement>(".zc-float-chip")!;
+    expect(chip.hidden).toBe(false);
+    expect(chip.textContent).toContain("已选 128 字");
+    expect(chip.textContent).toContain("第 3 页");
+    chip.querySelector<HTMLButtonElement>(".zc-float-chip-remove")!.click();
+    expect(handlers.onRemoveSelection).toHaveBeenCalledOnce();
+    view.setState({ selection: null });
+    expect(chip.hidden).toBe(true);
+  });
+
+  it("renders only the latest exchange: user bubble, tool card, markdown answer", () => {
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      entries: latestExchange([
+        { id: "u1", kind: "user", text: "old question" },
+        { id: "a1", kind: "assistant", text: "old answer" },
+        { id: "u2", kind: "user", text: "这段在说什么？" },
+        { id: "t2", kind: "tool", title: "zotero_get_current_selection", text: "ok", state: "complete" },
+        { id: "a2", kind: "assistant", text: "**核心** 是注意力" },
+      ]),
+    });
+    const transcript = host.querySelector<HTMLElement>(".zc-float-transcript")!;
+    expect(transcript.hidden).toBe(false);
+    expect(transcript.textContent).not.toContain("old question");
+    expect(transcript.querySelector(".zc-user-bubble")?.textContent).toBe("这段在说什么？");
+    expect(transcript.textContent).toContain("zotero_get_current_selection");
+    expect(transcript.querySelector("strong")?.textContent).toBe("核心");
+  });
+
+  it("hides the transcript when there is no exchange yet", () => {
+    const { host, view } = mount();
+    view.setState({ phase: "ready", entries: [] });
+    expect(host.querySelector<HTMLElement>(".zc-float-transcript")!.hidden).toBe(true);
+  });
+
+  it("shows the stop button only while running", () => {
+    const { host, view } = mount();
+    view.setState({ phase: "ready", running: true });
+    expect(host.querySelector<HTMLElement>(".zc-float-stop")!.hidden).toBe(false);
+    view.setState({ running: false });
+    expect(host.querySelector<HTMLElement>(".zc-float-stop")!.hidden).toBe(true);
+  });
+});
+
+describe("FloatPanelView drag", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("moves with the pointer and clamps to the viewport margin", () => {
+    const { host, view } = mount();
+    view.show();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    const bar = host.querySelector<HTMLElement>(".zc-float-bar")!;
+    bar.dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 10, clientY: 10, bubbles: true }));
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 210, clientY: 130, bubbles: true }));
+    expect(root.classList.contains("is-dragged")).toBe(true);
+    expect(root.style.left).toBe("200px");
+    expect(root.style.top).toBe("120px");
+    // Far past the left/top edge → clamped to the 8px margin.
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: -500, clientY: -500, bubbles: true }));
+    expect(root.style.left).toBe("8px");
+    expect(root.style.top).toBe("8px");
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    // After mouseup, further moves are ignored.
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 400, clientY: 400, bubbles: true }));
+    expect(root.style.left).toBe("8px");
+  });
+});
