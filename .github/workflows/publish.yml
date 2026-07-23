@@ -6,6 +6,9 @@ on:
 
 jobs:
   build:
+    # Only the Python package publishes to PyPI. Plugin releases are tagged
+    # `plugin-vX.Y.Z` and ship an XPI via plugin-release.yml — never PyPI.
+    if: ${{ !startsWith(github.event.release.tag_name, 'plugin-') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
