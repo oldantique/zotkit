@@ -56,6 +56,7 @@ export class FloatPanelView {
   };
   private position: { left: number; top: number } | null = null;
   private readonly handleResize = () => {
+    if (this.root.hidden) return;
     if (this.position) this.applyPosition(this.position.left, this.position.top);
   };
 
@@ -87,6 +88,7 @@ export class FloatPanelView {
 
   show(): void {
     this.root.hidden = false;
+    if (this.position) this.applyPosition(this.position.left, this.position.top);
   }
 
   hide(): void {
@@ -295,6 +297,7 @@ export class FloatPanelView {
   }
 
   private beginDrag(event: MouseEvent): void {
+    if ((event.target as Element | null)?.closest?.(".zc-float-close")) return;
     if (event.button !== 0) return;
     const rect = this.root.getBoundingClientRect();
     const offsetX = event.clientX - rect.left;

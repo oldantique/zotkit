@@ -83,7 +83,7 @@ describe("Zotkit Reader terminal state", () => {
     document.body.appendChild(focusTarget);
     focusTarget.focus();
     const plugin = new ZoteroChatPlugin() as any;
-    plugin.codex = { setInteractionContext: vi.fn() };
+    plugin.codex = { setInteractionContext: vi.fn(), state: { connected: false } };
     plugin.context = {
       selection: { text: "chosen theorem", pageNumber: 3 },
       page: { pageNumber: 3 },
@@ -113,7 +113,7 @@ describe("Zotkit Reader terminal state", () => {
     const previousZotero = (globalThis as any).Zotero;
     (globalThis as any).Zotero = { getMainWindow: () => window };
     const plugin = new ZoteroChatPlugin() as any;
-    plugin.codex = { setInteractionContext: vi.fn() };
+    plugin.codex = { setInteractionContext: vi.fn(), state: { connected: false } };
     plugin.context = null;
     plugin.ensureChatSession = vi.fn(async () => {});
     plugin.renderChatViews = vi.fn();
@@ -125,6 +125,88 @@ describe("Zotkit Reader terminal state", () => {
     plugin.hideFloatPanel(window);
     plugin.floatPanels.get(window)?.view.destroy();
     plugin.floatPanels.get(window)?.host.remove();
+    (globalThis as any).Zotero = previousZotero;
+  });
+
+  it("renderFloatPanels pushes the latest exchange, running state, and selection chip into the panel", () => {
+    const previousZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { getMainWindow: () => window };
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.codex = {
+      setInteractionContext: vi.fn(),
+      state: { running: true, fallbackReason: null },
+      getChatEntries: () => [
+        { id: "u1", kind: "user", text: "old question" },
+        { id: "a1", kind: "assistant", text: "old answer" },
+        { id: "u2", kind: "user", text: "latest question" },
+        { id: "a2", kind: "assistant", text: "latest answer" },
+      ],
+    };
+    plugin.context = {
+      selection: { text: "chosen theorem", pageNumber: 3 },
+      page: { pageNumber: 3 },
+      attachment: { title: "A Test Paper", creators: [] },
+    };
+    plugin.addedContextIDs.add("current-selection");
+    plugin.chatPhase = "ready";
+    const entry = plugin.mountFloatPanel(window);
+    entry.view.show();
+
+    plugin.renderFloatPanels();
+
+    const root = document.querySelector<HTMLElement>(".zc-float")!;
+    expect(root.textContent).toContain("latest question");
+    expect(root.textContent).not.toContain("old question");
+    expect(root.textContent).toContain("已选 14 字");
+    expect(root.querySelector<HTMLElement>(".zc-float-stop")!.hidden).toBe(false);
+    expect(root.querySelector(".zc-float-title")?.textContent).toBe("A Test Paper");
+
+    entry.view.destroy();
+    entry.host.remove();
+    plugin.floatPanels.clear();
+    (globalThis as any).Zotero = previousZotero;
+  });
+
+  it("onMainWindowUnload destroys the window's float panel", async () => {
+    const previousZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { getMainWindow: () => window };
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.codex = { setInteractionContext: vi.fn(), state: { connected: false } };
+    plugin.context = null;
+    plugin.ensureChatSession = vi.fn(async () => {});
+    plugin.renderChatViews = vi.fn();
+
+    await plugin.toggleFloatPanel();
+    expect(document.querySelector(".zc-float")).not.toBeNull();
+
+    await plugin.onMainWindowUnload(window);
+    expect(document.querySelector(".zc-float")).toBeNull();
+    expect(plugin.floatPanels.size).toBe(0);
+
+    (globalThis as any).Zotero = previousZotero;
+  });
+
+  it("Escape closes the float panel from anywhere and restores focus", async () => {
+    const previousZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { getMainWindow: () => window };
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.codex = { setInteractionContext: vi.fn(), state: { connected: false } };
+    plugin.context = null;
+    plugin.ensureChatSession = vi.fn(async () => {});
+    plugin.renderChatViews = vi.fn();
+
+    await plugin.toggleFloatPanel();
+    const root = document.querySelector<HTMLElement>(".zc-float")!;
+    expect(root.hidden).toBe(false);
+
+    plugin.installShortcutHandler(window);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(root.hidden).toBe(true);
+
+    plugin.removeShortcutHandler(window);
+    plugin.floatPanels.get(window)?.view.destroy();
+    plugin.floatPanels.get(window)?.host.remove();
+    plugin.floatPanels.clear();
     (globalThis as any).Zotero = previousZotero;
   });
 

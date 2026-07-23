@@ -60,8 +60,10 @@ export class ZoteroChatPlugin {
   private mutations!: ZoteroMutationService;
   private views = new Set<HTMLElement>();
   private chatViews = new Map<HTMLElement, SidebarView>();
-  private floatPanels = new Map<Window, { host: HTMLElement; view: FloatPanelView }>();
-  private floatFocusReturn: HTMLElement | null = null;
+  private floatPanels = new Map<
+    Window,
+    { host: HTMLElement; view: FloatPanelView; focusReturn: HTMLElement | null }
+  >();
   private shortcutWindows = new Set<Window>();
   private context: ReaderContext | null = null;
   private notifierID: string | null = null;
@@ -205,6 +207,19 @@ export class ZoteroChatPlugin {
     const previousHandler = (win as any).__zoteroChatKeyHandler;
     if (previousHandler) win.removeEventListener("keydown", previousHandler, true);
     const keyHandler = (event: KeyboardEvent) => {
+      if (
+        event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey
+        && !event.isComposing && !isEditableEventTarget(event.target)
+      ) {
+        const main = typeof Zotero === "undefined" ? win : (Zotero.getMainWindow?.() || win);
+        const entry = main ? this.floatPanels.get(main) : undefined;
+        if (entry?.view.isVisible()) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.hideFloatPanel(main!);
+        }
+        return;
+      }
       if (!event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
       if (isEditableEventTarget(event.target)) return;
       const key = event.key.toLowerCase();
@@ -687,7 +702,9 @@ export class ZoteroChatPlugin {
     this.attachSelection(true);
   }
 
-  private mountFloatPanel(win: Window): { host: HTMLElement; view: FloatPanelView } {
+  private mountFloatPanel(
+    win: Window,
+  ): { host: HTMLElement; view: FloatPanelView; focusReturn: HTMLElement | null } {
     let entry = this.floatPanels.get(win);
     if (entry) return entry;
     const host = win.document.createElement("div");
@@ -700,7 +717,7 @@ export class ZoteroChatPlugin {
       onRemoveSelection: () => this.removeInteractionContext("current-selection"),
       onLogin: () => void this.codex.login().catch((error) => this.reportError(error)),
     });
-    entry = { host, view };
+    entry = { host, view, focusReturn: null };
     this.floatPanels.set(win, entry);
     return entry;
   }
@@ -715,7 +732,7 @@ export class ZoteroChatPlugin {
     }
     const entry = this.mountFloatPanel(win);
     const active = win.document.activeElement;
-    this.floatFocusReturn = active && active !== win.document.body
+    entry.focusReturn = active && active !== win.document.body
       ? active as HTMLElement
       : null;
     // The selection-popup hook keeps this.context.selection fresh, so the
@@ -728,17 +745,26 @@ export class ZoteroChatPlugin {
     entry.view.show();
     this.renderChatViews();
     entry.view.focusComposer();
-    void this.ensureChatSession()
-      .then(() => entry.view.focusComposer())
-      .catch((error) => this.reportError(error));
+    if (this.codex.state.connected) {
+      // Session already live: refresh context in the background without
+      // flipping chatPhase, so the composer stays enabled and focused.
+      void this.refreshContext()
+        .then(() => this.renderChatViews())
+        .catch(() => { /* stale reader capture is non-fatal here */ });
+    }
+    else {
+      void this.ensureChatSession()
+        .then(() => entry.view.focusComposer())
+        .catch((error) => this.reportError(error));
+    }
   }
 
   private hideFloatPanel(win: Window): void {
     const entry = this.floatPanels.get(win);
     if (!entry?.view.isVisible()) return;
     entry.view.hide();
-    const target = this.floatFocusReturn;
-    this.floatFocusReturn = null;
+    const target = entry.focusReturn;
+    entry.focusReturn = null;
     if (target?.isConnected) {
       try { target.focus(); }
       catch { /* previously focused node may be gone */ }

@@ -521,8 +521,8 @@ export class TerminalPanel {
       theme: {
         background: "#151419",
         foreground: "#e9e7ed",
-        cursor: "#9b8cff",
-        selectionBackground: "#5f4ed866",
+        cursor: "#7ba8ff",
+        selectionBackground: "#0a84ff66",
         black: "#25232a",
         red: "#ff6b67",
         green: "#61d887",

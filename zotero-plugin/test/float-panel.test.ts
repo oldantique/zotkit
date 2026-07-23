@@ -193,4 +193,15 @@ describe("FloatPanelView drag", () => {
     document.dispatchEvent(new MouseEvent("mousemove", { clientX: 400, clientY: 400, bubbles: true }));
     expect(root.style.left).toBe("8px");
   });
+
+  it("does not start a drag when mousedown lands on the close button", () => {
+    const { host, view } = mount();
+    view.show();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    const close = host.querySelector<HTMLButtonElement>(".zc-float-close")!;
+    close.dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 10, clientY: 10, bubbles: true }));
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 210, clientY: 130, bubbles: true }));
+    expect(root.style.left).toBe("");
+    expect(root.classList.contains("is-dragged")).toBe(false);
+  });
 });
