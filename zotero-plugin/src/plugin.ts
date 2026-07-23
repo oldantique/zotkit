@@ -716,6 +716,11 @@ export class ZoteroChatPlugin {
       onClose: () => this.hideFloatPanel(win),
       onRemoveSelection: () => this.removeInteractionContext("current-selection"),
       onLogin: () => void this.codex.login().catch((error) => this.reportError(error)),
+      onModelChange: (model) => {
+        this.selectedModel = model;
+        setPrefString("defaultModel", model);
+        this.renderChatViews();
+      },
     });
     entry = { host, view, focusReturn: null };
     this.floatPanels.set(win, entry);
@@ -786,6 +791,8 @@ export class ZoteroChatPlugin {
         error: this.chatError || this.codex.state.fallbackReason || undefined,
         entries: latestExchange(this.codex.getChatEntries()),
         paperTitle: context ? paperTitle(context) : "论文助手",
+        models: this.codex.state.models,
+        selectedModel: this.selectedModel,
         selection: this.addedContextIDs.has("current-selection") && context?.selection?.text
           ? {
             text: context.selection.text,

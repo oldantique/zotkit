@@ -2,6 +2,7 @@ import { renderMarkdown } from "./markdown";
 import {
   createSidebarIcon,
   type ChatEntry,
+  type ModelOption,
   type SidebarPhase,
 } from "./sidebar";
 
@@ -17,6 +18,8 @@ export interface FloatPanelState {
   entries: ChatEntry[];
   paperTitle: string;
   selection: FloatSelectionInfo | null;
+  models: ModelOption[];
+  selectedModel: string;
 }
 
 export interface FloatPanelCallbacks {
@@ -25,6 +28,7 @@ export interface FloatPanelCallbacks {
   onClose(): void;
   onRemoveSelection(): void;
   onLogin(): void;
+  onModelChange(model: string): void;
 }
 
 /** Entries belonging to the latest question: from the last user entry onward. */
@@ -45,6 +49,7 @@ export class FloatPanelView {
   private textarea!: HTMLTextAreaElement;
   private sendButton!: HTMLButtonElement;
   private stopButton!: HTMLButtonElement;
+  private modelSelect!: HTMLSelectElement;
   private note!: HTMLElement;
   private transcript!: HTMLElement;
   private state: FloatPanelState = {
@@ -53,6 +58,8 @@ export class FloatPanelView {
     entries: [],
     paperTitle: "论文助手",
     selection: null,
+    models: [],
+    selectedModel: "",
   };
   private position: { left: number; top: number } | null = null;
   private readonly handleResize = () => {
@@ -166,7 +173,14 @@ export class FloatPanelView {
     this.stopButton.setAttribute("aria-label", this.stopButton.title);
     this.stopButton.replaceChildren(createSidebarIcon(this.doc, "stop"));
     this.stopButton.addEventListener("click", () => this.callbacks.onStop());
-    composer.append(this.textarea, this.stopButton, this.sendButton);
+    this.modelSelect = this.doc.createElement("select");
+    this.modelSelect.className = "zc-float-model";
+    this.modelSelect.title = "模型";
+    this.modelSelect.hidden = true;
+    this.modelSelect.addEventListener("change", () => {
+      this.callbacks.onModelChange(this.modelSelect.value);
+    });
+    composer.append(this.textarea, this.stopButton, this.sendButton, this.modelSelect);
 
     this.note = this.doc.createElement("div");
     this.note.className = "zc-float-note";
@@ -200,8 +214,27 @@ export class FloatPanelView {
     this.textarea.disabled = this.state.phase !== "ready";
     this.stopButton.hidden = !this.state.running;
     this.stopButton.style.display = this.state.running ? "grid" : "none";
+    this.renderModels();
     this.renderNote();
     this.renderTranscript();
+  }
+
+  private renderModels(): void {
+    const models = this.state.models;
+    this.modelSelect.hidden = models.length === 0;
+    if (!models.length) {
+      this.modelSelect.replaceChildren();
+      return;
+    }
+    const previous = this.modelSelect.value;
+    this.modelSelect.replaceChildren();
+    for (const model of models) {
+      const option = this.doc.createElement("option");
+      option.value = model.id;
+      option.textContent = model.label;
+      this.modelSelect.appendChild(option);
+    }
+    this.modelSelect.value = this.state.selectedModel || previous || models[0]!.id;
   }
 
   private renderChip(): void {

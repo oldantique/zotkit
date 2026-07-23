@@ -134,7 +134,11 @@ describe("Zotkit Reader terminal state", () => {
     const plugin = new ZoteroChatPlugin() as any;
     plugin.codex = {
       setInteractionContext: vi.fn(),
-      state: { running: true, fallbackReason: null },
+      state: {
+        running: true,
+        fallbackReason: null,
+        models: [{ id: "gpt-5", label: "GPT-5" }, { id: "gpt-5-codex", label: "GPT-5 Codex" }],
+      },
       getChatEntries: () => [
         { id: "u1", kind: "user", text: "old question" },
         { id: "a1", kind: "assistant", text: "old answer" },
@@ -142,6 +146,7 @@ describe("Zotkit Reader terminal state", () => {
         { id: "a2", kind: "assistant", text: "latest answer" },
       ],
     };
+    plugin.selectedModel = "gpt-5-codex";
     plugin.context = {
       selection: { text: "chosen theorem", pageNumber: 3 },
       page: { pageNumber: 3 },
@@ -160,6 +165,9 @@ describe("Zotkit Reader terminal state", () => {
     expect(root.textContent).toContain("已选 14 字");
     expect(root.querySelector<HTMLElement>(".zc-float-stop")!.hidden).toBe(false);
     expect(root.querySelector(".zc-float-title")?.textContent).toBe("A Test Paper");
+    const modelSelect = root.querySelector<HTMLSelectElement>(".zc-float-model")!;
+    expect(modelSelect.hidden).toBe(false);
+    expect(modelSelect.value).toBe("gpt-5-codex");
 
     entry.view.destroy();
     entry.host.remove();

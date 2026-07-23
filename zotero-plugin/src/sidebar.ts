@@ -1226,7 +1226,7 @@ const SIDEBAR_ICON_PATHS: Record<SidebarIcon, string[]> = {
   terminal: ["M4 5h16v14H4z", "m7 9 3 3-3 3", "M13 15h4"],
   more: ["M5 12h.01", "M12 12h.01", "M19 12h.01"],
   refresh: ["M20 6v5h-5", "M4 18v-5h5", "M18.2 9a7 7 0 0 0-11.7-2.5L4 11", "M5.8 15a7 7 0 0 0 11.7 2.5L20 13"],
-  send: ["M12 19V5", "m6 6-6-6-6 6"],
+  send: ["M12 19V5", "M6 11l6-6 6 6"],
   stop: ["M8 8h8v8H8z"],
   context: ["M12 5v14", "M5 12h14", "M4 4h16v16H4z"],
   close: ["m7 7 10 10", "m17 7-10 10"],

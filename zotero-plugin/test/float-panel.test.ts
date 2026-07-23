@@ -14,6 +14,7 @@ function callbacks(): FloatPanelCallbacks {
     onClose: vi.fn(),
     onRemoveSelection: vi.fn(),
     onLogin: vi.fn(),
+    onModelChange: vi.fn(),
   };
 }
 
@@ -203,5 +204,36 @@ describe("FloatPanelView drag", () => {
     document.dispatchEvent(new MouseEvent("mousemove", { clientX: 210, clientY: 130, bubbles: true }));
     expect(root.style.left).toBe("");
     expect(root.classList.contains("is-dragged")).toBe(false);
+  });
+});
+
+describe("FloatPanelView model picker", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("renders the Codex model options and forwards selection changes", () => {
+    const { host, view, handlers } = mount();
+    view.setState({
+      phase: "ready",
+      models: [
+        { id: "gpt-5", label: "GPT-5" },
+        { id: "gpt-5-codex", label: "GPT-5 Codex" },
+      ],
+      selectedModel: "gpt-5",
+    });
+    const select = host.querySelector<HTMLSelectElement>(".zc-float-model")!;
+    expect(select.hidden).toBe(false);
+    expect([...select.options].map((option) => option.value)).toEqual(["gpt-5", "gpt-5-codex"]);
+    expect(select.value).toBe("gpt-5");
+    select.value = "gpt-5-codex";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(handlers.onModelChange).toHaveBeenCalledWith("gpt-5-codex");
+  });
+
+  it("hides the model picker until models are known", () => {
+    const { host, view } = mount();
+    view.setState({ phase: "ready", models: [] });
+    expect(host.querySelector<HTMLSelectElement>(".zc-float-model")!.hidden).toBe(true);
   });
 });

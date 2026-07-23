@@ -684,6 +684,23 @@
 .zc-float-stop { color: var(--zc-accent); background: var(--zc-accent-soft); }
 .zc-float-send .zc-button-icon,
 .zc-float-stop .zc-button-icon { width: 14px; height: 14px; }
+.zc-float-model {
+  grid-column: 1;
+  justify-self: start;
+  min-width: 0;
+  max-width: 200px;
+  height: 22px;
+  margin: 0 0 4px 2px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--zc-muted);
+  background: var(--zc-bg-subtle);
+  font: inherit;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+.zc-float-model:hover { color: var(--zc-text); background: var(--zc-bg-hover); }
 
 .zc-float-note { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 0; padding: 5px 12px 4px; color: var(--zc-muted); font-size: 10.5px; text-align: center; }
 .zc-float-note[hidden] { display: none; }
@@ -708,6 +725,11 @@
 .zc-float-entry.zc-entry-user { display: flex; justify-content: flex-end; }
 .zc-float-entry.zc-entry-status { color: var(--zc-muted); text-align: center; font-size: 10px; }
 .zc-float-entry.zc-entry-error { color: var(--zc-danger); }
+/* Float entries render no avatar, so the sidebar's avatar+content grid
+   (.zc-entry-assistant / .zc-entry-error: 22px + 1fr columns) would drop the
+   answer into the 22px avatar track — one CJK character per line. */
+.zc-float-entry.zc-entry-assistant,
+.zc-float-entry.zc-entry-error { display: block; }
 
 @keyframes zc-spin { to { transform: rotate(360deg); } }
 @keyframes zc-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
