@@ -69,6 +69,7 @@ describe("SidebarView", () => {
 
     expect(body.textContent).toContain("A Test Paper");
     expect(body.textContent).toContain("选区 16 字");
+    body.querySelector<HTMLButtonElement>(".zc-turn-summary")?.click();
     expect(body.textContent).toContain("zotero_get_current_page");
     expect(body.querySelector("strong")?.textContent).toBe("Result:");
     expect(body.textContent).toContain("只读");
@@ -205,17 +206,20 @@ describe("SidebarView", () => {
     view.setState({
       phase: "ready",
       entries: [
-        { id: "tool-1", kind: "reasoning", title: "思考过程", text: "first", state: "running" },
+        { id: "u1", kind: "user", text: "问" },
+        { id: "tool-1", kind: "reasoning", title: "思考过程", text: "first", state: "complete" },
         { id: "answer-1", kind: "assistant", text: "stable" }
       ]
     });
+    body.querySelector<HTMLButtonElement>(".zc-turn-summary")!.click();
     const details = body.querySelector<HTMLDetailsElement>('[data-entry-id="tool-1"] details')!;
     const stable = body.querySelector<HTMLElement>('[data-entry-id="answer-1"]')!;
     details.open = true;
 
     view.setState({
       entries: [
-        { id: "tool-1", kind: "reasoning", title: "思考过程", text: "first second", state: "running" },
+        { id: "u1", kind: "user", text: "问" },
+        { id: "tool-1", kind: "reasoning", title: "思考过程", text: "first second", state: "complete" },
         { id: "answer-1", kind: "assistant", text: "stable" }
       ]
     });
@@ -300,6 +304,60 @@ describe("SidebarView", () => {
     button.click();
     expect(handlers.onLogin).toHaveBeenCalledOnce();
     expect(body.querySelector('input[type="password"]')).toBeNull();
+  });
+});
+
+describe("SidebarView activity line", () => {
+  function mountSidebar(): { view: SidebarView; host: HTMLElement } {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const view = new SidebarView(host, callbacks());
+    return { view, host };
+  }
+
+  it("collapses running process entries into a single activity line", () => {
+    const { view, host } = mountSidebar();
+    view.setState({
+      running: true, turnStartedAt: Date.now(),
+      entries: [
+        { id: "u1", kind: "user", text: "问" },
+        { id: "r1", kind: "reasoning", title: "思考过程", text: "…", state: "complete" },
+        { id: "t1", kind: "tool", title: "zotero_read_pdf_pages", text: "", state: "running" },
+      ],
+    });
+    expect(host.querySelectorAll(".zc-tool-card").length).toBe(0);
+    const label = host.querySelector(".zc-activity-label")!;
+    expect(label.textContent).toBe("正在调用 读取论文页面");
+  });
+
+  it("renders an expandable summary line after completion", () => {
+    const { view, host } = mountSidebar();
+    view.setState({
+      running: false, turnDurations: { u1: 28_000 },
+      entries: [
+        { id: "u1", kind: "user", text: "问" },
+        { id: "t1", kind: "tool", title: "zotero_read_pdf_pages", text: "done", state: "complete" },
+        { id: "a1", kind: "assistant", text: "答", state: "complete" },
+      ],
+    });
+    expect(host.querySelector(".zc-activity")).toBeNull();
+    const summary = host.querySelector(".zc-turn-summary")!;
+    expect(summary.textContent).toContain("28s");
+    expect(summary.textContent).toContain("1 个步骤");
+    expect(host.querySelector(".zc-turn-detail")).toBeNull();
+    (summary as HTMLElement).click();
+    expect(host.querySelectorAll(".zc-turn-detail .zc-tool-card").length).toBe(1);
+    (summary as HTMLElement).click();
+    expect(host.querySelector(".zc-turn-detail")).toBeNull();
+  });
+
+  it("omits the summary line when there is nothing to report", () => {
+    const { view, host } = mountSidebar();
+    view.setState({ running: false, turnDurations: {}, entries: [
+      { id: "u1", kind: "user", text: "问" },
+      { id: "a1", kind: "assistant", text: "答", state: "complete" },
+    ]});
+    expect(host.querySelector(".zc-turn-summary")).toBeNull();
   });
 });
 

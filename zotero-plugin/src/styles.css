@@ -578,6 +578,14 @@
 .zc-terminal-status { position: absolute; inset: 0; display: grid; place-items: center; padding: 22px; color: #aaa6b1; text-align: center; font: 11px/1.55 "SFMono-Regular", Menlo, monospace; }
 .zc-terminal-status.is-error { color: #ff7b76; }
 
+.zc-activity { display: flex; align-items: center; gap: 7px; padding: 2px 2px 4px; color: var(--zc-muted); font-size: 11px; }
+.zc-activity-spinner { width: 11px; height: 11px; border: 1.5px solid color-mix(in srgb, var(--zc-muted) 35%, transparent); border-top-color: var(--zc-accent); border-radius: 50%; animation: zc-spin .8s linear infinite; }
+.zc-activity-label { animation: zc-pulse 1.6s ease-in-out infinite; }
+.zc-activity-elapsed { margin-left: auto; font-variant-numeric: tabular-nums; }
+.zc-turn-summary { display: inline-flex; align-items: center; gap: 5px; margin: 2px 0 10px; padding: 0; border: 0; background: none; color: var(--zc-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.zc-turn-summary:hover { color: var(--zc-text); }
+.zc-turn-detail { display: grid; gap: 8px; margin: 0 0 12px; }
+
 .zc-float {
   position: fixed;
   top: 14%;

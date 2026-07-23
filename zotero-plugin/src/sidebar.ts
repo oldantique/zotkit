@@ -1,4 +1,12 @@
 import { renderMarkdown } from "./markdown";
+import {
+  activityLabel,
+  contentEntries,
+  formatElapsed,
+  groupEntries,
+  processEntries,
+  type Exchange,
+} from "./exchanges";
 
 export type SidebarPhase = "connecting" | "signed-out" | "ready" | "unavailable" | "error";
 
@@ -175,6 +183,9 @@ export class SidebarView {
   private contextMenuQuery = "";
   private contextMenuSelection = 0;
   private contextQueryStart: number | null = null;
+  private readonly expandedTurns = new Set<string>();
+  private activityTimer: number | null = null;
+  private pinnedToBottom = true;
 
   constructor(
     body: HTMLElement,
@@ -208,6 +219,10 @@ export class SidebarView {
   }
 
   destroy(): void {
+    if (this.activityTimer !== null) {
+      this.doc.defaultView?.clearInterval(this.activityTimer);
+      this.activityTimer = null;
+    }
     this.root.remove();
   }
 
@@ -284,6 +299,10 @@ export class SidebarView {
 
     this.transcript = this.doc.createElement("main");
     this.transcript.className = "zc-transcript";
+    this.transcript.addEventListener("scroll", () => {
+      const { scrollTop, clientHeight, scrollHeight } = this.transcript;
+      this.pinnedToBottom = scrollTop + clientHeight >= scrollHeight - 4;
+    });
 
     const composerWrap = this.doc.createElement("footer");
     composerWrap.className = "zc-composer-wrap";
@@ -753,10 +772,6 @@ export class SidebarView {
   }
 
   private renderTranscript(): void {
-    const distanceFromBottom = this.transcript.scrollHeight
-      - this.transcript.clientHeight
-      - this.transcript.scrollTop;
-    const stickToBottom = !this.transcript.childElementCount || distanceFromBottom < 48;
     const desired: HTMLElement[] = [];
     const activeIDs = new Set<string>();
     const hasWorkbenchCards = Boolean(
@@ -786,16 +801,51 @@ export class SidebarView {
       desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderPlanCard(plan)));
     }
 
-    for (const entry of this.state.entries) {
-      activeIDs.add(entry.id);
-      const fingerprint = JSON.stringify([
-        entry.kind,
-        entry.text,
-        entry.title || "",
-        entry.state || ""
-      ]);
-      desired.push(this.cachedEntryNode(entry.id, fingerprint, () => this.renderEntry(entry)));
-    }
+    let activityGroup: Exchange | null = null;
+    const groups = groupEntries(this.state.entries);
+    groups.forEach((group, index) => {
+      for (const entry of contentEntries(group)) {
+        activeIDs.add(entry.id);
+        const fingerprint = JSON.stringify([
+          entry.kind,
+          entry.text,
+          entry.title || "",
+          entry.state || ""
+        ]);
+        desired.push(this.cachedEntryNode(entry.id, fingerprint, () => this.renderEntry(entry)));
+      }
+      if (group.id === "preamble") return;
+      const isLastGroup = index === groups.length - 1;
+      if (isLastGroup && this.state.running) {
+        activityGroup = group;
+        return;
+      }
+      const steps = processEntries(group).length;
+      const elapsed = this.state.turnDurations[group.id];
+      if (steps === 0 && elapsed === undefined) return;
+      const summaryId = `turn-summary:${group.id}`;
+      const expanded = this.expandedTurns.has(group.id);
+      activeIDs.add(summaryId);
+      const summaryFingerprint = JSON.stringify([elapsed ?? null, steps, expanded]);
+      desired.push(this.cachedEntryNode(
+        summaryId,
+        summaryFingerprint,
+        () => this.renderTurnSummary(group, steps, elapsed),
+      ));
+      if (expanded) {
+        const detailId = `turn-detail:${group.id}`;
+        const processes = processEntries(group);
+        activeIDs.add(detailId);
+        const detailFingerprint = JSON.stringify(
+          processes.map((entry) => [entry.id, entry.kind, entry.text, entry.title || "", entry.state || ""]),
+        );
+        desired.push(this.cachedEntryNode(
+          detailId,
+          detailFingerprint,
+          () => this.renderTurnDetail(processes),
+        ));
+      }
+    });
 
     for (const review of this.state.reviews) {
       const id = `diff-review:${review.id}`;
@@ -822,11 +872,15 @@ export class SidebarView {
         () => this.renderCheckpointCard(this.state.checkpoints),
       ));
     }
+    if (activityGroup) desired.push(this.renderActivityLine(activityGroup));
     for (const id of this.entryNodes.keys()) {
       if (!activeIDs.has(id)) this.entryNodes.delete(id);
     }
     reconcileChildren(this.transcript, desired);
-    if (stickToBottom) this.transcript.scrollTop = this.transcript.scrollHeight;
+    if (this.state.running && this.pinnedToBottom) {
+      this.transcript.scrollTop = this.transcript.scrollHeight;
+    }
+    this.syncActivityTimer();
   }
 
   private cachedEntryNode(
@@ -842,6 +896,68 @@ export class SidebarView {
     if (previousDetails && nextDetails) nextDetails.open = previousDetails.open;
     this.entryNodes.set(id, { fingerprint, node });
     return node;
+  }
+
+  private renderTurnSummary(group: Exchange, steps: number, elapsed: number | undefined): HTMLElement {
+    const button = this.doc.createElement("button");
+    button.type = "button";
+    button.className = "zc-turn-summary";
+    const parts: string[] = [];
+    if (elapsed !== undefined) parts.push(`⏱ ${formatElapsed(elapsed)}`);
+    if (steps > 0) parts.push(`${steps} 个步骤`);
+    button.textContent = parts.join(" · ");
+    button.addEventListener("click", () => {
+      if (this.expandedTurns.has(group.id)) this.expandedTurns.delete(group.id);
+      else this.expandedTurns.add(group.id);
+      this.render();
+    });
+    return button;
+  }
+
+  private renderTurnDetail(processes: ChatEntry[]): HTMLElement {
+    const container = this.doc.createElement("div");
+    container.className = "zc-turn-detail";
+    for (const entry of processes) {
+      container.appendChild(this.renderEntry(entry));
+    }
+    return container;
+  }
+
+  private renderActivityLine(group: Exchange): HTMLElement {
+    const line = this.doc.createElement("div");
+    line.className = "zc-activity";
+    const spinner = this.doc.createElement("span");
+    spinner.className = "zc-activity-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const label = this.doc.createElement("span");
+    label.className = "zc-activity-label";
+    label.textContent = activityLabel(group.entries);
+    line.append(spinner, label);
+    if (this.state.turnStartedAt !== null) {
+      const elapsed = this.doc.createElement("span");
+      elapsed.className = "zc-activity-elapsed";
+      elapsed.textContent = formatElapsed(Date.now() - this.state.turnStartedAt);
+      line.appendChild(elapsed);
+    }
+    return line;
+  }
+
+  private syncActivityTimer(): void {
+    if (this.state.running) {
+      if (this.activityTimer === null) {
+        this.activityTimer = this.doc.defaultView?.setInterval(() => {
+          const turnStartedAt = this.state.turnStartedAt;
+          if (turnStartedAt === null) return;
+          const elapsed = this.transcript.querySelector<HTMLElement>(".zc-activity-elapsed");
+          if (elapsed) elapsed.textContent = formatElapsed(Date.now() - turnStartedAt);
+        }, 1000) ?? null;
+      }
+      return;
+    }
+    if (this.activityTimer !== null) {
+      this.doc.defaultView?.clearInterval(this.activityTimer);
+      this.activityTimer = null;
+    }
   }
 
   private createEmptyState(): HTMLElement {
