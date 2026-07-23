@@ -884,22 +884,29 @@ export class ZoteroChatPlugin {
       this.turnStartedAt.set(threadId, Date.now());
       return;
     }
-    if (!running && started !== undefined) {
-      this.turnStartedAt.delete(threadId);
-      const entries = this.codex?.getChatEntries() ?? [];
-      let lastUserId: string | null = null;
-      for (let i = entries.length - 1; i >= 0; i--) {
-        if (entries[i]!.kind === "user") { lastUserId = entries[i]!.id; break; }
+    if (!running) {
+      if (started !== undefined) {
+        const entries = this.codex?.getChatEntries() ?? [];
+        let lastUserId: string | null = null;
+        for (let i = entries.length - 1; i >= 0; i--) {
+          if (entries[i]!.kind === "user") { lastUserId = entries[i]!.id; break; }
+        }
+        if (lastUserId) {
+          const perThread = this.turnMeta.get(threadId) ?? new Map<string, TurnMeta>();
+          perThread.set(lastUserId, {
+            elapsedMs: Date.now() - started,
+            completedAt: new Date().toISOString(),
+            model: this.selectedModel,
+          });
+          this.turnMeta.set(threadId, perThread);
+          this.onTurnCompleted(threadId);
+        }
       }
-      if (!lastUserId) return;
-      const perThread = this.turnMeta.get(threadId) ?? new Map<string, TurnMeta>();
-      perThread.set(lastUserId, {
-        elapsedMs: Date.now() - started,
-        completedAt: new Date().toISOString(),
-        model: this.selectedModel,
-      });
-      this.turnMeta.set(threadId, perThread);
-      this.onTurnCompleted(threadId);
+      // `running` is service-wide: once nothing is running, every remaining start
+      // timestamp (for threads other than the active one, or left over from an
+      // interrupted switch) is stale by definition. Drop them all so reopening an
+      // idle thread later can't fabricate a completed turn from a stale timer.
+      this.turnStartedAt.clear();
     }
   }
 

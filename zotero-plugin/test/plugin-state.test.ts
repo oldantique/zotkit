@@ -214,6 +214,59 @@ describe("Zotkit Reader terminal state", () => {
     }
   });
 
+  it("clears stale turn timers for other threads once the service goes idle", () => {
+    vi.useFakeTimers();
+    try {
+      const plugin = new ZoteroChatPlugin() as any;
+      plugin.onTurnCompleted = vi.fn();
+      plugin.codex = {
+        setInteractionContext: vi.fn(),
+        state: {
+          activeThreadId: "A",
+          running: true,
+          fallbackReason: null,
+          models: [],
+          mode: "ask",
+        },
+        getChatEntries: () => [
+          { id: "u1", kind: "user", text: "问 A" },
+        ],
+        getActivePlan: () => null,
+        getActiveDiffs: () => [],
+        getPendingApprovals: () => [],
+        getCheckpoints: () => [],
+        getThreadOptions: () => [],
+        isSignedIn: () => false,
+      };
+
+      vi.setSystemTime(new Date("2026-07-23T10:00:00Z"));
+      plugin.renderChatViews(); // Thread A starts running.
+
+      // The user switches to thread B mid-turn; the service interrupts A and goes idle on B.
+      vi.setSystemTime(new Date("2026-07-23T10:05:00Z"));
+      plugin.codex.state.activeThreadId = "B";
+      plugin.codex.state.running = false;
+      plugin.codex.getChatEntries = () => [];
+      plugin.renderChatViews();
+
+      expect(plugin.turnDurationsForActiveThread()).toEqual({});
+      expect(plugin.onTurnCompleted).not.toHaveBeenCalled();
+
+      // Reopening A while idle must not fabricate a completed turn from the stale start time.
+      plugin.codex.state.activeThreadId = "A";
+      plugin.codex.getChatEntries = () => [
+        { id: "u1", kind: "user", text: "问 A" },
+      ];
+      plugin.renderChatViews();
+
+      expect(plugin.turnDurationsForActiveThread()).toEqual({});
+      expect(plugin.onTurnCompleted).not.toHaveBeenCalled();
+    }
+    finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("onMainWindowUnload destroys the window's float panel", async () => {
     const previousZotero = (globalThis as any).Zotero;
     (globalThis as any).Zotero = { getMainWindow: () => window };
