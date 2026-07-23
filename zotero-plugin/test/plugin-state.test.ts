@@ -60,6 +60,74 @@ describe("Zotkit Reader terminal state", () => {
     input.remove();
   });
 
+  it("adds ⌘K to the Reader shortcuts and leaves editable controls alone", () => {
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.toggleFloatPanel = vi.fn(async () => {});
+    plugin.installShortcutHandler(window);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    expect(plugin.toggleFloatPanel).toHaveBeenCalledOnce();
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    expect(plugin.toggleFloatPanel).toHaveBeenCalledOnce();
+    plugin.removeShortcutHandler(window);
+    input.remove();
+  });
+
+  it("toggleFloatPanel opens with the cached selection attached, then closes and restores focus", async () => {
+    const previousZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { getMainWindow: () => window };
+    const focusTarget = document.createElement("button");
+    document.body.appendChild(focusTarget);
+    focusTarget.focus();
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.codex = { setInteractionContext: vi.fn() };
+    plugin.context = {
+      selection: { text: "chosen theorem", pageNumber: 3 },
+      page: { pageNumber: 3 },
+    };
+    plugin.ensureChatSession = vi.fn(async () => {});
+    plugin.renderChatViews = vi.fn();
+    plugin.reportError = vi.fn();
+
+    await plugin.toggleFloatPanel();
+    const root = document.querySelector<HTMLElement>(".zc-float")!;
+    expect(root.hidden).toBe(false);
+    expect(plugin.addedContextIDs.has("current-selection")).toBe(true);
+    expect(plugin.ensureChatSession).toHaveBeenCalledOnce();
+    expect(plugin.renderChatViews).toHaveBeenCalled();
+
+    await plugin.toggleFloatPanel();
+    expect(root.hidden).toBe(true);
+    expect(document.activeElement).toBe(focusTarget);
+
+    plugin.floatPanels.get(window)?.view.destroy();
+    plugin.floatPanels.get(window)?.host.remove();
+    focusTarget.remove();
+    (globalThis as any).Zotero = previousZotero;
+  });
+
+  it("toggleFloatPanel opens without a chip when nothing is selected", async () => {
+    const previousZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { getMainWindow: () => window };
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.codex = { setInteractionContext: vi.fn() };
+    plugin.context = null;
+    plugin.ensureChatSession = vi.fn(async () => {});
+    plugin.renderChatViews = vi.fn();
+
+    await plugin.toggleFloatPanel();
+    expect(document.querySelector<HTMLElement>(".zc-float")!.hidden).toBe(false);
+    expect(plugin.addedContextIDs.has("current-selection")).toBe(false);
+
+    plugin.hideFloatPanel(window);
+    plugin.floatPanels.get(window)?.view.destroy();
+    plugin.floatPanels.get(window)?.host.remove();
+    (globalThis as any).Zotero = previousZotero;
+  });
+
   it("treats only an expanded, connected custom section as active", () => {
     const plugin = new ZoteroChatPlugin() as any;
     const collapsed = document.createElement("collapsible-section");

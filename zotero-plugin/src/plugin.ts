@@ -23,6 +23,7 @@ import {
   type ResearchPlan,
   type SidebarPhase,
 } from "./sidebar";
+import { FloatPanelView, latestExchange } from "./float-panel";
 import { TerminalPanel, type TerminalPaperOptions } from "./terminal-panel";
 import { loadSettings, type ZoteroChatSettings } from "./settings";
 import {
@@ -59,6 +60,8 @@ export class ZoteroChatPlugin {
   private mutations!: ZoteroMutationService;
   private views = new Set<HTMLElement>();
   private chatViews = new Map<HTMLElement, SidebarView>();
+  private floatPanels = new Map<Window, { host: HTMLElement; view: FloatPanelView }>();
+  private floatFocusReturn: HTMLElement | null = null;
   private shortcutWindows = new Set<Window>();
   private context: ReaderContext | null = null;
   private notifierID: string | null = null;
@@ -160,6 +163,11 @@ export class ZoteroChatPlugin {
     }
     for (const view of this.chatViews.values()) view.destroy();
     this.chatViews.clear();
+    for (const entry of this.floatPanels.values()) {
+      entry.view.destroy();
+      entry.host.remove();
+    }
+    this.floatPanels.clear();
     this.views.clear();
     this.codex?.stop();
     this.terminal?.destroy();
@@ -183,6 +191,12 @@ export class ZoteroChatPlugin {
   }
 
   async onMainWindowUnload(win: Window): Promise<void> {
+    const floatEntry = this.floatPanels.get(win);
+    if (floatEntry) {
+      floatEntry.view.destroy();
+      floatEntry.host.remove();
+      this.floatPanels.delete(win);
+    }
     this.removeWindowAssets(win);
   }
 
@@ -213,6 +227,12 @@ export class ZoteroChatPlugin {
         event.stopPropagation();
         this.openSidebar();
         void this.openChatWithSelection(false).catch((error) => this.reportError(error));
+        return;
+      }
+      if (!event.shiftKey && key === "k") {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.toggleFloatPanel().catch((error) => this.reportError(error));
         return;
       }
       if (event.shiftKey && key === "j") {
@@ -591,12 +611,19 @@ export class ZoteroChatPlugin {
     this.terminal.setVisible(false);
     const host = body || this.activeSidebarBody();
     if (!host) return Promise.reject(new Error("请先展开 Zotkit 侧栏"));
-    const view = this.mountChat(host);
-    if (this.chatOpenPromise) {
-      if (focus) void this.chatOpenPromise.then(() => view.focusComposer());
-      return this.chatOpenPromise;
+    this.mountChat(host);
+    const pending = this.ensureChatSession();
+    if (focus) {
+      void pending.then(() => {
+        if (host.isConnected) this.chatViews.get(host)?.focusComposer();
+      }).catch(() => { /* 启动失败由调用方处理 */ });
     }
-    const pending = this.openResearchChatInternal(host, focus);
+    return pending;
+  }
+
+  private ensureChatSession(): Promise<void> {
+    if (this.chatOpenPromise) return this.chatOpenPromise;
+    const pending = this.ensureChatSessionInternal();
     this.chatOpenPromise = pending;
     const clear = () => {
       if (this.chatOpenPromise === pending) this.chatOpenPromise = null;
@@ -605,7 +632,7 @@ export class ZoteroChatPlugin {
     return pending;
   }
 
-  private async openResearchChatInternal(body: HTMLElement, focus: boolean): Promise<void> {
+  private async ensureChatSessionInternal(): Promise<void> {
     this.chatPhase = "connecting";
     this.chatError = "";
     this.renderChatViews();
@@ -633,7 +660,6 @@ export class ZoteroChatPlugin {
     finally {
       this.renderChatViews();
     }
-    if (focus && body.isConnected) this.chatViews.get(body)?.focusComposer();
   }
 
   private async retryResearchChat(body?: HTMLElement): Promise<void> {
@@ -642,7 +668,7 @@ export class ZoteroChatPlugin {
   }
 
   private async sendChat(text: string): Promise<void> {
-    if (!this.codex.state.connected) await this.openResearchChat(undefined, false);
+    if (!this.codex.state.connected) await this.ensureChatSession();
     if (!this.codex.isSignedIn()) throw new Error("请先使用 ChatGPT 登录 Codex");
     this.chatPhase = "ready";
     await this.codex.send(text, this.selectedModel, this.selectedEffort);
@@ -659,6 +685,89 @@ export class ZoteroChatPlugin {
     await this.openResearchChat(undefined, false);
     if (newThread && this.codex.isSignedIn() && this.context) await this.codex.newThread();
     this.attachSelection(true);
+  }
+
+  private mountFloatPanel(win: Window): { host: HTMLElement; view: FloatPanelView } {
+    let entry = this.floatPanels.get(win);
+    if (entry) return entry;
+    const host = win.document.createElement("div");
+    host.className = "zc-float-host";
+    win.document.documentElement.appendChild(host);
+    const view = new FloatPanelView(host, {
+      onSend: (text) => void this.sendChat(text).catch((error) => this.reportError(error)),
+      onStop: () => void this.codex.interrupt().catch((error) => this.reportError(error)),
+      onClose: () => this.hideFloatPanel(win),
+      onRemoveSelection: () => this.removeInteractionContext("current-selection"),
+      onLogin: () => void this.codex.login().catch((error) => this.reportError(error)),
+    });
+    entry = { host, view };
+    this.floatPanels.set(win, entry);
+    return entry;
+  }
+
+  private async toggleFloatPanel(): Promise<void> {
+    const win = Zotero.getMainWindow();
+    if (!win) return;
+    const existing = this.floatPanels.get(win);
+    if (existing?.view.isVisible()) {
+      this.hideFloatPanel(win);
+      return;
+    }
+    const entry = this.mountFloatPanel(win);
+    const active = win.document.activeElement;
+    this.floatFocusReturn = active && active !== win.document.body
+      ? active as HTMLElement
+      : null;
+    // The selection-popup hook keeps this.context.selection fresh, so the
+    // cached value is what the user just highlighted (mirrors ⌘L).
+    if (this.context?.selection?.text) {
+      this.addedContextIDs.add("current-selection");
+      this.chatError = "";
+      this.updateInteractionContext();
+    }
+    entry.view.show();
+    this.renderChatViews();
+    entry.view.focusComposer();
+    void this.ensureChatSession()
+      .then(() => entry.view.focusComposer())
+      .catch((error) => this.reportError(error));
+  }
+
+  private hideFloatPanel(win: Window): void {
+    const entry = this.floatPanels.get(win);
+    if (!entry?.view.isVisible()) return;
+    entry.view.hide();
+    const target = this.floatFocusReturn;
+    this.floatFocusReturn = null;
+    if (target?.isConnected) {
+      try { target.focus(); }
+      catch { /* previously focused node may be gone */ }
+    }
+  }
+
+  private renderFloatPanels(): void {
+    const context = this.context;
+    for (const [win, entry] of this.floatPanels) {
+      if (win.closed || !entry.host.isConnected) {
+        entry.view.destroy();
+        entry.host.remove();
+        this.floatPanels.delete(win);
+        continue;
+      }
+      entry.view.setState({
+        phase: this.chatPhase,
+        running: this.codex.state.running,
+        error: this.chatError || this.codex.state.fallbackReason || undefined,
+        entries: latestExchange(this.codex.getChatEntries()),
+        paperTitle: context ? paperTitle(context) : "论文助手",
+        selection: this.addedContextIDs.has("current-selection") && context?.selection?.text
+          ? {
+            text: context.selection.text,
+            pageNumber: context.selection.pageNumber ?? context.page.pageNumber,
+          }
+          : null,
+      });
+    }
   }
 
   private attachSelection(focus: boolean): void {
@@ -782,6 +891,7 @@ export class ZoteroChatPlugin {
         checkpoints,
       });
     }
+    this.renderFloatPanels();
   }
 
   private handleCodexState(): void {
