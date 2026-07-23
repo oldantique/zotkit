@@ -33,6 +33,7 @@ Zotkit 在 Zotero 9 PDF Reader 的右侧 Item Pane 中提供结构化 Research C
 | `⌘L` | 把当前选区加入一个新会话；没有选区时打开 Chat |
 | `⌘⇧L` | 把当前选区加入当前会话 |
 | `⌘⇧J` | 打开并聚焦高级 Terminal |
+| `⌘K` | 呼出/关闭浮动提问窗（带当前 PDF 选区） |
 
 Reader 文字选择弹窗中的 **Ask in Zotkit** 会把选区加入当前 Research Chat。插件传递的是可提取的纯文本，并限制长度；它不会用选中文字自动批准操作。
 

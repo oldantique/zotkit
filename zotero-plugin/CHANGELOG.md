@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- 新增 ⌘K 浮动提问窗：Spotlight 式毛玻璃卡片悬浮于 PDF 之上，自动携带当前选区，与侧边栏共享同一会话；Esc/⌘K 关闭，可拖动。
+- 全部界面改为 Apple 风格：系统蓝主题（浅色 #007AFF / 深色 #0A84FF）、系统灰阶、iMessage 式用户气泡、毛玻璃顶栏与登录遮罩。
+
 ## 0.3.0
 
 - Made a Cursor-style Research Chat the default Reader surface while retaining the real Codex/Claude terminal as an advanced mode with a one-click return to Chat.

@@ -345,7 +345,7 @@ export class ZoteroChatPlugin {
       button.type = "button";
       button.title = "打开 Zotkit Research Chat（⌘I）";
       button.setAttribute("aria-label", button.title);
-      button.style.cssText = "display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:6px;background:transparent;cursor:pointer;padding:5px";
+      button.style.cssText = "display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:8px;background:transparent;cursor:pointer;padding:5px";
       const icon = doc.createElement("img");
       // Reader documents use a resource:// origin and cannot load privileged
       // chrome:// images. Bundle this icon as a data URL so the toolbar button
@@ -1269,7 +1269,7 @@ export class ZoteroChatPlugin {
     const button = doc.createElement("button");
     button.type = "button";
     button.textContent = label;
-    button.style.cssText = "min-height:28px;padding:4px 9px;border:1px solid rgba(120,110,160,.25);border-radius:7px;background:rgba(108,92,231,.11);color:inherit;font:600 11px -apple-system;cursor:pointer";
+    button.style.cssText = "min-height:28px;padding:4px 10px;border:1px solid rgba(0,122,255,.3);border-radius:8px;background:rgba(0,122,255,.12);color:inherit;font:600 11px -apple-system;cursor:pointer";
     button.addEventListener("click", callback);
     return button;
   }
