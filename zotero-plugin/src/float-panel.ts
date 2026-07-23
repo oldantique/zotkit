@@ -5,6 +5,14 @@ import {
   type ModelOption,
   type SidebarPhase,
 } from "./sidebar";
+import {
+  activityLabel,
+  contentEntries,
+  formatElapsed,
+  groupEntries,
+  processEntries,
+  type Exchange,
+} from "./exchanges";
 
 export interface FloatSelectionInfo {
   text: string;
@@ -66,6 +74,9 @@ export class FloatPanelView {
     turnDurations: {},
   };
   private position: { left: number; top: number } | null = null;
+  private readonly expandedTurns = new Set<string>();
+  private activityTimer: number | null = null;
+  private pinnedToBottom = true;
   private readonly handleResize = () => {
     if (this.root.hidden) return;
     if (this.position) this.applyPosition(this.position.left, this.position.top);
@@ -88,6 +99,10 @@ export class FloatPanelView {
   }
 
   destroy(): void {
+    if (this.activityTimer !== null) {
+      this.doc.defaultView?.clearInterval(this.activityTimer);
+      this.activityTimer = null;
+    }
     this.doc.defaultView?.removeEventListener("resize", this.handleResize);
     this.root.remove();
   }
@@ -98,6 +113,7 @@ export class FloatPanelView {
   }
 
   show(): void {
+    this.pinnedToBottom = true;
     this.root.hidden = false;
     if (this.position) this.applyPosition(this.position.left, this.position.top);
   }
@@ -191,6 +207,10 @@ export class FloatPanelView {
 
     this.transcript = this.doc.createElement("main");
     this.transcript.className = "zc-float-transcript";
+    this.transcript.addEventListener("scroll", () => {
+      const { scrollTop, clientHeight, scrollHeight } = this.transcript;
+      this.pinnedToBottom = scrollTop + clientHeight >= scrollHeight - 4;
+    });
 
     this.root.addEventListener("keydown", (event) => {
       if (event.isComposing) return;
@@ -280,10 +300,99 @@ export class FloatPanelView {
   private renderTranscript(): void {
     this.transcript.replaceChildren();
     this.transcript.hidden = this.state.entries.length === 0;
-    for (const entry of this.state.entries) {
-      this.transcript.appendChild(this.renderEntry(entry));
+
+    let activityGroup: Exchange | null = null;
+    const groups = groupEntries(this.state.entries);
+    groups.forEach((group, index) => {
+      for (const entry of contentEntries(group)) {
+        this.transcript.appendChild(this.renderEntry(entry));
+      }
+      if (group.id === "preamble") return;
+      const isLastGroup = index === groups.length - 1;
+      if (isLastGroup && this.state.running) {
+        activityGroup = group;
+        return;
+      }
+      const steps = processEntries(group).length;
+      const elapsed = this.state.turnDurations[group.id];
+      if (steps === 0 && elapsed === undefined) return;
+      this.transcript.appendChild(this.renderTurnSummary(group, steps, elapsed));
+      if (this.expandedTurns.has(group.id)) {
+        this.transcript.appendChild(this.renderTurnDetail(processEntries(group)));
+      }
+    });
+    const groupIds = new Set(groups.map((group) => group.id));
+    for (const id of this.expandedTurns) {
+      if (!groupIds.has(id)) this.expandedTurns.delete(id);
     }
-    this.transcript.scrollTop = this.transcript.scrollHeight;
+    if (activityGroup) this.transcript.appendChild(this.renderActivityLine(activityGroup));
+
+    if (this.pinnedToBottom) {
+      this.transcript.scrollTop = this.transcript.scrollHeight;
+    }
+    this.syncActivityTimer();
+  }
+
+  private renderTurnSummary(group: Exchange, steps: number, elapsed: number | undefined): HTMLElement {
+    const button = this.doc.createElement("button");
+    button.type = "button";
+    button.className = "zc-turn-summary";
+    const parts: string[] = [];
+    if (elapsed !== undefined) parts.push(`⏱ ${formatElapsed(elapsed)}`);
+    if (steps > 0) parts.push(`${steps} 个步骤`);
+    button.textContent = parts.join(" · ");
+    button.addEventListener("click", () => {
+      if (this.expandedTurns.has(group.id)) this.expandedTurns.delete(group.id);
+      else this.expandedTurns.add(group.id);
+      this.render();
+    });
+    return button;
+  }
+
+  private renderTurnDetail(processes: ChatEntry[]): HTMLElement {
+    const container = this.doc.createElement("div");
+    container.className = "zc-turn-detail";
+    for (const entry of processes) {
+      container.appendChild(this.renderEntry(entry));
+    }
+    return container;
+  }
+
+  private renderActivityLine(group: Exchange): HTMLElement {
+    const line = this.doc.createElement("div");
+    line.className = "zc-activity";
+    const spinner = this.doc.createElement("span");
+    spinner.className = "zc-activity-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const label = this.doc.createElement("span");
+    label.className = "zc-activity-label";
+    label.textContent = activityLabel(group.entries);
+    line.append(spinner, label);
+    if (this.state.turnStartedAt !== null) {
+      const elapsed = this.doc.createElement("span");
+      elapsed.className = "zc-activity-elapsed";
+      elapsed.textContent = formatElapsed(Date.now() - this.state.turnStartedAt);
+      line.appendChild(elapsed);
+    }
+    return line;
+  }
+
+  private syncActivityTimer(): void {
+    if (this.state.running) {
+      if (this.activityTimer === null) {
+        this.activityTimer = this.doc.defaultView?.setInterval(() => {
+          const turnStartedAt = this.state.turnStartedAt;
+          if (turnStartedAt === null) return;
+          const elapsed = this.transcript.querySelector<HTMLElement>(".zc-activity-elapsed");
+          if (elapsed) elapsed.textContent = formatElapsed(Date.now() - turnStartedAt);
+        }, 1000) ?? null;
+      }
+      return;
+    }
+    if (this.activityTimer !== null) {
+      this.doc.defaultView?.clearInterval(this.activityTimer);
+      this.activityTimer = null;
+    }
   }
 
   private renderEntry(entry: ChatEntry): HTMLElement {

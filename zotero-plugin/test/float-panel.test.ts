@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FloatPanelView,
   latestExchange,
@@ -151,6 +151,7 @@ describe("FloatPanelView selection chip and transcript", () => {
     expect(transcript.hidden).toBe(false);
     expect(transcript.textContent).not.toContain("old question");
     expect(transcript.querySelector(".zc-user-bubble")?.textContent).toBe("这段在说什么？");
+    transcript.querySelector<HTMLButtonElement>(".zc-turn-summary")?.click();
     expect(transcript.textContent).toContain("zotero_get_current_selection");
     expect(transcript.querySelector("strong")?.textContent).toBe("核心");
   });
@@ -204,6 +205,208 @@ describe("FloatPanelView drag", () => {
     document.dispatchEvent(new MouseEvent("mousemove", { clientX: 210, clientY: 130, bubbles: true }));
     expect(root.style.left).toBe("");
     expect(root.classList.contains("is-dragged")).toBe(false);
+  });
+});
+
+describe("FloatPanelView activity line", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("collapses running process entries into a single activity line", () => {
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      running: true, turnStartedAt: Date.now(),
+      entries: [
+        { id: "u1", kind: "user", text: "问" },
+        { id: "r1", kind: "reasoning", title: "思考过程", text: "…", state: "complete" },
+        { id: "t1", kind: "tool", title: "zotero_read_pdf_pages", text: "", state: "running" },
+      ],
+    });
+    expect(host.querySelectorAll(".zc-float-entry.zc-entry-tool").length).toBe(0);
+    expect(host.querySelectorAll(".zc-float-entry.zc-entry-reasoning").length).toBe(0);
+    const label = host.querySelector(".zc-activity-label")!;
+    expect(label.textContent).toBe("正在调用 读取论文页面");
+  });
+
+  it("renders an expandable summary line after completion", () => {
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      running: false, turnDurations: { u1: 28_000 },
+      entries: [
+        { id: "u1", kind: "user", text: "问" },
+        { id: "t1", kind: "tool", title: "zotero_read_pdf_pages", text: "done", state: "complete" },
+        { id: "a1", kind: "assistant", text: "答", state: "complete" },
+      ],
+    });
+    expect(host.querySelector(".zc-activity")).toBeNull();
+    const summary = host.querySelector(".zc-turn-summary")!;
+    expect(summary.textContent).toContain("28s");
+    expect(summary.textContent).toContain("1 个步骤");
+    expect(host.querySelector(".zc-turn-detail")).toBeNull();
+    (summary as HTMLElement).click();
+    expect(host.querySelectorAll(".zc-turn-detail .zc-tool-card").length).toBe(1);
+    (summary as HTMLElement).click();
+    expect(host.querySelector(".zc-turn-detail")).toBeNull();
+  });
+
+  it("omits the summary line when there is nothing to report", () => {
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready", running: false, turnDurations: {},
+      entries: [
+        { id: "u1", kind: "user", text: "问" },
+        { id: "a1", kind: "assistant", text: "答", state: "complete" },
+      ],
+    });
+    expect(host.querySelector(".zc-turn-summary")).toBeNull();
+  });
+
+  describe("pinned autoscroll", () => {
+    // happy-dom's scrollHeight/clientHeight getters are hardcoded to 0, so a
+    // real "is the transcript visually at the bottom" check is unavailable
+    // here. We shadow those getters with own properties on the live
+    // `.zc-float-transcript` element to fake realistic geometry, which lets
+    // us drive the `scroll` listener's `pinnedToBottom` computation and then
+    // observe the resulting `scrollTop` writes the implementation performs.
+    function fakeGeometry(transcript: HTMLElement, scrollHeight: number, clientHeight: number): void {
+      Object.defineProperty(transcript, "scrollHeight", { value: scrollHeight, configurable: true });
+      Object.defineProperty(transcript, "clientHeight", { value: clientHeight, configurable: true });
+    }
+
+    it("autoscrolls after every render while pinned, stops once the user scrolls away, and re-pins when the panel is (re)shown", () => {
+      const { view, host } = mount();
+      const transcript = host.querySelector<HTMLElement>(".zc-float-transcript")!;
+      fakeGeometry(transcript, 500, 100);
+
+      // Default `pinnedToBottom = true`, and autoscroll fires on every render.
+      view.setState({ phase: "ready", entries: [{ id: "u1", kind: "user", text: "问" }] });
+      expect(transcript.scrollTop).toBe(500);
+
+      // User scrolls away from the bottom -> the scroll listener unpins.
+      transcript.scrollTop = 0;
+      transcript.dispatchEvent(new Event("scroll"));
+
+      // A render while unpinned must not snap the user back to the bottom.
+      view.setState({
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "a1", kind: "assistant", text: "答" },
+        ],
+      });
+      expect(transcript.scrollTop).toBe(0);
+
+      // The float panel has no thread tabs to key a reset off of; reopening
+      // it via show() re-pins so the next render catches up to the bottom.
+      view.show();
+      view.setState({
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "a1", kind: "assistant", text: "答 2" },
+        ],
+      });
+      expect(transcript.scrollTop).toBe(500);
+    });
+  });
+
+  describe("activity timer lifecycle", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("updates only the elapsed text node once per second while running", () => {
+      const { view, host } = mount();
+      // Offset so each 1000ms tick crosses a whole-second rounding boundary
+      // (formatElapsed rounds ms/1000), making the text change predictably.
+      const startedAt = Date.now() - 700;
+      view.setState({
+        phase: "ready",
+        running: true,
+        turnStartedAt: startedAt,
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      const label = host.querySelector(".zc-activity-label")!;
+      const elapsed = host.querySelector(".zc-activity-elapsed")!;
+      expect(elapsed.textContent).toBe("1s");
+
+      vi.advanceTimersByTime(1000);
+      expect(host.querySelector(".zc-activity-elapsed")?.textContent).toBe("2s");
+      // Only the elapsed text changed; the rest of the activity line (and
+      // the DOM node itself) was not touched by a full re-render.
+      expect(host.querySelector(".zc-activity-label")).toBe(label);
+      expect(host.querySelector(".zc-activity-elapsed")).toBe(elapsed);
+
+      vi.advanceTimersByTime(1000);
+      expect(elapsed.textContent).toBe("3s");
+      expect(host.querySelector(".zc-activity-elapsed")).toBe(elapsed);
+    });
+
+    it("does not start a second interval on repeated setState while running", () => {
+      const { view } = mount();
+      const setIntervalSpy = vi.spyOn(window, "setInterval");
+      view.setState({
+        phase: "ready",
+        running: true,
+        turnStartedAt: Date.now(),
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      view.setState({
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "r1", kind: "reasoning", text: "思考", state: "running" },
+        ],
+      });
+      view.setState({
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "r1", kind: "reasoning", text: "思考中…", state: "running" },
+        ],
+      });
+
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it("clears the interval once running turns false", () => {
+      const { view } = mount();
+      view.setState({
+        phase: "ready",
+        running: true,
+        turnStartedAt: Date.now(),
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+      view.setState({ running: false });
+
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("clears the interval on destroy", () => {
+      const { view } = mount();
+      view.setState({
+        phase: "ready",
+        running: true,
+        turnStartedAt: Date.now(),
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      view.destroy();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });
 
