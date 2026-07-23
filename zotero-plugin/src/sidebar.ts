@@ -186,6 +186,7 @@ export class SidebarView {
   private readonly expandedTurns = new Set<string>();
   private activityTimer: number | null = null;
   private pinnedToBottom = true;
+  private lastActiveThreadId: string | undefined = undefined;
 
   constructor(
     body: HTMLElement,
@@ -846,6 +847,10 @@ export class SidebarView {
         ));
       }
     });
+    const groupIds = new Set(groups.map((group) => group.id));
+    for (const id of this.expandedTurns) {
+      if (!groupIds.has(id)) this.expandedTurns.delete(id);
+    }
 
     for (const review of this.state.reviews) {
       const id = `diff-review:${review.id}`;
@@ -877,7 +882,12 @@ export class SidebarView {
       if (!activeIDs.has(id)) this.entryNodes.delete(id);
     }
     reconcileChildren(this.transcript, desired);
-    if (this.state.running && this.pinnedToBottom) {
+    const activeThreadId = this.state.threads.find((thread) => thread.active)?.id;
+    if (activeThreadId !== this.lastActiveThreadId) {
+      this.pinnedToBottom = true;
+    }
+    this.lastActiveThreadId = activeThreadId;
+    if (this.pinnedToBottom) {
       this.transcript.scrollTop = this.transcript.scrollHeight;
     }
     this.syncActivityTimer();

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SidebarView, type SidebarCallbacks } from "../src/sidebar";
@@ -308,6 +308,10 @@ describe("SidebarView", () => {
 });
 
 describe("SidebarView activity line", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
   function mountSidebar(): { view: SidebarView; host: HTMLElement } {
     const host = document.createElement("div");
     document.body.appendChild(host);
@@ -358,6 +362,169 @@ describe("SidebarView activity line", () => {
       { id: "a1", kind: "assistant", text: "答", state: "complete" },
     ]});
     expect(host.querySelector(".zc-turn-summary")).toBeNull();
+  });
+
+  describe("pinned autoscroll", () => {
+    // happy-dom's scrollHeight/clientHeight getters are hardcoded to 0, so a
+    // real "is the transcript visually at the bottom" check is unavailable
+    // here. We shadow those getters with own properties on the live
+    // `.zc-transcript` element to fake realistic geometry, which lets us
+    // drive the `scroll` listener's `pinnedToBottom` computation and then
+    // observe the resulting `scrollTop` writes the implementation performs.
+    function fakeGeometry(transcript: HTMLElement, scrollHeight: number, clientHeight: number): void {
+      Object.defineProperty(transcript, "scrollHeight", { value: scrollHeight, configurable: true });
+      Object.defineProperty(transcript, "clientHeight", { value: clientHeight, configurable: true });
+    }
+
+    it("autoscrolls after every render while pinned, stops once the user scrolls away, and catches up again on a thread switch", () => {
+      const { view, host } = mountSidebar();
+      const transcript = host.querySelector<HTMLElement>(".zc-transcript")!;
+      fakeGeometry(transcript, 500, 100);
+
+      // Default `pinnedToBottom = true`, and autoscroll now fires on every
+      // render (not just while `running`).
+      view.setState({
+        running: false,
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      expect(transcript.scrollTop).toBe(500);
+
+      // User scrolls away from the bottom -> the scroll listener unpins.
+      transcript.scrollTop = 0;
+      transcript.dispatchEvent(new Event("scroll"));
+
+      // A same-thread render must not snap the user back to the bottom.
+      view.setState({
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "a1", kind: "assistant", text: "答" },
+        ],
+      });
+      expect(transcript.scrollTop).toBe(0);
+
+      // Switching the active thread id must re-pin and catch up to the
+      // bottom even though the user never touched the scrollbar again.
+      view.setState({
+        threads: [{ id: "thread-a", title: "A", updatedAt: "2026-07-22", active: true }],
+      });
+      expect(transcript.scrollTop).toBe(500);
+
+      // Scroll away again, then re-render the *same* active thread: still
+      // must not be forced back to the bottom (no thread-id change).
+      transcript.scrollTop = 0;
+      transcript.dispatchEvent(new Event("scroll"));
+      view.setState({
+        threads: [{ id: "thread-a", title: "A", updatedAt: "2026-07-22", active: true }],
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "a1", kind: "assistant", text: "答 2" },
+        ],
+      });
+      expect(transcript.scrollTop).toBe(0);
+
+      // Switching to a different active thread id catches up again.
+      view.setState({
+        threads: [
+          { id: "thread-a", title: "A", updatedAt: "2026-07-22", active: false },
+          { id: "thread-b", title: "B", updatedAt: "2026-07-22", active: true },
+        ],
+      });
+      expect(transcript.scrollTop).toBe(500);
+    });
+  });
+
+  describe("activity timer lifecycle", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("updates only the elapsed text node once per second while running", () => {
+      const { view, host } = mountSidebar();
+      // Offset so each 1000ms tick crosses a whole-second rounding boundary
+      // (formatElapsed rounds ms/1000), making the text change predictably.
+      const startedAt = Date.now() - 700;
+      view.setState({
+        running: true,
+        turnStartedAt: startedAt,
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      const label = host.querySelector(".zc-activity-label")!;
+      const elapsed = host.querySelector(".zc-activity-elapsed")!;
+      expect(elapsed.textContent).toBe("1s");
+
+      vi.advanceTimersByTime(1000);
+      expect(host.querySelector(".zc-activity-elapsed")?.textContent).toBe("2s");
+      // Only the elapsed text changed; the rest of the activity line (and
+      // the DOM node itself) was not touched by a full re-render.
+      expect(host.querySelector(".zc-activity-label")).toBe(label);
+      expect(host.querySelector(".zc-activity-elapsed")).toBe(elapsed);
+
+      vi.advanceTimersByTime(1000);
+      expect(elapsed.textContent).toBe("3s");
+      expect(host.querySelector(".zc-activity-elapsed")).toBe(elapsed);
+    });
+
+    it("does not start a second interval on repeated setState while running", () => {
+      const { view } = mountSidebar();
+      const setIntervalSpy = vi.spyOn(window, "setInterval");
+      view.setState({
+        running: true,
+        turnStartedAt: Date.now(),
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      view.setState({
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "r1", kind: "reasoning", text: "思考", state: "running" },
+        ],
+      });
+      view.setState({
+        entries: [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "r1", kind: "reasoning", text: "思考中…", state: "running" },
+        ],
+      });
+
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it("clears the interval once running turns false", () => {
+      const { view } = mountSidebar();
+      view.setState({
+        running: true,
+        turnStartedAt: Date.now(),
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+      view.setState({ running: false });
+
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("clears the interval on destroy", () => {
+      const { view } = mountSidebar();
+      view.setState({
+        running: true,
+        turnStartedAt: Date.now(),
+        entries: [{ id: "u1", kind: "user", text: "问" }],
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      view.destroy();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });
 
