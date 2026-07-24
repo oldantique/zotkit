@@ -109,6 +109,27 @@ export class FloatPanelView {
    * cleared for the empty state (see `applyHeightForEmptyState`).
    */
   private persistedHeight: string | null = null;
+  /**
+   * The in-flight value while the opacity slider is being dragged. `input`
+   * fires continuously and only previews locally; `state.opacity` stays
+   * stale until the settled `change` callback round-trips through the
+   * plugin. Renders fire constantly via `onState` in between, and without
+   * tracking this separately `renderOpacity` would reset the slider (and
+   * its live preview) to that stale value mid-drag -- a visible jump while
+   * the user is still holding the thumb. Cleared once `change` fires.
+   */
+  private pendingOpacity: number | null = null;
+  /**
+   * True only while the panel's current inline height was put there by
+   * `restoreSize()` and has not since been superseded by a genuine grip
+   * drag. `applyHeightForEmptyState` may only clear a height while this flag
+   * is set -- otherwise a user who drags the resize grip on a freshly empty
+   * panel would have that live resize silently reverted by the next
+   * unrelated render. Cleared the moment `handlePanelResize` sees a real
+   * grip-driven inline change, so a grip resize made while empty is never
+   * mistaken for a restore.
+   */
+  private restoredHeightPending = false;
   private readonly handleResize = () => {
     if (this.root.hidden) return;
     if (this.position) this.applyPosition(this.position.left, this.position.top);
@@ -155,6 +176,7 @@ export class FloatPanelView {
     this.root.style.height = `${height}px`;
     this.persistedHeight = this.root.style.height;
     this.lastInlineSize = this.currentInlineSize();
+    this.restoredHeightPending = true;
   }
 
   private currentInlineSize(): string {
@@ -176,6 +198,10 @@ export class FloatPanelView {
     const inlineSize = this.currentInlineSize();
     if (inlineSize === this.lastInlineSize) return;
     this.lastInlineSize = inlineSize;
+    // A genuine grip-driven inline change supersedes any pending restored
+    // height: from now on this height is the user's own, and must never be
+    // cleared just because the transcript happens to be empty.
+    this.restoredHeightPending = false;
     const width = Math.round(entry.contentRect.width);
     const height = Math.round(entry.contentRect.height);
     const win = this.doc.defaultView;
@@ -230,10 +256,12 @@ export class FloatPanelView {
     // callback into the plugin, which would re-render every listening view
     // on every tick) and forward the settled value to the plugin on `change`.
     this.alphaSlider.addEventListener("input", () => {
-      this.root.style.setProperty("--zc-float-alpha", String(Number(this.alphaSlider.value) / 100));
+      this.pendingOpacity = Number(this.alphaSlider.value);
+      this.root.style.setProperty("--zc-float-alpha", String(this.pendingOpacity / 100));
     });
     this.alphaSlider.addEventListener("change", () => {
       this.callbacks.onOpacityChange(Number(this.alphaSlider.value));
+      this.pendingOpacity = null;
     });
     const close = this.doc.createElement("button");
     close.type = "button";
@@ -360,11 +388,17 @@ export class FloatPanelView {
    * has entries again. The width is never touched either way, and the
    * ResizeObserver snapshot is kept in sync so this bookkeeping is never
    * mistaken for a user resize.
+   *
+   * Only a height that came from `restoreSize()` (tracked by
+   * `restoredHeightPending`) is eligible to be cleared here. Renders fire
+   * constantly via `onState`, so without that guard a user who drags the
+   * resize grip on a freshly empty panel would have their live resize
+   * silently reverted by the very next unrelated render.
    */
   private applyHeightForEmptyState(): void {
     const hasEntries = this.state.entries.length > 0;
     if (!hasEntries) {
-      if (this.root.style.height === "") return;
+      if (!this.restoredHeightPending || this.root.style.height === "") return;
       this.persistedHeight = this.root.style.height;
       this.root.style.height = "";
       this.lastInlineSize = this.currentInlineSize();
@@ -377,7 +411,7 @@ export class FloatPanelView {
   }
 
   private renderOpacity(): void {
-    const opacity = this.state.opacity;
+    const opacity = this.pendingOpacity ?? this.state.opacity;
     if (this.alphaSlider.value !== String(opacity)) this.alphaSlider.value = String(opacity);
     this.root.style.setProperty("--zc-float-alpha", String(opacity / 100));
   }

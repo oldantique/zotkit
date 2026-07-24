@@ -33,6 +33,29 @@ function mount(handlers = callbacks()): { host: HTMLElement; view: FloatPanelVie
   return { host, view, handlers };
 }
 
+/**
+ * Stubs a fake `ResizeObserver` (happy-dom's never actually fires callbacks)
+ * so a test can drive `FloatPanelView`'s private `handlePanelResize` the same
+ * way a real Gecko `resize: both` grip drag would: write the inline style,
+ * then invoke the observer callback.
+ */
+function stubFakeResizeObserver(): { getObservedCallback: () => ResizeObserverCallback; restore: () => void } {
+  const previous = (globalThis as any).ResizeObserver;
+  let observedCallback: ResizeObserverCallback | null = null;
+  class FakeResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      observedCallback = callback;
+    }
+    observe(): void {}
+    disconnect(): void {}
+  }
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  return {
+    getObservedCallback: () => observedCallback!,
+    restore: () => vi.stubGlobal("ResizeObserver", previous),
+  };
+}
+
 describe("FloatPanelView shell", () => {
   beforeEach(() => {
     document.body.replaceChildren();
@@ -616,6 +639,32 @@ describe("FloatPanelView background opacity slider", () => {
     slider.dispatchEvent(new Event("change", { bubbles: true }));
     expect(handlers.onOpacityChange).toHaveBeenCalledWith(70);
   });
+
+  it("does not snap the slider/preview back to the stale state value on an unrelated render mid-drag", () => {
+    const { host, view, handlers } = mount();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    const slider = host.querySelector<HTMLInputElement>("input.zc-float-alpha")!;
+    view.setState({ opacity: 100 });
+
+    slider.value = "70";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(root.style.getPropertyValue("--zc-float-alpha")).toBe("0.7");
+
+    // Renders fire constantly via onState; an unrelated one mid-drag must not
+    // reset the slider (and its live preview) to the still-stale committed
+    // opacity while the user is holding the thumb.
+    view.setState({ opacity: 100 });
+    expect(slider.value).toBe("70");
+    expect(root.style.getPropertyValue("--zc-float-alpha")).toBe("0.7");
+
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(handlers.onOpacityChange).toHaveBeenCalledWith(70);
+
+    // Once settled, the pending override is cleared: a later render reflects
+    // the (new) committed state again instead of staying pinned at 70.
+    view.setState({ opacity: 100 });
+    expect(slider.value).toBe("100");
+  });
 });
 
 describe("FloatPanelView empty-state height", () => {
@@ -658,6 +707,31 @@ describe("FloatPanelView empty-state height", () => {
     expect(root.style.height).toBe("");
     view.setState({ entries: [{ id: "u1", kind: "user", text: "问" }] });
     expect(root.style.height).toBe("");
+  });
+
+  it("never fights a live grip resize made while the transcript is empty", () => {
+    const { getObservedCallback, restore } = stubFakeResizeObserver();
+    try {
+      const { host, view } = mount();
+      const root = host.querySelector<HTMLElement>(".zc-float")!;
+      const observedCallback = getObservedCallback();
+
+      // The user drags the native resize grip while the panel is freshly
+      // empty: Gecko writes the inline height directly, then the
+      // ResizeObserver notifies of the resulting content-box change.
+      root.style.height = "300px";
+      observedCallback([{ contentRect: { width: 0, height: 300 } } as ResizeObserverEntry], {} as ResizeObserver);
+
+      // Renders fire constantly via onState; none of them may revert the
+      // user's own drag just because the transcript happens to be empty.
+      view.setState({ entries: [] });
+      expect(root.style.height).toBe("300px");
+
+      view.setState({ entries: [{ id: "u1", kind: "user", text: "问" }] });
+      expect(root.style.height).toBe("300px");
+    } finally {
+      restore();
+    }
   });
 });
 
