@@ -284,6 +284,19 @@ describe("SidebarView", () => {
       expect(button.classList.contains("is-copied")).toBe(false);
       expect(button.title).toBe("复制回答");
     });
+
+    it("does not render a copy button on error entries", () => {
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const view = new SidebarView(body, callbacks());
+      view.setState({
+        phase: "ready",
+        entries: [{ id: "e1", kind: "error", text: "boom" }]
+      });
+
+      const button = body.querySelector<HTMLButtonElement>(".zc-copy-answer");
+      expect(button).toBeNull();
+    });
   });
 
   it("submits with Enter and keeps Shift+Enter available for multiline input", () => {

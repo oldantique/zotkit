@@ -1203,7 +1203,10 @@ export class SidebarView {
     const markdownBody = this.doc.createElement("div");
     markdownBody.className = "zc-markdown";
     markdownBody.appendChild(renderMarkdown(this.doc, entry.text));
-    content.append(markdownBody, this.createCopyAnswerButton(entry.text));
+    content.appendChild(markdownBody);
+    if (entry.kind === "assistant") {
+      content.appendChild(this.createCopyAnswerButton(entry.text));
+    }
     article.append(avatar, content);
     return article;
   }

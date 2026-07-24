@@ -188,6 +188,33 @@ describe("FloatPanelView selection chip and transcript", () => {
     vi.useRealTimers();
   });
 
+  it("does not add the copied state when the clipboard helper reports failure", () => {
+    vi.mocked(copyToClipboard).mockClear();
+    vi.mocked(copyToClipboard).mockReturnValue(false);
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      entries: [{ id: "a1", kind: "assistant", text: "answer" }],
+    });
+
+    const button = host.querySelector<HTMLButtonElement>(".zc-copy-answer")!;
+    button.click();
+
+    expect(button.classList.contains("is-copied")).toBe(false);
+    expect(button.title).toBe("复制回答");
+  });
+
+  it("does not render a copy button on error entries", () => {
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      entries: [{ id: "e1", kind: "error", text: "boom" }],
+    });
+
+    const button = host.querySelector<HTMLButtonElement>(".zc-copy-answer");
+    expect(button).toBeNull();
+  });
+
   it("hides the transcript when there is no exchange yet", () => {
     const { host, view } = mount();
     view.setState({ phase: "ready", entries: [] });
