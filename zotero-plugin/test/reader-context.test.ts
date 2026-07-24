@@ -12,6 +12,7 @@ import {
   searchPageText,
   type AttachmentMetadata,
   type LibraryFileEntry,
+  type PdfOutlineEntry,
   type PdfTextReference,
   type ReaderAnnotation,
   type ReaderContextHostAdapter,
@@ -215,6 +216,10 @@ function makeAdapter(overrides: Partial<ZoteroReadAdapter<MockReader, MockItem>>
       capturedAt: "2026-07-22T10:00:00.000Z",
     })),
     extractPdfJsPage: vi.fn(async (_reader, pageIndex) => `PDF.js page ${pageIndex + 1}`),
+    extractPdfOutline: vi.fn(async (): Promise<PdfOutlineEntry[]> => [
+      { title: "Introduction", page: 1, depth: 0 },
+      { title: "Methods", page: 2, depth: 0 },
+    ]),
     readIndexedFullText: vi.fn(async () => ({
       text: "first page\fsecond theorem page\fthird page",
       extractedPages: 3,
@@ -1311,6 +1316,11 @@ describe("ReaderContextService", () => {
     await expect(service.invokeTool("zotero_get_current_page")).resolves.toMatchObject({
       pageNumber: 2,
     });
+    await expect(service.invokeTool("zotero_get_pdf_outline")).resolves.toMatchObject({
+      items: [{ title: "Introduction", page: 1, depth: 0 }, { title: "Methods", page: 2, depth: 0 }],
+      totalPages: 3,
+      warnings: [],
+    });
     await expect(service.invokeTool("zotero_get_current_selection")).resolves.toMatchObject({
       text: "selected theorem",
     });
@@ -1670,6 +1680,132 @@ describe("ReaderContextService", () => {
   });
 });
 
+describe("zotero_get_pdf_outline", () => {
+  let host: MemoryHost;
+
+  beforeEach(() => {
+    host = new MemoryHost();
+  });
+
+  it("returns the flattened outline together with the PDF's total page count", async () => {
+    const { adapter, reader, attachment } = makeAdapter({
+      extractPdfOutline: vi.fn(async () => [
+        { title: "第一章", page: 1, depth: 0 },
+        { title: "1.1", page: 5, depth: 1 },
+      ]),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    await expect(service.invokeTool("zotero_get_pdf_outline")).resolves.toEqual({
+      items: [
+        { title: "第一章", page: 1, depth: 0 },
+        { title: "1.1", page: 5, depth: 1 },
+      ],
+      totalPages: 3,
+      warnings: [],
+    });
+  });
+
+  it("keeps going when a destination fails to resolve, leaving that entry's page null", async () => {
+    const { adapter, reader, attachment } = makeAdapter({
+      extractPdfOutline: vi.fn(async () => [
+        { title: "A", page: 1, depth: 0 },
+        { title: "B", page: null, depth: 0 },
+        { title: "C", page: 3, depth: 0 },
+      ]),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.invokeTool("zotero_get_pdf_outline") as {
+      items: PdfOutlineEntry[];
+      warnings: string[];
+    };
+    expect(result.items).toEqual([
+      { title: "A", page: 1, depth: 0 },
+      { title: "B", page: null, depth: 0 },
+      { title: "C", page: 3, depth: 0 },
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("truncates beyond 300 entries with a warning", async () => {
+    const bigOutline: PdfOutlineEntry[] = Array.from({ length: 301 }, (_, index) => ({
+      title: `Section ${index + 1}`,
+      page: index + 1,
+      depth: 0,
+    }));
+    const { adapter, reader, attachment } = makeAdapter({
+      extractPdfOutline: vi.fn(async () => bigOutline),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.invokeTool("zotero_get_pdf_outline") as {
+      items: PdfOutlineEntry[];
+      totalPages: number | null;
+      warnings: string[];
+    };
+
+    expect(result.items).toHaveLength(300);
+    expect(result.items[0]).toEqual({ title: "Section 1", page: 1, depth: 0 });
+    expect(result.items[299]).toEqual({ title: "Section 300", page: 300, depth: 0 });
+    expect(result.warnings).toEqual(["Outline truncated to the first 300 entries."]);
+  });
+
+  it("does not warn about truncation when the outline has exactly 300 entries", async () => {
+    const exactOutline: PdfOutlineEntry[] = Array.from({ length: 300 }, (_, index) => ({
+      title: `Section ${index + 1}`,
+      page: index + 1,
+      depth: 0,
+    }));
+    const { adapter, reader, attachment } = makeAdapter({
+      extractPdfOutline: vi.fn(async () => exactOutline),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.invokeTool("zotero_get_pdf_outline") as {
+      items: PdfOutlineEntry[];
+      warnings: string[];
+    };
+    expect(result.items).toHaveLength(300);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("suggests search when the pdf has no outline", async () => {
+    const { adapter, reader, attachment } = makeAdapter({
+      extractPdfOutline: vi.fn(async () => null),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    await expect(service.invokeTool("zotero_get_pdf_outline")).resolves.toEqual({
+      items: [],
+      totalPages: 3,
+      warnings: [
+        "This PDF has no embedded outline; use zotero_search_current_pdf to locate sections instead.",
+      ],
+    });
+  });
+
+  it("suggests search when the pdf outline is present but empty", async () => {
+    const { adapter, reader, attachment } = makeAdapter({
+      extractPdfOutline: vi.fn(async () => []),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    await expect(service.invokeTool("zotero_get_pdf_outline")).resolves.toMatchObject({
+      items: [],
+      warnings: [
+        "This PDF has no embedded outline; use zotero_search_current_pdf to locate sections instead.",
+      ],
+    });
+  });
+});
+
 describe("pure helpers", () => {
   it("returns all page-local literal matches without regex interpretation", () => {
     expect(searchPageText("a+b a+b\fnone", "a+b", 10)).toMatchObject([
@@ -1978,6 +2114,102 @@ describe("createZotero9ReadAdapter", () => {
     await expect(adapter.listAnnotations(attachment)).resolves.toEqual([
       expect.objectContaining({ key: "ANN1", pageNumber: 2, text: "important" }),
     ]);
+  });
+
+  function makeOutlineReader(pdfDocument: unknown): unknown {
+    return {
+      _internalReader: {
+        _primaryView: {
+          _iframeWindow: {
+            PDFViewerApplication: { pdfDocument },
+          },
+        },
+      },
+    };
+  }
+
+  it("flattens nested bookmarks with 1-based pages and depth, resolving named destinations", async () => {
+    const ref1 = { num: 5, gen: 0 };
+    const ref2 = { num: 9, gen: 0 };
+    const pdfDocument = {
+      getOutline: vi.fn(async () => [
+        {
+          title: "第一章",
+          dest: [ref1],
+          items: [{ title: "1.1", dest: "named", items: [] }],
+        },
+      ]),
+      getDestination: vi.fn(async (name: string) => (name === "named" ? [ref2] : null)),
+      getPageIndex: vi.fn(async (ref: unknown) => {
+        if (ref === ref1) return 0;
+        if (ref === ref2) return 4;
+        return null;
+      }),
+    };
+    const adapter = createZotero9ReadAdapter({});
+
+    await expect(adapter.extractPdfOutline(makeOutlineReader(pdfDocument))).resolves.toEqual([
+      { title: "第一章", page: 1, depth: 0 },
+      { title: "1.1", page: 5, depth: 1 },
+    ]);
+  });
+
+  it("returns null when the PDF.js document exposes no getOutline method", async () => {
+    const adapter = createZotero9ReadAdapter({});
+    await expect(adapter.extractPdfOutline(makeOutlineReader({}))).resolves.toBeNull();
+  });
+
+  it("returns null when the PDF has no outline at all", async () => {
+    const pdfDocument = { getOutline: vi.fn(async () => null) };
+    const adapter = createZotero9ReadAdapter({});
+    await expect(adapter.extractPdfOutline(makeOutlineReader(pdfDocument))).resolves.toBeNull();
+  });
+
+  it("keeps going when one entry's destination fails to resolve", async () => {
+    const refOk = { num: 1 };
+    const pdfDocument = {
+      getOutline: vi.fn(async () => [
+        { title: "A", dest: [refOk], items: [] },
+        { title: "B", dest: "broken", items: [] },
+        { title: "C", dest: [refOk], items: [] },
+      ]),
+      getDestination: vi.fn(async (name: string) => {
+        if (name === "broken") throw new Error("bad destination");
+        return null;
+      }),
+      getPageIndex: vi.fn(async () => 2),
+    };
+    const adapter = createZotero9ReadAdapter({});
+
+    await expect(adapter.extractPdfOutline(makeOutlineReader(pdfDocument))).resolves.toEqual([
+      { title: "A", page: 3, depth: 0 },
+      { title: "B", page: null, depth: 0 },
+      { title: "C", page: 3, depth: 0 },
+    ]);
+  });
+
+  it("resolves to a null page, not a throw, when the document has no getDestination method", async () => {
+    const pdfDocument = {
+      getOutline: vi.fn(async () => [{ title: "Named only", dest: "named", items: [] }]),
+      getPageIndex: vi.fn(async () => 0),
+    };
+    const adapter = createZotero9ReadAdapter({});
+
+    await expect(adapter.extractPdfOutline(makeOutlineReader(pdfDocument))).resolves.toEqual([
+      { title: "Named only", page: null, depth: 0 },
+    ]);
+  });
+
+  it("bounds a self-referencing outline instead of exhausting the call stack", async () => {
+    const cyclic: Record<string, unknown> = { title: "loop", dest: null };
+    cyclic.items = [cyclic];
+    const pdfDocument = { getOutline: vi.fn(async () => [cyclic]) };
+    const adapter = createZotero9ReadAdapter({});
+
+    const items = await adapter.extractPdfOutline(makeOutlineReader(pdfDocument));
+    expect(items).not.toBeNull();
+    expect(items).toHaveLength(301);
+    expect(items?.every((entry) => entry.title === "loop" && entry.page === null)).toBe(true);
   });
 
   it("maps Zotero.Fulltext.getPages to indexed/total counts and flags a truncated index", async () => {

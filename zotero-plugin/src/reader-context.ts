@@ -90,6 +90,17 @@ export interface ReaderAnnotation {
   dateModified?: string;
 }
 
+/**
+ * One flattened entry from a PDF's embedded outline (table of contents /
+ * bookmarks). `page` is 1-based and null when the destination could not be
+ * resolved; `depth` is 0 for top-level entries.
+ */
+export interface PdfOutlineEntry {
+  title: string;
+  page: number | null;
+  depth: number;
+}
+
 export type TextSource = "pdfjs" | "indexed-fulltext" | "pdf-worker" | "none";
 
 export interface PageTextResult extends ReaderPageStats {
@@ -238,6 +249,15 @@ export interface ZoteroReadAdapter<TReader = unknown, TItem = unknown> {
   getSelection(reader: TReader, eventAnnotation?: unknown): Promise<ReaderSelection | null>;
   /** Extract one zero-based page through the already-open PDF.js document. */
   extractPdfJsPage(reader: TReader, pageIndex: number): Promise<string | null>;
+  /**
+   * Flatten the PDF's embedded outline/bookmarks through the already-open
+   * PDF.js document, with 1-based pages and nesting depth. Returns null when
+   * PDF.js exposes no outline for this document (no `getOutline` method, or
+   * the document has no outline at all). Implementations must bound both the
+   * number of entries and the recursion depth so a pathological outline
+   * cannot exhaust memory or the call stack.
+   */
+  extractPdfOutline(reader: TReader): Promise<PdfOutlineEntry[] | null>;
   /** Read Zotero's existing full-text cache without initiating or changing indexing. */
   readIndexedFullText(attachment: TItem): Promise<PdfWorkerTextResult | null>;
   /** Resolve Zotero's existing full-text cache path without reading or changing it. */
@@ -359,6 +379,7 @@ export interface ToolDefinition {
 export const READER_TOOL_NAMES = [
   "zotero_get_reader_context",
   "zotero_get_current_page",
+  "zotero_get_pdf_outline",
   "zotero_get_current_selection",
   "zotero_search_current_pdf",
   "zotero_read_pdf_pages",
@@ -385,6 +406,12 @@ export const READER_CONTEXT_TOOLS: readonly ToolDefinition[] = [
     name: "zotero_get_current_page",
     description:
       "Return text for the current PDF page, with the PDF page number and extraction source. Read-only.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "zotero_get_pdf_outline",
+    description:
+      "Return the current PDF's table of contents (outline/bookmarks) with 1-based page numbers and nesting depth. On long PDFs call this first to plan which sections to read, then use zotero_read_pdf_pages for the chosen ranges. Only works for the PDF open in the active Reader. Read-only.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -626,6 +653,13 @@ const DATABASE_SUFFIXES = [
 
 const ZOTKIT_SNAPSHOT_WARNING_PREFIX = "Built-in Zotkit library snapshot unavailable:";
 const PDF_TEXT_WARNING_PREFIX = "Terminal PDF text unavailable:";
+/**
+ * Maximum outline entries returned to a caller. Adapters may collect one
+ * entry beyond this bound (see `extractPdfOutline`) purely so the service
+ * can tell an outline that is exactly this size apart from one that was cut
+ * short, without re-walking the tree itself.
+ */
+const MAX_PDF_OUTLINE_ENTRIES = 300;
 
 function cleanText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
@@ -1175,6 +1209,8 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
         return this.getReaderContext();
       case "zotero_get_current_page":
         return this.getCurrentPage();
+      case "zotero_get_pdf_outline":
+        return this.getPdfOutline();
       case "zotero_get_current_selection":
         return this.getCurrentSelection();
       case "zotero_search_current_pdf":
@@ -1238,6 +1274,30 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
 
   async getCurrentSelection(): Promise<ReaderSelection | null> {
     return (await this.ensureSnapshot()).context.selection;
+  }
+
+  async getPdfOutline(): Promise<{
+    items: PdfOutlineEntry[];
+    totalPages: number | null;
+    warnings: string[];
+  }> {
+    const snapshot = await this.ensureSnapshot();
+    const outline = await this.zotero.extractPdfOutline(snapshot.hook.reader);
+    const warnings: string[] = [];
+    let items = outline ?? [];
+    if (items.length === 0) {
+      warnings.push(
+        "This PDF has no embedded outline; use zotero_search_current_pdf to locate sections instead.",
+      );
+    } else if (items.length > MAX_PDF_OUTLINE_ENTRIES) {
+      items = items.slice(0, MAX_PDF_OUTLINE_ENTRIES);
+      warnings.push(`Outline truncated to the first ${MAX_PDF_OUTLINE_ENTRIES} entries.`);
+    }
+    return {
+      items,
+      totalPages: snapshot.context.page.pageCount ?? null,
+      warnings,
+    };
   }
 
   async searchCurrentPdf(query: string, limit = this.options.maxSearchResults): Promise<{
@@ -3123,6 +3183,53 @@ export function createZotero9ReadAdapter(
       const getTextContent = method(page, "getTextContent");
       if (!getTextContent) return null;
       return normalizePdfTextContent(await getTextContent({ includeMarkedContent: false }));
+    },
+
+    async extractPdfOutline(reader) {
+      const win = readerPdfWindow(reader);
+      const application = asRecord(win.PDFViewerApplication);
+      const document = asRecord(application.pdfDocument ?? property(application.pdfViewer, "pdfDocument"));
+      const getOutline = method(document, "getOutline");
+      if (!getOutline) return null;
+      const outline = await getOutline();
+      if (!Array.isArray(outline)) return null;
+
+      const items: PdfOutlineEntry[] = [];
+      const resolvePage = async (dest: unknown): Promise<number | null> => {
+        try {
+          const explicit = typeof dest === "string"
+            ? await method(document, "getDestination")?.(dest)
+            : dest;
+          const ref = Array.isArray(explicit) ? explicit[0] : null;
+          if (ref === null || ref === undefined) return null;
+          const pageIndex = await method(document, "getPageIndex")?.(ref);
+          return typeof pageIndex === "number" && Number.isInteger(pageIndex) ? pageIndex + 1 : null;
+        } catch {
+          return null;
+        }
+      };
+      // Collect one entry beyond the public MAX_PDF_OUTLINE_ENTRIES cap so the
+      // service layer can tell a genuinely truncated outline apart from one
+      // that happens to contain exactly that many entries, without re-walking
+      // a potentially adversarial tree itself. The cap check runs before both
+      // the push and the recursive descent into a node's children, so the
+      // deepest a malformed (e.g. self-referencing) outline can ever recurse
+      // is bounded by that same entry count.
+      const walk = async (nodes: unknown, depth: number): Promise<void> => {
+        if (!Array.isArray(nodes)) return;
+        for (const node of nodes) {
+          if (items.length > MAX_PDF_OUTLINE_ENTRIES) return;
+          const record = asRecord(node);
+          items.push({
+            title: cleanText(String(record.title ?? "")) || "(无标题)",
+            page: await resolvePage(record.dest),
+            depth,
+          });
+          await walk(record.items, depth + 1);
+        }
+      };
+      await walk(outline, 0);
+      return items;
     },
 
     async getIndexedFullTextReference(attachment) {
