@@ -360,6 +360,28 @@ describe("SidebarView", () => {
       expect(copyToClipboard).toHaveBeenCalledWith("$$x$$ answer");
       expect(copyToClipboard).toHaveBeenCalledTimes(1);
     });
+
+    it("skips formula click-to-copy while a text selection is active, and copies once it collapses", () => {
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const view = new SidebarView(body, callbacks());
+      view.setState({
+        phase: "ready",
+        entries: [{ id: "a1", kind: "assistant", text: "$$x$$" }],
+      });
+
+      const formula = body.querySelector<HTMLElement>(".zc-math-copy")!;
+      const getSelectionSpy = vi.spyOn(window, "getSelection")
+        .mockReturnValue({ isCollapsed: false } as Selection);
+      formula.click();
+      expect(copyToClipboard).not.toHaveBeenCalled();
+
+      getSelectionSpy.mockReturnValue({ isCollapsed: true } as Selection);
+      formula.click();
+      expect(copyToClipboard).toHaveBeenCalledWith("x");
+
+      getSelectionSpy.mockRestore();
+    });
   });
 
   it("submits with Enter and keeps Shift+Enter available for multiline input", () => {

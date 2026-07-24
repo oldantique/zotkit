@@ -56,4 +56,33 @@ describe("browser style bundle", () => {
       /\.zc-float-entry\.zc-entry-assistant,\s*\.zc-float-entry\.zc-entry-error\s*\{\s*display:\s*block;\s*\}/,
     );
   });
+
+  it("declares the float transcript selectable and the float panel user-resizable", async () => {
+    const result = await build({
+      entryPoints: [join(process.cwd(), "src/index.ts")],
+      bundle: true,
+      platform: "browser",
+      format: "iife",
+      target: ["firefox140"],
+      write: false,
+      outdir: "out",
+      assetNames: "fonts/[name]-[hash]",
+      loader: {
+        ".svg": "dataurl",
+        ".woff2": "file",
+        ".woff": "file",
+        ".ttf": "file",
+      },
+    });
+
+    const css = result.outputFiles.find((file) => file.path.endsWith(".css"))?.text || "";
+    // XUL hosts don't allow text selection unless explicitly declared, so the
+    // float transcript needs an explicit user-select: text rule (bug fix for
+    // "can't select/copy the answer text").
+    expect(css).toMatch(
+      /\.zc-float-transcript,\s*\.zc-float-transcript \*\s*\{[^}]*user-select:\s*text;[^}]*\}/,
+    );
+    // The panel itself must be user-resizable via the native corner grip.
+    expect(css).toMatch(/\.zc-float\s*\{[^}]*resize:\s*both;[^}]*\}/);
+  });
 });

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/note-sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/note-sync")>();
@@ -180,6 +180,102 @@ describe("Zotkit Reader terminal state", () => {
     entry.host.remove();
     plugin.floatPanels.clear();
     (globalThis as any).Zotero = previousZotero;
+  });
+
+  describe("float panel size persistence", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+      // Defensive: a mid-assertion failure would otherwise skip the inline
+      // `entry.host.remove()` cleanup below and leave a stale `.zc-float`
+      // node in `document`, corrupting the next test's querySelector.
+      document.querySelectorAll(".zc-float-host").forEach((node) => node.remove());
+    });
+
+    it("restores the persisted floatSize onto the panel as an inline style when mounting", () => {
+      vi.stubGlobal("Services", {
+        prefs: {
+          getStringPref: (key: string, fallback: string) =>
+            key === "extensions.zotkit.floatSize" ? "540x480" : fallback,
+          setStringPref: () => {},
+        },
+      });
+
+      const plugin = new ZoteroChatPlugin() as any;
+      const entry = plugin.mountFloatPanel(window);
+      const root = document.querySelector<HTMLElement>(".zc-float")!;
+
+      expect(root.style.width).toBe("540px");
+      expect(root.style.height).toBe("480px");
+
+      entry.view.destroy();
+      entry.host.remove();
+      plugin.floatPanels.clear();
+    });
+
+    it("ignores an unparsable persisted floatSize", () => {
+      vi.stubGlobal("Services", {
+        prefs: {
+          getStringPref: (key: string, fallback: string) =>
+            key === "extensions.zotkit.floatSize" ? "not-a-size" : fallback,
+          setStringPref: () => {},
+        },
+      });
+
+      const plugin = new ZoteroChatPlugin() as any;
+      const entry = plugin.mountFloatPanel(window);
+      const root = document.querySelector<HTMLElement>(".zc-float")!;
+
+      expect(root.style.width).toBe("");
+      expect(root.style.height).toBe("");
+
+      entry.view.destroy();
+      entry.host.remove();
+      plugin.floatPanels.clear();
+    });
+
+    it("persists the debounced panel size from onPanelResize, skipping the initial observation", () => {
+      vi.useFakeTimers();
+      const setStringPref = vi.fn();
+      vi.stubGlobal("Services", {
+        prefs: {
+          getStringPref: (_key: string, fallback: string) => fallback,
+          setStringPref,
+        },
+      });
+
+      let observedCallback: ResizeObserverCallback | null = null;
+      class FakeResizeObserver {
+        constructor(callback: ResizeObserverCallback) {
+          observedCallback = callback;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      }
+      vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+      const plugin = new ZoteroChatPlugin() as any;
+      const entry = plugin.mountFloatPanel(window);
+      expect(observedCallback).not.toBeNull();
+
+      // The first ResizeObserver notification reflects the panel's initial
+      // (possibly pref-restored) size, not a user drag, so it must not be
+      // persisted.
+      observedCallback!([{ contentRect: { width: 620, height: 400 } } as ResizeObserverEntry], {} as ResizeObserver);
+      expect(setStringPref).not.toHaveBeenCalled();
+
+      // A subsequent notification is a real user resize.
+      observedCallback!([{ contentRect: { width: 700, height: 500 } } as ResizeObserverEntry], {} as ResizeObserver);
+      expect(setStringPref).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(499);
+      expect(setStringPref).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(setStringPref).toHaveBeenCalledWith("extensions.zotkit.floatSize", "700x500");
+
+      entry.view.destroy();
+      entry.host.remove();
+      plugin.floatPanels.clear();
+    });
   });
 
   it("records turn duration keyed by the opening user entry when running flips off", () => {

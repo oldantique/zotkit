@@ -21,6 +21,8 @@ function callbacks(): FloatPanelCallbacks {
     onRemoveSelection: vi.fn(),
     onLogin: vi.fn(),
     onModelChange: vi.fn(),
+    onOpacityChange: vi.fn(),
+    onPanelResize: vi.fn(),
   };
 }
 
@@ -213,6 +215,29 @@ describe("FloatPanelView selection chip and transcript", () => {
 
     const button = host.querySelector<HTMLButtonElement>(".zc-copy-answer");
     expect(button).toBeNull();
+  });
+
+  it("skips formula click-to-copy while a text selection is active, and copies once it collapses", () => {
+    vi.mocked(copyToClipboard).mockClear();
+    vi.mocked(copyToClipboard).mockReturnValue(true);
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      entries: [{ id: "a1", kind: "assistant", text: "$$x$$" }],
+    });
+    const formula = host.querySelector<HTMLElement>(".zc-math-copy")!;
+    expect(formula).not.toBeNull();
+
+    const getSelectionSpy = vi.spyOn(window, "getSelection")
+      .mockReturnValue({ isCollapsed: false } as Selection);
+    formula.click();
+    expect(copyToClipboard).not.toHaveBeenCalled();
+
+    getSelectionSpy.mockReturnValue({ isCollapsed: true } as Selection);
+    formula.click();
+    expect(copyToClipboard).toHaveBeenCalledWith("x");
+
+    getSelectionSpy.mockRestore();
   });
 
   it("hides the transcript when there is no exchange yet", () => {
@@ -526,5 +551,72 @@ describe("FloatPanelView model picker", () => {
     const { host, view } = mount();
     view.setState({ phase: "ready", models: [] });
     expect(host.querySelector<HTMLSelectElement>(".zc-float-model")!.hidden).toBe(true);
+  });
+});
+
+describe("FloatPanelView background opacity slider", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("renders a 60-100 step-5 range slider between the title and close button", () => {
+    const { host } = mount();
+    const slider = host.querySelector<HTMLInputElement>("input.zc-float-alpha")!;
+    expect(slider).not.toBeNull();
+    expect(slider.type).toBe("range");
+    expect(slider.min).toBe("60");
+    expect(slider.max).toBe("100");
+    expect(slider.step).toBe("5");
+    expect(slider.title).toBe("背景透明度");
+    const bar = host.querySelector<HTMLElement>(".zc-float-bar")!;
+    const children = [...bar.children];
+    const titleIndex = children.indexOf(host.querySelector(".zc-float-title")!);
+    const closeIndex = children.indexOf(host.querySelector(".zc-float-close")!);
+    const sliderIndex = children.indexOf(slider);
+    expect(sliderIndex).toBeGreaterThan(titleIndex);
+    expect(sliderIndex).toBeLessThan(closeIndex);
+  });
+
+  it("forwards slider changes to onOpacityChange", () => {
+    const { host, handlers } = mount();
+    const slider = host.querySelector<HTMLInputElement>("input.zc-float-alpha")!;
+    slider.value = "85";
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(handlers.onOpacityChange).toHaveBeenCalledWith(85);
+  });
+
+  it("applies opacity state as the --zc-float-alpha custom property", () => {
+    const { host, view } = mount();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    view.setState({ opacity: 85 });
+    expect(root.style.getPropertyValue("--zc-float-alpha")).toBe("0.85");
+  });
+
+  it("does not start a drag when mousedown lands on the opacity slider", () => {
+    const { host, view } = mount();
+    view.show();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    const slider = host.querySelector<HTMLInputElement>("input.zc-float-alpha")!;
+    slider.dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 10, clientY: 10, bubbles: true }));
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 210, clientY: 130, bubbles: true }));
+    expect(root.style.left).toBe("");
+    expect(root.classList.contains("is-dragged")).toBe(false);
+  });
+});
+
+describe("FloatPanelView ResizeObserver guard", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("mounts and destroys without throwing when ResizeObserver is unavailable", () => {
+    const previous = (globalThis as any).ResizeObserver;
+    vi.stubGlobal("ResizeObserver", undefined);
+    expect(() => {
+      const { view } = mount();
+      view.show();
+      view.destroy();
+    }).not.toThrow();
+    vi.stubGlobal("ResizeObserver", previous);
   });
 });

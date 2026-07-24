@@ -87,6 +87,7 @@ export class ZoteroChatPlugin {
   private chatError = "";
   private selectedModel = "";
   private selectedEffort = "medium";
+  private floatOpacity = 100;
   private addedContextIDs = new Set<string>();
   private mutationCheckpoints: CheckpointOption[] = [];
   private contextRequestSequence = 0;
@@ -125,6 +126,7 @@ export class ZoteroChatPlugin {
     });
     this.selectedModel = this.settings.defaultModel;
     this.selectedEffort = this.settings.reasoningEffort;
+    this.floatOpacity = Number(prefString("floatOpacity", "100")) || 100;
     this.mutations = new ZoteroMutationService(
       createZoteroMutationHost(Zotero, IOUtils, PathUtils),
       {
@@ -732,7 +734,21 @@ export class ZoteroChatPlugin {
         setPrefString("defaultModel", model);
         this.renderChatViews();
       },
+      onOpacityChange: (value) => {
+        this.floatOpacity = value;
+        setPrefString("floatOpacity", String(value));
+        this.renderChatViews();
+      },
+      onPanelResize: (width, height) => {
+        setPrefString("floatSize", `${width}x${height}`);
+      },
     });
+    const storedSize = /^(\d+)x(\d+)$/.exec(prefString("floatSize", ""));
+    if (storedSize) {
+      const width = Number(storedSize[1]);
+      const height = Number(storedSize[2]);
+      if (width > 0 && height > 0) view.restoreSize(width, height);
+    }
     entry = { host, view, focusReturn: null };
     this.floatPanels.set(win, entry);
     return entry;
@@ -814,6 +830,7 @@ export class ZoteroChatPlugin {
           ? this.turnStartedAt.get(this.codex.state.activeThreadId ?? "") ?? null
           : null,
         turnDurations: this.turnDurationsForActiveThread(),
+        opacity: this.floatOpacity,
       });
     }
   }

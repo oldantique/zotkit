@@ -613,15 +613,20 @@
   left: 50%;
   transform: translateX(-50%);
   z-index: 9999;
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, auto);
+  display: flex;
+  flex-direction: column;
+  resize: both;
+  overflow: hidden;
   width: min(620px, calc(100vw - 48px));
-  max-height: 72vh;
+  min-width: 380px;
+  max-width: 760px;
+  min-height: 220px;
+  max-height: 85vh;
   box-sizing: border-box;
   padding: 0 0 2px;
   border: 1px solid color-mix(in srgb, var(--zc-border) 72%, transparent);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--zc-bg) 78%, transparent);
+  background: color-mix(in srgb, color-mix(in srgb, var(--zc-bg) 78%, transparent) calc(var(--zc-float-alpha, 1) * 100%), transparent);
   backdrop-filter: blur(24px) saturate(1.4);
   box-shadow: 0 24px 70px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .22);
   color: var(--zc-text);
@@ -633,17 +638,34 @@
 
 .zc-float-bar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-height: 34px;
   padding: 6px 8px 4px 12px;
   cursor: grab;
+  flex: none;
   user-select: none;
+  -moz-user-select: none;
 }
 .zc-float-bar:active { cursor: grabbing; }
 .zc-float-grip { width: 30px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--zc-muted) 40%, transparent); }
 .zc-float-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--zc-muted); font-size: 11px; font-weight: 600; }
+.zc-float-alpha {
+  width: 88px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  background: transparent;
+  accent-color: var(--zc-accent);
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.zc-float-bar:hover .zc-float-alpha,
+.zc-float-alpha:focus-visible { opacity: 1; }
+.zc-float-alpha::-moz-range-track { height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--zc-muted) 35%, transparent); }
+.zc-float-alpha::-moz-range-thumb { width: 10px; height: 10px; border: 0; border-radius: 50%; background: var(--zc-accent); }
 .zc-float-close { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 7px; color: var(--zc-muted); background: transparent; cursor: pointer; }
 .zc-float-close:hover { color: var(--zc-text); background: var(--zc-bg-hover); }
 .zc-float-close .zc-button-icon { width: 13px; height: 13px; }
@@ -660,6 +682,7 @@
   background: var(--zc-accent-soft);
   font-size: 11px;
   font-weight: 600;
+  flex: none;
 }
 .zc-float-chip[hidden] { display: none; }
 .zc-float-chip-glyph { font-size: 14px; line-height: 1; }
@@ -679,6 +702,7 @@
   border-radius: 12px;
   background: color-mix(in srgb, var(--zc-bg-raised) 88%, transparent);
   transition: border-color .15s;
+  flex: none;
 }
 .zc-float-composer:focus-within { border-color: color-mix(in srgb, var(--zc-accent) 55%, var(--zc-border)); }
 .zc-float-input {
@@ -731,15 +755,16 @@
 }
 .zc-float-model:hover { color: var(--zc-text); background: var(--zc-bg-hover); }
 
-.zc-float-note { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 0; padding: 5px 12px 4px; color: var(--zc-muted); font-size: 10.5px; text-align: center; }
+.zc-float-note { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 0; padding: 5px 12px 4px; color: var(--zc-muted); font-size: 10.5px; text-align: center; flex: none; }
 .zc-float-note[hidden] { display: none; }
 .zc-float-note.is-error { color: var(--zc-danger); }
 .zc-float-login { min-height: 26px; padding: 0 10px; border: 0; border-radius: 7px; color: #fff; background: var(--zc-accent); font: inherit; font-size: 10.5px; font-weight: 600; cursor: pointer; }
 .zc-float-login:hover { background: var(--zc-accent-strong); }
 
 .zc-float-transcript {
+  flex: 1 1 auto;
   min-height: 0;
-  max-height: 55vh;
+  max-height: none;
   margin: 2px 4px 6px;
   padding: 6px 8px;
   overflow: auto;
@@ -748,6 +773,7 @@
   font-size: 12.5px;
   line-height: 1.55;
 }
+.zc-float-transcript, .zc-float-transcript * { user-select: text; -moz-user-select: text; cursor: auto; }
 .zc-float-transcript[hidden] { display: none; }
 .zc-float-entry { margin: 0 0 12px; }
 .zc-float-entry:last-child { margin-bottom: 2px; }

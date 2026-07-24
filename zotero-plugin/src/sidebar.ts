@@ -311,6 +311,9 @@ export class SidebarView {
     this.transcript.addEventListener("click", (event) => {
       const target = (event.target as HTMLElement | null)?.closest?.(".zc-math-copy");
       if (!target) return;
+      // A selection drag that happens to pass over a rendered formula must
+      // not be swallowed into an accidental LaTeX copy.
+      if (this.doc.defaultView?.getSelection?.()?.isCollapsed === false) return;
       const latex = target.getAttribute("data-latex");
       if (!latex || !copyToClipboard(latex)) return;
       target.classList.add("is-copied");

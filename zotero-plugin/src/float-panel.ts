@@ -31,6 +31,7 @@ export interface FloatPanelState {
   selectedModel: string;
   turnStartedAt: number | null;
   turnDurations: Record<string, number>;
+  opacity: number;
 }
 
 export interface FloatPanelCallbacks {
@@ -40,6 +41,8 @@ export interface FloatPanelCallbacks {
   onRemoveSelection(): void;
   onLogin(): void;
   onModelChange(model: string): void;
+  onOpacityChange(value: number): void;
+  onPanelResize(width: number, height: number): void;
 }
 
 /** Entries belonging to the latest question: from the last user entry onward. */
@@ -55,6 +58,7 @@ export class FloatPanelView {
   private readonly root: HTMLElement;
   private bar!: HTMLElement;
   private title!: HTMLElement;
+  private alphaSlider!: HTMLInputElement;
   private chip!: HTMLElement;
   private chipLabel!: HTMLElement;
   private textarea!: HTMLTextAreaElement;
@@ -73,6 +77,7 @@ export class FloatPanelView {
     selectedModel: "",
     turnStartedAt: null,
     turnDurations: {},
+    opacity: 100,
   };
   private position: { left: number; top: number } | null = null;
   private readonly expandedTurns = new Set<string>();
@@ -81,6 +86,9 @@ export class FloatPanelView {
   private activityLabelEl: HTMLElement | null = null;
   private activityElapsedEl: HTMLElement | null = null;
   private pinnedToBottom = true;
+  private resizeObserver: ResizeObserver | null = null;
+  private resizeDebounceTimer: number | null = null;
+  private hasObservedInitialSize = false;
   private readonly handleResize = () => {
     if (this.root.hidden) return;
     if (this.position) this.applyPosition(this.position.left, this.position.top);
@@ -100,6 +108,10 @@ export class FloatPanelView {
     this.build();
     this.render();
     this.doc.defaultView?.addEventListener("resize", this.handleResize);
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver((entries) => this.handlePanelResize(entries));
+      this.resizeObserver.observe(this.root);
+    }
   }
 
   destroy(): void {
@@ -108,7 +120,41 @@ export class FloatPanelView {
       this.activityTimer = null;
     }
     this.doc.defaultView?.removeEventListener("resize", this.handleResize);
+    if (this.resizeDebounceTimer !== null) {
+      this.doc.defaultView?.clearTimeout(this.resizeDebounceTimer);
+      this.resizeDebounceTimer = null;
+    }
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.root.remove();
+  }
+
+  /** Applies a previously persisted panel size (`floatSize` pref) as inline style. */
+  restoreSize(width: number, height: number): void {
+    this.root.style.width = `${width}px`;
+    this.root.style.height = `${height}px`;
+  }
+
+  /**
+   * ResizeObserver fires once immediately when `observe()` starts, reporting
+   * whatever size the panel already has (default or pref-restored) — that
+   * first notification is not a user resize and must not be persisted.
+   */
+  private handlePanelResize(entries: ResizeObserverEntry[]): void {
+    const entry = entries[0];
+    if (!entry) return;
+    if (!this.hasObservedInitialSize) {
+      this.hasObservedInitialSize = true;
+      return;
+    }
+    const width = Math.round(entry.contentRect.width);
+    const height = Math.round(entry.contentRect.height);
+    const win = this.doc.defaultView;
+    if (this.resizeDebounceTimer !== null) win?.clearTimeout(this.resizeDebounceTimer);
+    this.resizeDebounceTimer = win?.setTimeout(() => {
+      this.resizeDebounceTimer = null;
+      this.callbacks.onPanelResize(width, height);
+    }, 500) ?? null;
   }
 
   setState(next: Partial<FloatPanelState>): void {
@@ -143,6 +189,17 @@ export class FloatPanelView {
     grip.setAttribute("aria-hidden", "true");
     this.title = this.doc.createElement("span");
     this.title.className = "zc-float-title";
+    this.alphaSlider = this.doc.createElement("input");
+    this.alphaSlider.type = "range";
+    this.alphaSlider.className = "zc-float-alpha";
+    this.alphaSlider.min = "60";
+    this.alphaSlider.max = "100";
+    this.alphaSlider.step = "5";
+    this.alphaSlider.title = "背景透明度";
+    this.alphaSlider.setAttribute("aria-label", this.alphaSlider.title);
+    const emitOpacity = () => this.callbacks.onOpacityChange(Number(this.alphaSlider.value));
+    this.alphaSlider.addEventListener("input", emitOpacity);
+    this.alphaSlider.addEventListener("change", emitOpacity);
     const close = this.doc.createElement("button");
     close.type = "button";
     close.className = "zc-float-close";
@@ -150,7 +207,7 @@ export class FloatPanelView {
     close.setAttribute("aria-label", close.title);
     close.replaceChildren(createSidebarIcon(this.doc, "close"));
     close.addEventListener("click", () => this.callbacks.onClose());
-    this.bar.append(grip, this.title, close);
+    this.bar.append(grip, this.title, this.alphaSlider, close);
 
     this.chip = this.doc.createElement("div");
     this.chip.className = "zc-float-chip";
@@ -218,6 +275,9 @@ export class FloatPanelView {
     this.transcript.addEventListener("click", (event) => {
       const target = (event.target as HTMLElement | null)?.closest?.(".zc-math-copy");
       if (!target) return;
+      // A selection drag that happens to pass over a rendered formula must
+      // not be swallowed into an accidental LaTeX copy.
+      if (this.doc.defaultView?.getSelection?.()?.isCollapsed === false) return;
       const latex = target.getAttribute("data-latex");
       if (!latex || !copyToClipboard(latex)) return;
       target.classList.add("is-copied");
@@ -253,6 +313,13 @@ export class FloatPanelView {
     this.renderModels();
     this.renderNote();
     this.renderTranscript();
+    this.renderOpacity();
+  }
+
+  private renderOpacity(): void {
+    const opacity = this.state.opacity;
+    if (this.alphaSlider.value !== String(opacity)) this.alphaSlider.value = String(opacity);
+    this.root.style.setProperty("--zc-float-alpha", String(opacity / 100));
   }
 
   private renderModels(): void {
@@ -503,7 +570,7 @@ export class FloatPanelView {
   }
 
   private beginDrag(event: MouseEvent): void {
-    if ((event.target as Element | null)?.closest?.(".zc-float-close")) return;
+    if ((event.target as Element | null)?.closest?.(".zc-float-close, .zc-float-alpha")) return;
     if (event.button !== 0) return;
     const rect = this.root.getBoundingClientRect();
     const offsetX = event.clientX - rect.left;
