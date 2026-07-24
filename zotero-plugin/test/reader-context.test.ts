@@ -346,6 +346,45 @@ describe("ReaderContextService", () => {
     expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
   });
 
+  it("does not reference a truncated Zotero index in place; mirrors uncapped full text instead", async () => {
+    const indexedPath = "/Users/test/Zotero/storage/ATTACH01/.zotero-ft-cache";
+    const getIndexedFullTextReference = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      path: indexedPath,
+      source: "indexed-fulltext" as const,
+      totalPages: 250,
+      truncated: true,
+    }));
+    const indexedPages = Array.from({ length: 100 }, (_, index) => `indexed page ${index + 1}`);
+    const workerPages = Array.from({ length: 250 }, (_, index) => `worker page ${index + 1}`);
+    const { adapter, reader, attachment } = makeAdapter({
+      getPageStats: vi.fn(async () => ({ pageIndex: 0, pageNumber: 1, pageCount: 250 })),
+      getIndexedFullTextReference,
+      readIndexedFullText: vi.fn(async () => ({
+        text: indexedPages.join("\f"),
+        extractedPages: 100,
+      })),
+      readPdfWorkerText: vi.fn(async () => ({
+        text: workerPages.join("\f"),
+        extractedPages: 250,
+        totalPages: 250,
+      })),
+    });
+    const service = new ReaderContextService(adapter, host, {
+      maxPdfTextSnapshotCharacters: 5_000_000,
+    });
+
+    const context = await service.acceptReaderHook({ reader, item: attachment });
+    expect(context.pdfText).toMatchObject({ path: indexedPath, truncated: true });
+
+    const reference = await service.ensureCurrentPdfTextReference();
+
+    expect(reference?.source).toBe("pdf-worker");
+    expect(reference?.path).toBe(context.workspace!.pdfText);
+    expect(host.files.get(context.workspace!.pdfText)).toContain("worker page 250");
+    expect(adapter.readPdfWorkerText).toHaveBeenCalledWith(attachment, null);
+  });
+
   it("creates one bounded private PDFWorker fallback only when no Zotero index reference exists", async () => {
     const { adapter, reader, attachment } = makeAdapter({
       getIndexedFullTextReference: vi.fn(async () => null),
@@ -1132,6 +1171,99 @@ describe("ReaderContextService", () => {
     expect(context.fullText).toMatchObject({ source: "none", characters: 0 });
   });
 
+  it("falls back to the uncapped pdf worker when the index is truncated", async () => {
+    // Zotero only indexed the first 100 pages of a 250-page paper. The reader
+    // has not resolved a live page count yet, so only Zotero.Fulltext.getPages
+    // (the db counts) reveals the truncation.
+    const indexedPages = Array.from({ length: 100 }, (_, index) => `indexed page ${index + 1}`);
+    const workerPages = Array.from({ length: 250 }, (_, index) =>
+      index === 199 ? "worker page 200 needle-for-page-200" : `worker page ${index + 1}`);
+    const getFullTextPageCounts = vi.fn(async () => ({ indexedPages: 100, totalPages: 250 }));
+    const readPdfWorkerText = vi.fn(async () => ({
+      text: workerPages.join("\f"),
+      extractedPages: 250,
+      totalPages: 250,
+    }));
+    const { adapter, reader, attachment } = makeAdapter({
+      getPageStats: vi.fn(async () => ({ pageIndex: 0, pageNumber: 1 })),
+      getFullTextPageCounts,
+      readIndexedFullText: vi.fn(async () => ({
+        text: indexedPages.join("\f"),
+        extractedPages: 100,
+      })),
+      readPdfWorkerText,
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.searchCurrentPdf("needle-for-page-200");
+
+    expect(result.source).toBe("pdf-worker");
+    expect(result.matches).toEqual([expect.objectContaining({ pageNumber: 200 })]);
+    expect(readPdfWorkerText).toHaveBeenCalledWith(attachment, null);
+    expect(getFullTextPageCounts).toHaveBeenCalledWith(attachment);
+  });
+
+  it("keeps using the index when the page counts confirm completeness", async () => {
+    const getFullTextPageCounts = vi.fn(async () => ({ indexedPages: 40, totalPages: 40 }));
+    const indexedText = Array.from({ length: 40 }, (_, index) => `page ${index + 1}`).join("\f");
+    const { adapter, reader, attachment } = makeAdapter({
+      getPageStats: vi.fn(async () => ({ pageIndex: 0, pageNumber: 1 })),
+      getFullTextPageCounts,
+      readIndexedFullText: vi.fn(async () => ({ text: indexedText, extractedPages: 40 })),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.searchCurrentPdf("page 1");
+
+    expect(result.source).toBe("indexed-fulltext");
+    expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
+    expect(getFullTextPageCounts).toHaveBeenCalledWith(attachment);
+  });
+
+  it("uses db totals when reader page stats are unavailable (library pdf path)", async () => {
+    const getFullTextPageCounts = vi.fn(async () => ({ indexedPages: 100, totalPages: 300 }));
+    const indexedText = Array.from({ length: 100 }, (_, index) => `indexed ${index + 1}`).join("\f");
+    const readPdfWorkerText = vi.fn(async () => ({
+      text: "worker full text",
+      extractedPages: 300,
+      totalPages: 300,
+    }));
+    const { adapter, reader, attachment } = makeAdapter({
+      getPageStats: vi.fn(async () => ({ pageIndex: 0, pageNumber: 1 })),
+      getFullTextPageCounts,
+      readIndexedFullText: vi.fn(async () => ({ text: indexedText, extractedPages: 100 })),
+      readPdfWorkerText,
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.searchCurrentPdf("worker");
+
+    expect(result.source).toBe("pdf-worker");
+    expect(readPdfWorkerText).toHaveBeenCalledWith(attachment, null);
+  });
+
+  it("treats a cache as complete when no authoritative counts exist", async () => {
+    const getFullTextPageCounts = vi.fn(async () => null);
+    const { adapter, reader, attachment } = makeAdapter({
+      getPageStats: vi.fn(async () => ({ pageIndex: 0, pageNumber: 1 })),
+      getFullTextPageCounts,
+      readIndexedFullText: vi.fn(async () => ({
+        text: "only page",
+        extractedPages: 1,
+      })),
+    });
+    const service = new ReaderContextService(adapter, host);
+    await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.searchCurrentPdf("only");
+
+    expect(result.source).toBe("indexed-fulltext");
+    expect(adapter.readPdfWorkerText).not.toHaveBeenCalled();
+  });
+
   it("implements every advertised dynamic tool under the exact stable name", async () => {
     const { adapter } = makeAdapter();
     host.entries = [
@@ -1518,6 +1650,23 @@ describe("pure helpers", () => {
     ]);
   });
 
+  it("returns search matches in ascending page order", () => {
+    const pages = [
+      "no match here",
+      "the keyword appears on page two",
+      "nothing on page three either",
+      "another keyword sighting on page four",
+      "keyword shows up a third time on page five",
+    ];
+    const matches = searchPageText(pages.join("\f"), "keyword", 20);
+    const pageNumbers = matches.map((match) => match.pageNumber ?? -1);
+
+    expect(pageNumbers).toEqual([2, 4, 5]);
+    for (let index = 1; index < pageNumbers.length; index += 1) {
+      expect(pageNumbers[index]!).toBeGreaterThanOrEqual(pageNumbers[index - 1]!);
+    }
+  });
+
   it("renders explicit read-only agent policy", () => {
     const metadata = makeMetadata();
     const instructions = renderAgentInstructions({
@@ -1801,6 +1950,45 @@ describe("createZotero9ReadAdapter", () => {
     await expect(adapter.listAnnotations(attachment)).resolves.toEqual([
       expect.objectContaining({ key: "ANN1", pageNumber: 2, text: "important" }),
     ]);
+  });
+
+  it("maps Zotero.Fulltext.getPages to indexed/total counts and flags a truncated index", async () => {
+    const attachment = { id: 17, key: "ATTACH01" };
+    const getPages = vi.fn(async (id: unknown) => (
+      id === 17 ? { indexedPages: 100, totalPages: 250 } : null
+    ));
+    const runtime = {
+      Fulltext: {
+        getItemCacheFile: () => ({ path: "/cache/.zotero-ft-cache" }),
+        getPages,
+      },
+    };
+    const adapter = createZotero9ReadAdapter(runtime, { fileExists: vi.fn(async () => true) });
+
+    await expect(adapter.getFullTextPageCounts?.(attachment)).resolves.toEqual({
+      indexedPages: 100,
+      totalPages: 250,
+    });
+    expect(getPages).toHaveBeenCalledWith(17);
+    await expect(adapter.getIndexedFullTextReference?.(attachment)).resolves.toMatchObject({
+      path: "/cache/.zotero-ft-cache",
+      totalPages: 250,
+      truncated: true,
+    });
+  });
+
+  it("reports no page counts and an untruncated reference when Zotero exposes no getPages API", async () => {
+    const attachment = { id: 17, key: "ATTACH01" };
+    const runtime = {
+      Fulltext: { getItemCacheFile: () => ({ path: "/cache/.zotero-ft-cache" }) },
+    };
+    const adapter = createZotero9ReadAdapter(runtime, { fileExists: vi.fn(async () => true) });
+
+    await expect(adapter.getFullTextPageCounts?.(attachment)).resolves.toBeNull();
+    await expect(adapter.getIndexedFullTextReference?.(attachment)).resolves.toMatchObject({
+      path: "/cache/.zotero-ft-cache",
+      truncated: false,
+    });
   });
 
   it("finds an unloaded attachment through Zotero's public read-only library API", async () => {

@@ -244,6 +244,15 @@ export interface ZoteroReadAdapter<TReader = unknown, TItem = unknown> {
   getIndexedFullTextReference?(
     attachment: TItem,
   ): Promise<PdfTextReference | null>;
+  /**
+   * Zotero's own authoritative record of how many pages were indexed versus
+   * how many the document actually has (`Zotero.Fulltext.getPages`). Optional
+   * because older/alternate runtimes may not expose it; callers must not
+   * assume completeness when it is unavailable.
+   */
+  getFullTextPageCounts?(
+    attachment: TItem,
+  ): Promise<{ indexedPages?: number; totalPages?: number } | null>;
   /** Read PDF text in memory. `pageIndexes` are zero-based; null means all pages. */
   readPdfWorkerText(
     attachment: TItem,
@@ -986,8 +995,12 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
     const files = snapshot.context.workspace;
     if (!files) return null;
     const existing = snapshot.context.pdfText;
-    if (existing && existing.path !== files.pdfText) return existing;
-    if (existing) {
+    // A truncated in-place index reference must never be handed to the
+    // terminal as-is: Zotero only indexed a prefix of the document. Fall
+    // through to the ensureFullText mirror path below so the terminal gets
+    // the uncapped PDFWorker extraction instead.
+    if (existing && existing.path !== files.pdfText && !existing.truncated) return existing;
+    if (existing && existing.path === files.pdfText) {
       if (await this.host.profileTextExists(files.pdfText)) {
         this.rememberPdfTextReference(snapshot.context.attachment, existing);
         return existing;
@@ -1928,10 +1941,17 @@ export class ReaderContextService<TReader = unknown, TItem = unknown> {
       return null;
     });
     const indexedText = cleanText(indexedFullText?.text);
+    // readIndexedFullText only ever reports the cache's own extracted page
+    // count, which can never expose a truncated index by itself (Zotero caps
+    // indexing at a preference-controlled page limit well below the document's
+    // real length). Zotero.Fulltext.getPages() is the authoritative source for
+    // both how many pages were indexed and how many the PDF actually has.
+    const dbCounts = await this.zotero.getFullTextPageCounts?.(attachment).catch(() => null)
+      ?? null;
     const indexedPageCount = indexedText
-      ? (indexedFullText?.extractedPages ?? splitPdfPages(indexedText).length)
+      ? (dbCounts?.indexedPages ?? indexedFullText?.extractedPages ?? splitPdfPages(indexedText).length)
       : 0;
-    const knownPageCount = indexedFullText?.totalPages ?? pageStats.pageCount;
+    const knownPageCount = pageStats.pageCount ?? dbCounts?.totalPages ?? indexedFullText?.totalPages;
     const indexedLooksComplete =
       Boolean(indexedText)
       && (knownPageCount === undefined || indexedPageCount >= knownPageCount);
@@ -2721,9 +2741,12 @@ export interface Zotero9Runtime {
   };
   Fulltext?: {
     getItemCacheFile?: (item: unknown) => unknown;
+    /** Authoritative indexed-vs-total page counts for one item; may be async. */
+    getPages?: (itemID: unknown) => unknown;
   };
   FullText?: {
     getItemCacheFile?: (item: unknown) => unknown;
+    getPages?: (itemID: unknown) => unknown;
   };
   File?: {
     getContentsAsync?: (path: string, encoding?: string) => Promise<string>;
@@ -2766,6 +2789,12 @@ function stringProperty(object: unknown, ...names: string[]): string | undefined
 function numberProperty(object: unknown, ...names: string[]): number | undefined {
   const value = Number(property(object, ...names));
   return Number.isFinite(value) ? value : undefined;
+}
+
+/** Coerce a raw (already-extracted) value to a finite number, or undefined. */
+function toFiniteNumber(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
 }
 
 function safeProperty(object: unknown, ...names: string[]): unknown {
@@ -2950,6 +2979,26 @@ export function createZotero9ReadAdapter(
     return rawPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rawPath) ? rawPath : null;
   };
 
+  /**
+   * Zotero's authoritative indexed-vs-total page counts for one attachment,
+   * straight from its full-text index database row. Shared by the public
+   * `getFullTextPageCounts` adapter method and `getIndexedFullTextReference`'s
+   * own truncation check below.
+   */
+  const getFullTextPageCounts = async (
+    attachment: unknown,
+  ): Promise<{ indexedPages?: number; totalPages?: number } | null> => {
+    const fulltext = zotero.Fulltext ?? zotero.FullText;
+    const getPages = method(fulltext, "getPages");
+    if (!getPages) return null;
+    const { id } = itemIdentity(attachment);
+    const record = asRecord(await getPages(id));
+    const indexedPages = toFiniteNumber(record.indexedPages);
+    const totalPages = toFiniteNumber(record.totalPages);
+    if (indexedPages === undefined && totalPages === undefined) return null;
+    return { indexedPages, totalPages };
+  };
+
   return {
     async getActiveReaderHook() {
       const mainWindow = zotero.getMainWindow?.();
@@ -3061,13 +3110,23 @@ export function createZotero9ReadAdapter(
         ?? (typeof cacheFile === "string" ? cacheFile : undefined);
       if (!path || !path.startsWith("/")) return null;
       if (environment.fileExists && !(await environment.fileExists(path))) return null;
+      const dbCounts = await getFullTextPageCounts(attachment);
+      const truncated = Boolean(
+        dbCounts
+        && dbCounts.indexedPages !== undefined
+        && dbCounts.totalPages !== undefined
+        && dbCounts.indexedPages < dbCounts.totalPages,
+      );
       return {
         schemaVersion: 1,
         path,
         source: "indexed-fulltext",
-        truncated: false,
+        totalPages: dbCounts?.totalPages,
+        truncated,
       };
     },
+
+    getFullTextPageCounts,
 
     async readIndexedFullText(attachment) {
       const fulltext = zotero.Fulltext ?? zotero.FullText;
@@ -3084,8 +3143,14 @@ export function createZotero9ReadAdapter(
         return null;
       }
       if (!cleanText(text)) return null;
+      // Zotero's own cache file only ever holds whatever it indexed, so its
+      // page count must never be reported as the document's total page count
+      // (that fabricated equality is exactly what let a truncated index look
+      // "complete" before). `getFullTextPageCounts` is the authoritative source
+      // for `totalPages`; callers fall back to their own signals (live reader
+      // page count, etc.) when that is unavailable.
       const pages = splitPdfPages(text);
-      return { text, extractedPages: pages.length, totalPages: pages.length };
+      return { text, extractedPages: pages.length };
     },
 
     async readPdfWorkerText(attachment, pageIndexes) {
