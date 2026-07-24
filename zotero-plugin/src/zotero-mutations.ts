@@ -1,6 +1,6 @@
 import type { ReaderContext } from "./reader-context";
 import type { CheckpointOption, DiffReview } from "./sidebar";
-import { makeLocalFile, profilePath, randomID } from "./platform";
+import { configuredLibraryRoot, makeLocalFile, profilePath, randomID } from "./platform";
 
 export const ZOTERO_MUTATION_TOOL = "zotero_propose_changes" as const;
 
@@ -477,7 +477,17 @@ export function createZoteroMutationHost(
         if (Number(current.attachment.linkMode) !== Number(zotero.Attachments?.LINK_MODE_LINKED_FILE)) {
           throw new Error("Only linked-file attachments can be relinked. Stored Zotero attachments keep their managed path.");
         }
-        await validatePdfPath(operation.newPath, null, ioUtils);
+        const inspected = await validatePdfPath(
+          operation.newPath,
+          [configuredLibraryRoot()],
+          ioUtils,
+          RELINK_CONTAINMENT_ERROR,
+        );
+        // Store the canonical (post-normalize, pre-symlink) path back onto the
+        // operation so the reviewed diff and Apply both act on exactly what was
+        // validated here -- not a raw path that could still contain a
+        // since-retargeted symlink segment.
+        operation.newPath = inspected.canonicalPath;
       }
       else if (operation.type === "replace_pdf") {
         const allowedRoots = [context.workspace?.root, profilePath("staging")].filter(Boolean) as string[];
@@ -584,7 +594,19 @@ export function createZoteroMutationHost(
           await paper.saveTx({ skipDateModifiedUpdate: true });
         }
         else if (operation.type === "relink_attachment") {
-          await attachment.relinkAttachmentFile(operation.newPath);
+          // Re-validate at Apply time (mirrors replace_pdf below): the review
+          // ran validateOperations once already, but the window between that
+          // check and this write is exactly where a symlink could be
+          // retargeted. Re-resolving here and forwarding the fresh
+          // canonicalPath -- never the caller-supplied operation.newPath --
+          // closes that gap.
+          const inspected = await validatePdfPath(
+            operation.newPath,
+            [configuredLibraryRoot()],
+            ioUtils,
+            RELINK_CONTAINMENT_ERROR,
+          );
+          await attachment.relinkAttachmentFile(inspected.canonicalPath);
           attachmentContentChanged = true;
         }
         else if (operation.type === "replace_pdf") {
@@ -1019,14 +1041,25 @@ function binaryDigestToHex(value: string): string {
     .join("");
 }
 
+const DEFAULT_PDF_CONTAINMENT_ERROR = "Replacement PDFs must be staged inside Zotkit's private paper workspace";
+const RELINK_CONTAINMENT_ERROR = "Relink targets must live under the configured PDF library root";
+
 async function validatePdfPath(
   path: string,
   allowedRoots: readonly string[] | null,
   ioUtils: any,
+  containmentError: string = DEFAULT_PDF_CONTAINMENT_ERROR,
 ): Promise<{ canonicalPath: string; size: number }> {
   if (!path.startsWith("/")) throw new Error("PDF paths must be absolute");
   if (!path.toLowerCase().endsWith(".pdf")) throw new Error("The selected file must end in .pdf");
   const file = makeLocalFile(path);
+  // Check isSymlink() on the raw, unresolved leaf *before* normalize() runs.
+  // normalize() resolves the whole symlink chain to its target, so checking
+  // isSymlink() afterward always inspects the *resolved* file -- which is
+  // never itself a symlink -- making the check permanently dead. Checking
+  // first, against the still-unresolved path, is the only way it can ever
+  // see the link.
+  if (file.isSymlink?.()) throw new Error("Symbolic-link PDF targets are not accepted");
   file.normalize?.();
   const canonicalPath = String(file.path || path);
   if (allowedRoots && !allowedRoots.some((root) => {
@@ -1034,9 +1067,8 @@ async function validatePdfPath(
     rootFile.normalize?.();
     return isWithin(canonicalPath, String(rootFile.path || root));
   })) {
-    throw new Error("Replacement PDFs must be staged inside Zotkit's private paper workspace");
+    throw new Error(containmentError);
   }
-  if (file.isSymlink?.()) throw new Error("Symbolic-link PDF targets are not accepted");
   const stat = await ioUtils.stat(canonicalPath);
   if (stat?.type !== "regular") throw new Error("The PDF path is not a regular file");
   const size = Number(stat.size || 0);

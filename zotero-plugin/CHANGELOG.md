@@ -12,6 +12,9 @@
 - 新增问答自动同步到 Zotero 笔记：为当前条目维护一篇打有 `zotkit-chat` 标签的笔记，按会话分节追加最新问答，安全转换为笔记可用的 HTML 并与已有分节匹配合并，而非重复创建。
 - 修复全文检索在 Zotero 索引默认按 100 页截断时被误判为完整的问题：新增基于 `Zotero.Fulltext.getPages` 的权威索引/总页数校验，一旦索引不完整即回退到无页数上限的 PDFWorker 提取，确保 `zotero_search_current_pdf` 与终端 MCP 都能看到全文而非被截断的前 100 页。
 - 新增 `zotero_get_pdf_outline` 工具：返回当前 PDF 的目录（大纲/书签），含一开始编号的页码与嵌套深度，便于长论文先规划章节再用 `zotero_read_pdf_pages` 精读；没有内嵌目录时会提示改用 `zotero_search_current_pdf`。
+- 修复：审批变更（`resolveReview`）在检查 `pending` 状态前就已跨越多个 `await`，双击 Apply（或任何并发的第二次调用）都会重跑 snapshot → checkpoint → apply，`replace_pdf` 场景下第二次运行会用已替换后的字节覆盖 checkpoint，永久销毁唯一可用的回滚备份。现在同步检查状态并在第一个 `await` 之前即置为 `resolving`；全部 accept/reject 都串行经过同一队列，不同审批之间也不会交错执行 apply。
+- 修复：提议变更的 Diff 视图会把字段值截断到 800 字符并拍平换行，collection 标签也未经净化直接插入——提示注入可以让审阅看到的内容和 Apply 实际写入的字节不一致。现在 Diff 完整呈现每个字符、逐行保留换行（控制字符与 bidi 覆盖字符转义为可见的 `\uXXXX`），collection 标签同样经过净化，单字段超过 20000 字符时会直接拒绝提案而不再静默截断。
+- 修复：relink 校验把包含根传成 `null`，库根之外的任意 `.pdf` 路径都会被接受（可与 `replace_pdf` 链式利用为任意文件覆盖）；symlink 检查又排在 `normalize()` 之后，对已解析路径判断等于恒假；Apply 还直接复用未重新校验的原始路径，评审通过到点击 Apply 之间换靶（TOCTOU）会附加与审阅时不同的字节。现在 relink 目标必须落在配置的 PDF 库根内，symlink 叶子在 `normalize()` 之前即被拒绝，校验得到的 canonical 路径会写回提案（Diff 与 Apply 保持一致），Apply 执行前还会用同样的 roots 重新校验一次再 relink。
 
 ## 0.3.0
 

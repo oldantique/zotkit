@@ -8,6 +8,7 @@ import {
   type MutationHost,
   type PaperCheckpoint,
   type PaperMutationSnapshot,
+  type ZoteroMutationOperation,
 } from "../src/zotero-mutations";
 
 function context(key = "ATTACH"): ReaderContext {
@@ -481,80 +482,215 @@ describe("parseOperations", () => {
   });
 });
 
+// The configured PDF library root used by every relink test below.
+// `configuredLibraryRoot()` reads it via `Services.prefs.getStringPref`, so
+// each test bed stubs `Services` to return this value rather than falling
+// through to the real `Services.dirsvc`-backed `homePath()` default.
+const LIBRARY_ROOT = "/library/root";
+
+interface RelinkFsHooks {
+  // Keyed by the raw (pre-normalize) path the mock nsIFile was initialized
+  // with. Lets a test flip a single path "hostile" (symlink / relocated)
+  // independently of every other path the same run touches (including the
+  // allowed-root file itself, which goes through the identical stub).
+  isSymlink?: (rawPath: string) => boolean;
+  normalize?: (rawPath: string) => string;
+}
+
+/**
+ * Builds a `MutationHost` wired to fully-stubbed Zotero/Components/Services
+ * globals, plus the `attachment` stub `relinkAttachmentFile` is asserted
+ * against. `hooks` controls the mock nsIFile's `isSymlink()`/`normalize()`
+ * behavior per path so tests can simulate symlink leaves, TOCTOU retargeting
+ * between calls, and normalize() rewriting a path to its canonical form.
+ */
+function makeRelinkTestBed(hooks: RelinkFsHooks = {}) {
+  const globals = {
+    Zotero: (globalThis as any).Zotero,
+    PathUtils: (globalThis as any).PathUtils,
+    Components: (globalThis as any).Components,
+    Services: (globalThis as any).Services,
+  };
+  const attachment = {
+    id: 7,
+    key: "ATTACH",
+    libraryID: 1,
+    attachmentPath: "/papers/paper.pdf",
+    attachmentLinkMode: 2,
+    relinkAttachmentFile: vi.fn(async (path: string) => { attachment.attachmentPath = path; }),
+  };
+  const paper = { id: 6, key: "PARENT", libraryID: 1 };
+  const clearItemWords = vi.fn(async () => {});
+  const queueItem = vi.fn(async () => {});
+  const trigger = vi.fn(async () => {});
+  const executeTransaction = vi.fn(async (callback: () => Promise<void>) => callback());
+  const runtime = {
+    Items: {
+      getAsync: vi.fn(async (id: number) => id === 7 ? attachment : paper),
+      loadDataTypes: vi.fn(async () => {}),
+    },
+    Attachments: { LINK_MODE_LINKED_FILE: 2 },
+    Fulltext: { clearItemWords, queueItem },
+    DB: { executeTransaction },
+    Notifier: { trigger },
+  };
+  (globalThis as any).Zotero = { Profile: { dir: "/profile" } };
+  (globalThis as any).PathUtils = { join: (...parts: string[]) => parts.join("/").replace(/\/{2,}/g, "/") };
+  (globalThis as any).Services = {
+    prefs: { getStringPref: (_key: string, fallback: string) => LIBRARY_ROOT || fallback },
+  };
+  (globalThis as any).Components = {
+    classes: {
+      "@mozilla.org/file/local;1": {
+        createInstance: () => ({
+          path: "",
+          initWithPath(path: string) { this.path = path; },
+          normalize() { this.path = hooks.normalize ? hooks.normalize(this.path) : this.path; },
+          isSymlink() { return hooks.isSymlink ? hooks.isSymlink(this.path) : false; },
+        }),
+      },
+    },
+    interfaces: { nsIFile: {} },
+  };
+  const ioUtils = {
+    stat: vi.fn(async () => ({ type: "regular", size: 16 })),
+    read: vi.fn(async (_path: string, options?: { maxBytes?: number }) => (
+      options?.maxBytes ? Uint8Array.from([37, 80, 68, 70, 45]) : new Uint8Array(16)
+    )),
+  };
+  const host = createZoteroMutationHost(runtime, ioUtils, (globalThis as any).PathUtils);
+  const restore = () => {
+    if (globals.Zotero === undefined) delete (globalThis as any).Zotero;
+    else (globalThis as any).Zotero = globals.Zotero;
+    if (globals.PathUtils === undefined) delete (globalThis as any).PathUtils;
+    else (globalThis as any).PathUtils = globals.PathUtils;
+    if (globals.Components === undefined) delete (globalThis as any).Components;
+    else (globalThis as any).Components = globals.Components;
+    if (globals.Services === undefined) delete (globalThis as any).Services;
+    else (globalThis as any).Services = globals.Services;
+  };
+  return {
+    host,
+    attachment,
+    ioUtils,
+    fulltext: { clearItemWords, queueItem, trigger, executeTransaction },
+    restore,
+  };
+}
+
 describe("createZoteroMutationHost", () => {
   it("clears Zotero full-text state and queues reindexing after relinking", async () => {
-    const globals = {
-      Zotero: (globalThis as any).Zotero,
-      PathUtils: (globalThis as any).PathUtils,
-      Components: (globalThis as any).Components,
-    };
-    const attachment = {
-      id: 7,
-      key: "ATTACH",
-      libraryID: 1,
-      attachmentPath: "/papers/paper.pdf",
-      attachmentLinkMode: 2,
-      relinkAttachmentFile: vi.fn(async (path: string) => { attachment.attachmentPath = path; }),
-    };
-    const paper = { id: 6, key: "PARENT", libraryID: 1 };
-    const clearItemWords = vi.fn(async () => {});
-    const queueItem = vi.fn(async () => {});
-    const trigger = vi.fn(async () => {});
-    const executeTransaction = vi.fn(async (callback: () => Promise<void>) => callback());
-    const runtime = {
-      Items: {
-        getAsync: vi.fn(async (id: number) => id === 7 ? attachment : paper),
-        loadDataTypes: vi.fn(async () => {}),
-      },
-      Attachments: { LINK_MODE_LINKED_FILE: 2 },
-      Fulltext: { clearItemWords, queueItem },
-      DB: { executeTransaction },
-      Notifier: { trigger },
-    };
-    (globalThis as any).Zotero = { Profile: { dir: "/profile" } };
-    (globalThis as any).PathUtils = { join: (...parts: string[]) => parts.join("/").replace(/\/{2,}/g, "/") };
-    (globalThis as any).Components = {
-      classes: {
-        "@mozilla.org/file/local;1": {
-          createInstance: () => ({
-            path: "",
-            initWithPath(path: string) { this.path = path; },
-            normalize() {},
-            isSymlink: () => false,
-          }),
-        },
-      },
-      interfaces: { nsIFile: {} },
-    };
-    const ioUtils = {
-      stat: vi.fn(async () => ({ type: "regular", size: 16 })),
-      read: vi.fn(async (_path: string, options?: { maxBytes?: number }) => (
-        options?.maxBytes ? Uint8Array.from([37, 80, 68, 70, 45]) : new Uint8Array(16)
-      )),
-    };
-
+    const { host, attachment, fulltext, restore } = makeRelinkTestBed();
     try {
-      const host = createZoteroMutationHost(runtime, ioUtils, (globalThis as any).PathUtils);
       await host.apply(
         context(),
         snapshot(),
-        [{ type: "relink_attachment", newPath: "/papers/relinked.pdf" }],
+        [{ type: "relink_attachment", newPath: `${LIBRARY_ROOT}/relinked.pdf` }],
         [],
       );
 
-      expect(attachment.relinkAttachmentFile).toHaveBeenCalledWith("/papers/relinked.pdf");
-      expect(executeTransaction).toHaveBeenCalledOnce();
-      expect(clearItemWords).toHaveBeenCalledWith(7);
-      expect(trigger).toHaveBeenCalledWith("modify", "item", [7], { 7: {} });
-      expect(queueItem).toHaveBeenCalledWith(attachment);
+      expect(attachment.relinkAttachmentFile).toHaveBeenCalledWith(`${LIBRARY_ROOT}/relinked.pdf`);
+      expect(fulltext.executeTransaction).toHaveBeenCalledOnce();
+      expect(fulltext.clearItemWords).toHaveBeenCalledWith(7);
+      expect(fulltext.trigger).toHaveBeenCalledWith("modify", "item", [7], { 7: {} });
+      expect(fulltext.queueItem).toHaveBeenCalledWith(attachment);
     }
     finally {
-      if (globals.Zotero === undefined) delete (globalThis as any).Zotero;
-      else (globalThis as any).Zotero = globals.Zotero;
-      if (globals.PathUtils === undefined) delete (globalThis as any).PathUtils;
-      else (globalThis as any).PathUtils = globals.PathUtils;
-      if (globals.Components === undefined) delete (globalThis as any).Components;
-      else (globalThis as any).Components = globals.Components;
+      restore();
     }
+  });
+
+  describe("relink_attachment containment + symlink/TOCTOU safety", () => {
+    it("rejects an absolute relink target outside the configured PDF library root", async () => {
+      const { host, attachment, restore } = makeRelinkTestBed();
+      try {
+        await expect(host.validateOperations(
+          context(),
+          snapshot(),
+          [{ type: "relink_attachment", newPath: "/outside/other.pdf" }],
+        )).rejects.toThrow(/library root/i);
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects a symlink leaf even when normalize() resolves it to a legitimate in-root target", async () => {
+      // Simulates the pre-fix bug: if isSymlink() were checked *after*
+      // normalize(), this.path would already be the resolved
+      // "legit.pdf" -- which the hook reports as NOT a symlink -- so the
+      // check would silently pass. Checking before normalize() (the fix)
+      // must still catch the raw symlink leaf.
+      const { host, attachment, restore } = makeRelinkTestBed({
+        isSymlink: (path) => path === `${LIBRARY_ROOT}/link.pdf`,
+        normalize: (path) => path === `${LIBRARY_ROOT}/link.pdf` ? `${LIBRARY_ROOT}/legit.pdf` : path,
+      });
+      try {
+        await expect(host.validateOperations(
+          context(),
+          snapshot(),
+          [{ type: "relink_attachment", newPath: `${LIBRARY_ROOT}/link.pdf` }],
+        )).rejects.toThrow("Symbolic-link PDF targets are not accepted");
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects at Apply when the target turns hostile after the review already validated it (TOCTOU)", async () => {
+      // Also gives normalize() a legitimate-looking resolved target for the
+      // hostile leaf -- exactly the shape that would defeat an isSymlink()
+      // check that (incorrectly) ran after normalize() instead of before it.
+      let hostile = false;
+      const rawPath = `${LIBRARY_ROOT}/paper.pdf`;
+      const resolvedPath = `${LIBRARY_ROOT}/paper-real.pdf`;
+      const { host, attachment, restore } = makeRelinkTestBed({
+        isSymlink: (path) => hostile && path === rawPath,
+        normalize: (path) => hostile && path === rawPath ? resolvedPath : path,
+      });
+      try {
+        const operations: ZoteroMutationOperation[] = [
+          { type: "relink_attachment", newPath: rawPath },
+        ];
+        // Legitimate at proposal/review time.
+        await host.validateOperations(context(), snapshot(), operations);
+
+        // Retargeted to a symlink between review and Apply.
+        hostile = true;
+
+        await expect(host.apply(context(), snapshot(), operations, []))
+          .rejects.toThrow("Symbolic-link PDF targets are not accepted");
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("forwards the canonical (post-normalize) path to relinkAttachmentFile, not the raw operation.newPath", async () => {
+      const rawPath = `${LIBRARY_ROOT}/./a.pdf`;
+      const canonicalPath = `${LIBRARY_ROOT}/a.pdf`;
+      const { host, attachment, restore } = makeRelinkTestBed({
+        normalize: (path) => path === rawPath ? canonicalPath : path,
+      });
+      try {
+        const operations: ZoteroMutationOperation[] = [
+          { type: "relink_attachment", newPath: rawPath },
+        ];
+
+        await host.apply(context(), snapshot(), operations, []);
+
+        expect(attachment.relinkAttachmentFile).toHaveBeenCalledWith(canonicalPath);
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalledWith(rawPath);
+        // validateOperations canonicalizes operation.newPath in place, so the
+        // diff (built from the same operations array) also reflects it.
+        expect(operations[0]).toMatchObject({ newPath: canonicalPath });
+      }
+      finally {
+        restore();
+      }
+    });
   });
 });
