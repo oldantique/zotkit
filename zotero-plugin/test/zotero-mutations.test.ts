@@ -1,0 +1,762 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ReaderContext } from "../src/reader-context";
+import {
+  ZOTERO_MUTATION_TOOL,
+  ZoteroMutationService,
+  createZoteroMutationHost,
+  parseOperations,
+  validatePdfPath,
+  type MutationHost,
+  type PaperCheckpoint,
+  type PaperMutationSnapshot,
+  type ZoteroMutationOperation,
+} from "../src/zotero-mutations";
+
+function context(key = "ATTACH"): ReaderContext {
+  return {
+    schemaVersion: 1,
+    capturedAt: "2026-07-23T00:00:00.000Z",
+    attachment: {
+      id: 7,
+      key,
+      libraryID: 1,
+      title: "paper.pdf",
+      creators: [],
+      tags: [],
+      filename: "paper.pdf",
+    },
+    parent: {
+      id: 6,
+      key: "PARENT",
+      libraryID: 1,
+      title: "Current title",
+      creators: [],
+      tags: [],
+    },
+    pdfPath: "/papers/paper.pdf",
+    page: { pageIndex: 0, pageNumber: 1, text: "page", source: "pdfjs", warnings: [] },
+    selection: null,
+    fullText: { source: "deferred", characters: 0 },
+    workspace: {
+      root: "/profile/papers/1-ATTACH",
+      context: "/profile/papers/1-ATTACH/context.json",
+      currentPage: "/profile/papers/1-ATTACH/current-page.md",
+      currentSelection: "/profile/papers/1-ATTACH/current-selection.md",
+      pdfText: "/profile/papers/1-ATTACH/current-pdf-text.txt",
+      agents: "/profile/papers/1-ATTACH/AGENTS.md",
+      claude: "/profile/papers/1-ATTACH/CLAUDE.md",
+    },
+    warnings: [],
+  };
+}
+
+function snapshot(title = "Current title"): PaperMutationSnapshot {
+  return {
+    schemaVersion: 1,
+    paper: {
+      id: 6,
+      key: "PARENT",
+      libraryID: 1,
+      fields: {
+        title,
+        abstractNote: "",
+        date: "2026",
+        DOI: "",
+        url: "",
+        extra: "",
+      },
+      collectionKeys: ["ABCDEFGH"],
+    },
+    attachment: {
+      id: 7,
+      key: "ATTACH",
+      libraryID: 1,
+      rawPath: "/papers/paper.pdf",
+      resolvedPath: "/papers/paper.pdf",
+      linkMode: 2,
+    },
+  };
+}
+
+function harness() {
+  let activeContext = context();
+  let currentSnapshot = snapshot();
+  const checkpoint: PaperCheckpoint = {
+    schemaVersion: 1,
+    id: "checkpoint-2",
+    label: "Rename paper",
+    createdAt: "2026-07-23T00:00:01.000Z",
+    paperIdentity: "1-ATTACH",
+    snapshot: currentSnapshot,
+    pdfBackupPath: null,
+    pdfBackupBytes: 0,
+  };
+  const host: MutationHost = {
+    snapshot: vi.fn(async () => structuredClone(currentSnapshot)),
+    describeCollections: vi.fn(async () => new Map([
+      ["ABCDEFGH", "Old collection"],
+      ["IJKLMNOP", "New collection"],
+    ])),
+    validateOperations: vi.fn(async () => {}),
+    fingerprintPdf: vi.fn(async (_context, path) => ({
+      canonicalPath: path,
+      size: 128,
+      sha256: "a".repeat(64),
+    })),
+    createCheckpoint: vi.fn(async () => checkpoint),
+    apply: vi.fn(async () => {}),
+    restore: vi.fn(async () => ({
+      attachmentID: 7,
+      attachmentKey: "ATTACH",
+      attachmentLibraryID: 1,
+      attachmentContentChanged: false,
+      attachmentRelinked: false,
+      pdfReplaced: false,
+    })),
+    readCheckpoints: vi.fn(async () => [checkpoint]),
+    pruneCheckpoints: vi.fn(async () => {}),
+  };
+  const onState = vi.fn();
+  let sequence = 0;
+  const service = new ZoteroMutationService(
+    host,
+    { onState, getContext: () => activeContext },
+    () => new Date("2026-07-23T00:00:00.000Z"),
+    (prefix) => `${prefix}-${++sequence}`,
+  );
+  return {
+    service,
+    host,
+    onState,
+    setContext: (next: ReaderContext) => { activeContext = next; },
+    setSnapshot: (next: PaperMutationSnapshot) => { currentSnapshot = next; },
+  };
+}
+
+describe("ZoteroMutationService", () => {
+  it("turns an Agent tool call into a pending diff without applying anything", async () => {
+    const { service, host } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      title: "Rename paper",
+      operations: [
+        { type: "set_fields", fields: { title: "Improved title" } },
+        { type: "set_collections", collectionKeys: ["IJKLMNOP"] },
+      ],
+    });
+
+    expect(result.status).toBe("awaiting_user_review");
+    expect(host.apply).not.toHaveBeenCalled();
+    expect(service.getReviews()[0]).toMatchObject({
+      id: "review-1",
+      state: "pending",
+      title: "Rename paper",
+    });
+    expect(service.getReviews()[0]?.diff).toContain("- Current title");
+    expect(service.getReviews()[0]?.diff).toContain("+ Improved title");
+    expect(service.getReviews()[0]?.diff).toContain("New collection (IJKLMNOP)");
+  });
+
+  it("creates a checkpoint only after the user accepts the diff", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "replace_pdf", stagedPath: "/profile/papers/1-ATTACH/output.pdf" }],
+    });
+
+    await service.resolveReview("review-1", "accept");
+
+    expect(host.createCheckpoint).toHaveBeenCalledWith(
+      "checkpoint-2",
+      expect.any(String),
+      expect.objectContaining({ attachment: expect.objectContaining({ key: "ATTACH" }) }),
+      expect.any(Object),
+      true,
+    );
+    expect(host.apply).toHaveBeenCalledOnce();
+    expect(host.apply).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Array),
+      [expect.objectContaining({
+        operationIndex: 0,
+        size: 128,
+        sha256: "a".repeat(64),
+      })],
+    );
+    expect(service.getReviews()[0]?.state).toBe("accepted");
+  });
+
+  it("binds the reviewed PDF digest and refuses Apply if the staged bytes change", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.fingerprintPdf)
+      .mockResolvedValueOnce({ canonicalPath: "/profile/papers/1-ATTACH/output.pdf", size: 128, sha256: "a".repeat(64) })
+      .mockResolvedValueOnce({ canonicalPath: "/profile/papers/1-ATTACH/output.pdf", size: 129, sha256: "b".repeat(64) });
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "replace_pdf", stagedPath: "/profile/papers/1-ATTACH/output.pdf" }],
+    });
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("staged PDF changed after this diff was prepared");
+    expect(host.apply).not.toHaveBeenCalled();
+    expect(service.getReviews()[0]).toMatchObject({ state: "failed" });
+    expect(await service.getCheckpoints()).toEqual([
+      expect.objectContaining({ id: "checkpoint-2" }),
+    ]);
+  });
+
+  it("surfaces an automatic rollback failure and retains its safety checkpoint", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.apply).mockRejectedValueOnce(new Error("write failed"));
+    vi.mocked(host.restore).mockRejectedValueOnce(new Error("restore failed"));
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "replace_pdf", stagedPath: "/profile/papers/1-ATTACH/output.pdf" }],
+    });
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow(/write failed.*rollback also failed.*restore failed.*checkpoint-2/i);
+    expect(service.getReviews()[0]).toMatchObject({ state: "failed" });
+    expect(await service.getCheckpoints()).toEqual([
+      expect.objectContaining({ id: "checkpoint-2" }),
+    ]);
+  });
+
+  it("refuses Apply after the Reader switched to a different PDF", async () => {
+    const { service, host, setContext } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Improved title" } }],
+    });
+    setContext(context("OTHERKEY"));
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("active Zotero paper changed");
+    expect(host.createCheckpoint).not.toHaveBeenCalled();
+    expect(host.apply).not.toHaveBeenCalled();
+  });
+
+  it("refuses Apply when the Zotero record changed after preview", async () => {
+    const { service, host, setSnapshot } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Improved title" } }],
+    });
+    setSnapshot(snapshot("Changed elsewhere"));
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("changed after this diff was prepared");
+    expect(host.apply).not.toHaveBeenCalled();
+  });
+
+  it("restores persisted checkpoints only while their paper is active", async () => {
+    const { service, host, setContext } = harness();
+    expect(await service.getCheckpoints()).toEqual([{
+      id: "checkpoint-2",
+      label: "Rename paper",
+      createdAt: "2026-07-23T00:00:01.000Z",
+    }]);
+
+    await service.restoreCheckpoint("checkpoint-2");
+    expect(host.restore).toHaveBeenCalledOnce();
+
+    setContext(context("OTHERKEY"));
+    await expect(service.restoreCheckpoint("checkpoint-2"))
+      .rejects.toThrow("Open the checkpoint's paper");
+  });
+
+  it("rejects a concurrent second accept on the same review and applies only once", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Improved title" } }],
+    });
+
+    const first = service.resolveReview("review-1", "accept");
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("This change review was already resolved or is being applied");
+
+    await expect(first).resolves.toMatchObject({ decision: "accepted" });
+    expect(host.createCheckpoint).toHaveBeenCalledOnce();
+    expect(host.apply).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a second accept after replace_pdf already completed, so the rollback checkpoint is never overwritten", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "replace_pdf", stagedPath: "/profile/papers/1-ATTACH/output.pdf" }],
+    });
+
+    await service.resolveReview("review-1", "accept");
+    expect(host.createCheckpoint).toHaveBeenCalledOnce();
+    expect(host.apply).toHaveBeenCalledOnce();
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("This change review was already resolved or is being applied");
+
+    // The second click must never re-run snapshot -> checkpoint -> apply: doing
+    // so would back up the already-replaced PDF bytes as "original.pdf" and
+    // destroy the only usable rollback checkpoint.
+    expect(host.createCheckpoint).toHaveBeenCalledOnce();
+    expect(host.apply).toHaveBeenCalledOnce();
+  });
+
+  it("refuses accept after the review was already rejected", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Improved title" } }],
+    });
+
+    await service.resolveReview("review-1", "reject");
+    expect(service.getReviews()[0]?.state).toBe("rejected");
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("This change review was already resolved or is being applied");
+    expect(host.createCheckpoint).not.toHaveBeenCalled();
+    expect(host.apply).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent accepts for different reviews without interleaving their apply calls", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Title A" } }],
+    });
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Title B" } }],
+    });
+
+    const order: string[] = [];
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+    const gateA = deferred<void>();
+    const gateB = deferred<void>();
+
+    vi.mocked(host.apply).mockImplementation(async (_context, _current, operations) => {
+      const label = (operations[0] as { type: "set_fields"; fields: { title?: string } }).fields.title === "Title A" ? "A" : "B";
+      order.push(`start-${label}`);
+      await (label === "A" ? gateA.promise : gateB.promise);
+      order.push(`end-${label}`);
+    });
+
+    const flush = async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    };
+
+    const acceptA = service.resolveReview("review-1", "accept");
+    const acceptB = service.resolveReview("review-2", "accept");
+
+    await flush();
+    // Review B must never start applying while review A's run is still in
+    // flight, proving the queue serializes rather than interleaves.
+    expect(order).toEqual(["start-A"]);
+
+    gateA.resolve();
+    await acceptA;
+    await flush();
+    expect(order).toEqual(["start-A", "end-A", "start-B"]);
+
+    gateB.resolve();
+    await acceptB;
+    expect(order).toEqual(["start-A", "end-A", "start-B", "end-B"]);
+  });
+});
+
+describe("diff fidelity: review must show exactly what Apply will write", () => {
+  it("keeps every character of a long value instead of hiding the tail past 800 chars", async () => {
+    const { service } = harness();
+    const longValue = `${"A".repeat(800)}TAIL_MARKER_NEVER_SHOWN_BEFORE`;
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: longValue } }],
+    });
+
+    expect(result.diff).toContain("TAIL_MARKER_NEVER_SHOWN_BEFORE");
+    expect(result.diff).not.toContain("…");
+  });
+
+  it("renders multi-line values line by line with matching diff-sign continuation prefixes, without flattening", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: "First line\nSecond line\nThird line" } }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("+ First line");
+    expect(diffText).toContain("+   Second line");
+    expect(diffText).toContain("+   Third line");
+    expect(diffText).not.toContain("First line Second line Third line");
+  });
+
+  it("escapes bidi override characters into a visible literal escape instead of passing them through invisibly", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Evil‮title" } }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("\\u202E");
+    expect(diffText).not.toMatch(/‮/);
+  });
+
+  it("rejects field values beyond the 20000-character reviewable limit instead of silently truncating them", async () => {
+    const { service } = harness();
+
+    await expect(service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: "A".repeat(20_001) } }],
+    })).rejects.toThrow("Field abstractNote exceeds the 20000-character reviewable limit");
+  });
+
+  it("escapes control characters hidden inside a collection label before they reach the diff", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.describeCollections).mockResolvedValueOnce(new Map([
+      ["ABCDEFGH", "Old collection"],
+      ["IJKLMNOP", "Evil\x07Label\x1BHidden"],
+    ]));
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_collections", collectionKeys: ["IJKLMNOP"] }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("\\u0007");
+    expect(diffText).toContain("\\u001B");
+    expect(diffText).not.toMatch(/[\x00-\x08\x0B-\x1F]/);
+  });
+
+  it("sanitizes bidi-override characters in review.title to prevent card/checkpoint label scrambling", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      title: "Malicious‮title",
+      operations: [{ type: "set_fields", fields: { title: "New title" } }],
+    });
+
+    const review = service.getReviews()[0]!;
+    expect(review.title).toContain("\\u202E");
+    expect(review.title).not.toMatch(/‮/);
+  });
+
+  it("sanitizes control/bidi characters in boundedError output to prevent error-message injection", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.apply).mockRejectedValueOnce(new Error("Error with‮bidi"));
+
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "New title" } }],
+    });
+
+    let errorThrown = "";
+    try {
+      await service.resolveReview("review-1", "accept");
+    }
+    catch (e) {
+      errorThrown = String(e);
+    }
+
+    expect(errorThrown).toContain("\\u202E");
+    expect(errorThrown).not.toMatch(/‮/);
+  });
+
+  it("sanitizes DEL (U+007F) along with other control characters", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: "Text withDel" } }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("\\u007F");
+    expect(diffText).not.toMatch(//);
+  });
+});
+
+describe("parseOperations", () => {
+  it("rejects unknown fields, malformed collection keys, and empty operations", () => {
+    expect(() => parseOperations([])).toThrow("between 1 and 20");
+    expect(() => parseOperations([{ type: "set_fields", fields: { creators: "x" } }]))
+      .toThrow("not editable");
+    expect(() => parseOperations([{ type: "set_collections", collectionKeys: ["bad"] }]))
+      .toThrow("Invalid Zotero collection key");
+    expect(() => parseOperations([
+      { type: "relink_attachment", newPath: "/papers/other.pdf" },
+      { type: "replace_pdf", stagedPath: "/profile/staged.pdf" },
+    ])).toThrow("cannot be combined");
+  });
+});
+
+// The configured PDF library root used by every relink test below.
+// `configuredLibraryRoot()` reads it via `Services.prefs.getStringPref`, so
+// each test bed stubs `Services` to return this value rather than falling
+// through to the real `Services.dirsvc`-backed `homePath()` default.
+const LIBRARY_ROOT = "/library/root";
+
+interface RelinkFsHooks {
+  // Keyed by the raw (pre-normalize) path the mock nsIFile was initialized
+  // with. Lets a test flip a single path "hostile" (symlink / relocated)
+  // independently of every other path the same run touches (including the
+  // allowed-root file itself, which goes through the identical stub).
+  isSymlink?: (rawPath: string) => boolean;
+  normalize?: (rawPath: string) => string;
+}
+
+/**
+ * Builds a `MutationHost` wired to fully-stubbed Zotero/Components/Services
+ * globals, plus the `attachment` stub `relinkAttachmentFile` is asserted
+ * against. `hooks` controls the mock nsIFile's `isSymlink()`/`normalize()`
+ * behavior per path so tests can simulate symlink leaves, TOCTOU retargeting
+ * between calls, and normalize() rewriting a path to its canonical form.
+ */
+function makeRelinkTestBed(hooks: RelinkFsHooks = {}) {
+  const globals = {
+    Zotero: (globalThis as any).Zotero,
+    PathUtils: (globalThis as any).PathUtils,
+    Components: (globalThis as any).Components,
+    Services: (globalThis as any).Services,
+  };
+  const attachment = {
+    id: 7,
+    key: "ATTACH",
+    libraryID: 1,
+    attachmentPath: "/papers/paper.pdf",
+    attachmentLinkMode: 2,
+    relinkAttachmentFile: vi.fn(async (path: string) => { attachment.attachmentPath = path; }),
+  };
+  const paper = { id: 6, key: "PARENT", libraryID: 1 };
+  const clearItemWords = vi.fn(async () => {});
+  const queueItem = vi.fn(async () => {});
+  const trigger = vi.fn(async () => {});
+  const executeTransaction = vi.fn(async (callback: () => Promise<void>) => callback());
+  const runtime = {
+    Items: {
+      getAsync: vi.fn(async (id: number) => id === 7 ? attachment : paper),
+      loadDataTypes: vi.fn(async () => {}),
+    },
+    Attachments: { LINK_MODE_LINKED_FILE: 2 },
+    Fulltext: { clearItemWords, queueItem },
+    DB: { executeTransaction },
+    Notifier: { trigger },
+  };
+  (globalThis as any).Zotero = { Profile: { dir: "/profile" } };
+  (globalThis as any).PathUtils = { join: (...parts: string[]) => parts.join("/").replace(/\/{2,}/g, "/") };
+  (globalThis as any).Services = {
+    prefs: { getStringPref: (_key: string, fallback: string) => LIBRARY_ROOT || fallback },
+  };
+  (globalThis as any).Components = {
+    classes: {
+      "@mozilla.org/file/local;1": {
+        createInstance: () => ({
+          path: "",
+          initWithPath(path: string) { this.path = path; },
+          normalize() { this.path = hooks.normalize ? hooks.normalize(this.path) : this.path; },
+          isSymlink() { return hooks.isSymlink ? hooks.isSymlink(this.path) : false; },
+        }),
+      },
+    },
+    interfaces: { nsIFile: {} },
+  };
+  const ioUtils = {
+    stat: vi.fn(async () => ({ type: "regular", size: 16 })),
+    read: vi.fn(async (_path: string, options?: { maxBytes?: number }) => (
+      options?.maxBytes ? Uint8Array.from([37, 80, 68, 70, 45]) : new Uint8Array(16)
+    )),
+  };
+  const host = createZoteroMutationHost(runtime, ioUtils, (globalThis as any).PathUtils);
+  const restore = () => {
+    if (globals.Zotero === undefined) delete (globalThis as any).Zotero;
+    else (globalThis as any).Zotero = globals.Zotero;
+    if (globals.PathUtils === undefined) delete (globalThis as any).PathUtils;
+    else (globalThis as any).PathUtils = globals.PathUtils;
+    if (globals.Components === undefined) delete (globalThis as any).Components;
+    else (globalThis as any).Components = globals.Components;
+    if (globals.Services === undefined) delete (globalThis as any).Services;
+    else (globalThis as any).Services = globals.Services;
+  };
+  return {
+    host,
+    attachment,
+    ioUtils,
+    fulltext: { clearItemWords, queueItem, trigger, executeTransaction },
+    restore,
+  };
+}
+
+describe("createZoteroMutationHost", () => {
+  it("clears Zotero full-text state and queues reindexing after relinking", async () => {
+    const { host, attachment, fulltext, restore } = makeRelinkTestBed();
+    try {
+      await host.apply(
+        context(),
+        snapshot(),
+        [{ type: "relink_attachment", newPath: `${LIBRARY_ROOT}/relinked.pdf` }],
+        [],
+      );
+
+      expect(attachment.relinkAttachmentFile).toHaveBeenCalledWith(`${LIBRARY_ROOT}/relinked.pdf`);
+      expect(fulltext.executeTransaction).toHaveBeenCalledOnce();
+      expect(fulltext.clearItemWords).toHaveBeenCalledWith(7);
+      expect(fulltext.trigger).toHaveBeenCalledWith("modify", "item", [7], { 7: {} });
+      expect(fulltext.queueItem).toHaveBeenCalledWith(attachment);
+    }
+    finally {
+      restore();
+    }
+  });
+
+  describe("relink_attachment containment + symlink/TOCTOU safety", () => {
+    it("rejects an absolute relink target outside the configured PDF library root", async () => {
+      const { host, attachment, restore } = makeRelinkTestBed();
+      try {
+        await expect(host.validateOperations(
+          context(),
+          snapshot(),
+          [{ type: "relink_attachment", newPath: "/outside/other.pdf" }],
+        )).rejects.toThrow(/library root/i);
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects a symlink leaf even when normalize() resolves it to a legitimate in-root target", async () => {
+      // Simulates the pre-fix bug: if isSymlink() were checked *after*
+      // normalize(), this.path would already be the resolved
+      // "legit.pdf" -- which the hook reports as NOT a symlink -- so the
+      // check would silently pass. Checking before normalize() (the fix)
+      // must still catch the raw symlink leaf.
+      const { host, attachment, restore } = makeRelinkTestBed({
+        isSymlink: (path) => path === `${LIBRARY_ROOT}/link.pdf`,
+        normalize: (path) => path === `${LIBRARY_ROOT}/link.pdf` ? `${LIBRARY_ROOT}/legit.pdf` : path,
+      });
+      try {
+        await expect(host.validateOperations(
+          context(),
+          snapshot(),
+          [{ type: "relink_attachment", newPath: `${LIBRARY_ROOT}/link.pdf` }],
+        )).rejects.toThrow("Symbolic-link PDF targets are not accepted");
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects at Apply when the target turns hostile after the review already validated it (TOCTOU)", async () => {
+      // Also gives normalize() a legitimate-looking resolved target for the
+      // hostile leaf -- exactly the shape that would defeat an isSymlink()
+      // check that (incorrectly) ran after normalize() instead of before it.
+      let hostile = false;
+      const rawPath = `${LIBRARY_ROOT}/paper.pdf`;
+      const resolvedPath = `${LIBRARY_ROOT}/paper-real.pdf`;
+      const { host, attachment, restore } = makeRelinkTestBed({
+        isSymlink: (path) => hostile && path === rawPath,
+        normalize: (path) => hostile && path === rawPath ? resolvedPath : path,
+      });
+      try {
+        const operations: ZoteroMutationOperation[] = [
+          { type: "relink_attachment", newPath: rawPath },
+        ];
+        // Legitimate at proposal/review time.
+        await host.validateOperations(context(), snapshot(), operations);
+
+        // Retargeted to a symlink between review and Apply.
+        hostile = true;
+
+        await expect(host.apply(context(), snapshot(), operations, []))
+          .rejects.toThrow("Symbolic-link PDF targets are not accepted");
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("forwards the canonical (post-normalize) path to relinkAttachmentFile, not the raw operation.newPath", async () => {
+      const rawPath = `${LIBRARY_ROOT}/./a.pdf`;
+      const canonicalPath = `${LIBRARY_ROOT}/a.pdf`;
+      const { host, attachment, restore } = makeRelinkTestBed({
+        normalize: (path) => path === rawPath ? canonicalPath : path,
+      });
+      try {
+        const operations: ZoteroMutationOperation[] = [
+          { type: "relink_attachment", newPath: rawPath },
+        ];
+
+        await host.apply(context(), snapshot(), operations, []);
+
+        expect(attachment.relinkAttachmentFile).toHaveBeenCalledWith(canonicalPath);
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalledWith(rawPath);
+        // validateOperations canonicalizes operation.newPath in place, so the
+        // diff (built from the same operations array) also reflects it.
+        expect(operations[0]).toMatchObject({ newPath: canonicalPath });
+      }
+      finally {
+        restore();
+      }
+    });
+  });
+
+  describe("validatePdfPath empty-root fail-closed", () => {
+    it("rejects PDF when allowedRoots is an array with only an empty string", async () => {
+      const { host, ioUtils, restore } = makeRelinkTestBed();
+      try {
+        await expect(validatePdfPath(
+          "/anywhere/x.pdf",
+          [""],
+          ioUtils,
+          "test containment error"
+        )).rejects.toThrow("test containment error");
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects PDF when allowedRoots contains null (type-unsafe)", async () => {
+      const { host, ioUtils, restore } = makeRelinkTestBed();
+      try {
+        await expect(validatePdfPath(
+          "/anywhere/x.pdf",
+          [null as any],
+          ioUtils,
+          "test containment error"
+        )).rejects.toThrow("test containment error");
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects PDF when allowedRoots is an array with only a root slash", async () => {
+      const { host, ioUtils, restore } = makeRelinkTestBed();
+      try {
+        await expect(validatePdfPath(
+          "/anywhere/x.pdf",
+          ["/"],
+          ioUtils,
+          "test containment error"
+        )).rejects.toThrow("test containment error");
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("accepts PDF when allowedRoots contains a valid path alongside invalid entries", async () => {
+      const { ioUtils, restore } = makeRelinkTestBed();
+      try {
+        const result = await validatePdfPath(
+          "/valid/x.pdf",
+          ["", "/valid"],
+          ioUtils
+        );
+        expect(result).toMatchObject({
+          canonicalPath: "/valid/x.pdf",
+          size: 16
+        });
+      }
+      finally {
+        restore();
+      }
+    });
+  });
+});

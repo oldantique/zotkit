@@ -1,7 +1,14 @@
 # Instructions for AI agents
 
-You (an AI agent) were likely given this repo because your user wants you to manage
-their Zotero library with **zotkit**. Here is exactly how to proceed.
+This repository has two coequal, runtime-independent product surfaces:
+
+- the Python `zotkit` CLI for headless or external-terminal Zotero Web API/WebDAV work;
+- the Zotero XPI under `zotero-plugin/`, which provides Research Chat and an advanced
+  local terminal inside Zotero Desktop without requiring Python or API credentials.
+
+Use the section below when the user asks for the external CLI or remote/headless
+library management. For XPI, Reader, sidebar, Codex app-server, or bundled local-query
+work, operate in `zotero-plugin/` and follow its README and security boundary instead.
 
 ## 1. Install
 

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "Zotkit — Research Chat for Zotero",
+  "version": "0.3.0",
+  "description": "A Cursor-style Codex research chat and advanced local terminal inside Zotero Reader.",
+  "author": "oldantique and contributors",
+  "icons": {
+    "48": "chrome/content/icons/icon.svg",
+    "96": "chrome/content/icons/icon.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "zotkit@oldantique.github.io",
+      "update_url": "https://zotkit.invalid/updates.json",
+      "strict_min_version": "9.0",
+      "strict_max_version": "9.0.*"
+    }
+  }
+}

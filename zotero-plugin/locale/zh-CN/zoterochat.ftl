@@ -1,0 +1,12 @@
+zotkit-pane-header =
+    .label = Zotkit Research Chat
+    .aria-label = Zotkit Research Chat
+zotkit-pane-sidenav =
+    .tooltiptext = Zotkit Research Chat
+    .aria-label = Zotkit Research Chat
+zotkit-section-new-chat =
+    .tooltiptext = 用当前 PDF 选区开始新对话
+    .aria-label = 用当前 PDF 选区开始新对话
+zotkit-section-terminal =
+    .tooltiptext = 打开高级 Agent CLI Terminal
+    .aria-label = 打开高级 Agent CLI Terminal

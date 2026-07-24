@@ -2,6 +2,33 @@
 
 [English](README.md) | **简体中文**
 
+zotkit 包含两个地位相同、运行时与权限边界彼此独立的组件。它们共用仓库和产品名，
+但互不依赖。
+
+## Reader 插件（Zotero 9 / macOS）
+
+安装 [`zotero-plugin/`](zotero-plugin/README.md) 中的 XPI，即可在 Zotero 9 PDF
+Reader 右侧使用 Cursor 风格的 **Research Chat**。它通过本机 `codex app-server`
+复用 Codex CLI 登录，并提供模型/思考强度选择、每篇论文的历史会话、Plan/Tool 卡片、
+流式 Markdown 与 LaTeX 渲染。当前论文元数据、PDF 路径及所在目录、页码、选中文字和
+用户主动添加的文库上下文会自动随问题交给 Codex。真实 PTY Codex/Claude Code 终端仍
+作为高级功能保留，不再是默认界面。
+
+Research Chat 默认是只读的 **Ask** 模式。**Agent** 模式只能在 Zotkit 私有暂存工作区
+写文件，不能直接改原 PDF 目录。修改论文元数据、现有分类归属、linked attachment
+路径或 PDF 内容，必须让 Codex 调用 `zotero_propose_changes`：侧栏先显示 Diff，用户
+点击 **Apply** 后才写入，并在写入前自动生成有界、可 Restore 的 checkpoint。
+
+XPI 同时内置供 Research Chat 与高级 Terminal Agent 共用的只读 `zotkit` 查询 CLI/MCP（`find`、`get`、
+`collections`、`tags`）。用户不需要安装 Python 包、填写 Zotero Web API key、配置
+`.env` 或另装 Zotkit 命令。
+
+运行 `make bootstrap && make package` 即可构建，然后在 Zotero 插件管理器安装
+`zotero-plugin/dist/Zotkit-<version>.xpi`。Research Chat 需要本机 `codex` CLI；高级
+Claude Code Terminal 还需要 `claude`。
+
+## Headless Python 包（macOS / Windows / Linux）
+
 **不打开 Zotero,也能管理你的文献库。**
 
 zotkit 是一个命令行工具 + Python 库,直接对接 Zotero Web API:搜索、建条目、打标签、
@@ -40,6 +67,41 @@ pipx install zotkit        # 或 pip install zotkit / uv tool install zotkit
 ```bash
 zotkit doctor
 ```
+
+## Zotero Reader 插件（macOS）
+
+仓库的 [`zotero-plugin/`](zotero-plugin/README.md) 是可直接安装到 Zotero 9 的
+XPI，也是 zotkit 与 headless Python 包地位相同、运行时独立的桌面阅读入口。默认的
+Research Chat 连接本机 Codex app-server，通过本地 Reader 工具提供当前论文元数据、
+原 PDF 路径与所在目录、受长度限制的当前页和最近选区，以及用户主动附加的文库上下文。
+
+在 macOS 构建并安装：
+
+```bash
+make plugin-install
+make plugin-build
+```
+
+然后打开 Zotero 的“工具 → 插件”，选择“Install Add-on From File…”，安装
+`zotero-plugin/dist/Zotkit-<version>.xpi`。打开 PDF 并展开“Zotkit Research Chat”后，
+helper 和 app-server 才会按需启动。XPI 已内置 Research Chat 与高级 Terminal 共用的只读 Zotkit 元数据 CLI/MCP；
+插件用户不需要另装 Python、`pipx`，也不需要 Zotero Web API key、
+`~/.config/zotkit/env` 或其他 Zotkit 安装。
+
+Ask 模式使用只读沙箱且不提供写入审批。Agent 模式可在插件私有暂存区工作，命令与工具
+审批显示在侧栏；原论文目录不会成为它的可写根目录。Zotero 元数据、分类归属、linked
+attachment 路径和当前 PDF 的修改只能走“提议 → Diff → Apply → checkpoint”流程，
+Restore 可以恢复已应用变更。高级 Terminal 的 Codex 仍使用
+`--sandbox read-only --ask-for-approval untrusted`，用户可在真实 TUI 中明确批准升级；
+Claude Code 的 plan 模式也不是操作系统级沙箱。
+
+Reader 只读工具负责当前论文/页面/选区、当前 PDF 的有界全文搜索与按页读取，以及 PDF
+文件名/相对路径发现；全文优先原地复用 Zotero 已有索引，没有索引时才在会自动清理的
+私有工作区生成一份有界文本回退。XPI 内置的 Zotkit 元数据工具用于查询条目、分类和
+标签；同一 Zotero 文库只维护一份共享快照。插件 ID 为
+`zotkit@oldantique.github.io`。详见
+[`zotero-plugin` 使用说明](zotero-plugin/README.md)和
+[插件整合与安全边界](docs/zotero-plugin-integration.md)。
 
 ## 常用命令
 
