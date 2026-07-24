@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../src/note-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/note-sync")>();
+  return { ...actual, syncChatNote: vi.fn(async () => {}) };
+});
+
 import {
   MAX_SELECTION_PROMPT_CHARACTERS,
   ZoteroChatPlugin,
@@ -8,6 +14,7 @@ import {
   formatPendingApprovalDescription,
   pdfDirectory,
 } from "../src/plugin";
+import { syncChatNote } from "../src/note-sync";
 import type { ReaderContext } from "../src/reader-context";
 
 describe("Zotkit Reader terminal state", () => {
@@ -698,5 +705,73 @@ describe("Reader context copied into the terminal", () => {
     const prompt = buildSelectionPrompt(context);
     expect(prompt).toContain("完整文本仍可通过 zotero_reader 获取");
     expect(prompt.length).toBeLessThan(MAX_SELECTION_PROMPT_CHARACTERS + 500);
+  });
+
+  describe("onTurnCompleted note sync", () => {
+    beforeEach(() => vi.mocked(syncChatNote).mockClear());
+
+    function pluginWithCompletedTurn() {
+      const plugin = new ZoteroChatPlugin() as any;
+      plugin.context = {
+        attachment: { id: 7, key: "ATTACH", libraryID: 1, title: "paper.pdf", creators: [], tags: [] },
+        parent: null,
+      } as unknown as ReaderContext;
+      plugin.codex = {
+        state: { activeThreadId: "th1", running: false },
+        getChatEntries: () => [
+          { id: "u1", kind: "user", text: "问" },
+          { id: "a1", kind: "assistant", text: "答", state: "complete" },
+        ],
+        getThreadOptions: () => [{ id: "th1", title: "主线程", active: true }],
+      };
+      return plugin;
+    }
+
+    it("syncs the completed turn into the note when noteSync is on", () => {
+      const previousZotero = (globalThis as any).Zotero;
+      (globalThis as any).Zotero = { Items: { get: () => null } };
+      vi.stubGlobal("Services", { prefs: { getBoolPref: (_key: string, fallback: boolean) => fallback } });
+
+      const plugin = pluginWithCompletedTurn();
+      plugin.onTurnCompleted("th1");
+
+      expect(syncChatNote).toHaveBeenCalledOnce();
+      const call = vi.mocked(syncChatNote).mock.calls[0]![0];
+      expect(call.paperTitle).toBe("paper.pdf");
+      expect(call.section).toMatchObject({
+        threadId: "th1",
+        title: "主线程",
+        exchanges: [{ question: "问", answerMarkdown: "答" }],
+      });
+
+      vi.unstubAllGlobals();
+      (globalThis as any).Zotero = previousZotero;
+    });
+
+    it("does not sync when the noteSync pref is off", () => {
+      vi.stubGlobal("Services", { prefs: { getBoolPref: () => false } });
+
+      const plugin = pluginWithCompletedTurn();
+      plugin.onTurnCompleted("th1");
+
+      expect(syncChatNote).not.toHaveBeenCalled();
+
+      vi.unstubAllGlobals();
+    });
+
+    it("does not sync when the completed turn produced no Q&A pairs", () => {
+      const previousZotero = (globalThis as any).Zotero;
+      (globalThis as any).Zotero = { Items: { get: () => null } };
+      vi.stubGlobal("Services", { prefs: { getBoolPref: (_key: string, fallback: boolean) => fallback } });
+
+      const plugin = pluginWithCompletedTurn();
+      plugin.codex.getChatEntries = () => [];
+      plugin.onTurnCompleted("th1");
+
+      expect(syncChatNote).not.toHaveBeenCalled();
+
+      vi.unstubAllGlobals();
+      (globalThis as any).Zotero = previousZotero;
+    });
   });
 });

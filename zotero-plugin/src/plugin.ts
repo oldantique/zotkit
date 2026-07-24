@@ -32,11 +32,13 @@ import {
   createZoteroMutationHost,
   type MutationResolution,
 } from "./zotero-mutations";
+import { buildExchangesFromEntries, syncChatNote, type NoteThreadSection } from "./note-sync";
 import {
   debug,
   logError,
   PANE_ID,
   PLUGIN_ID,
+  prefBool,
   prefString,
   profilePath,
   setPrefString,
@@ -910,8 +912,35 @@ export class ZoteroChatPlugin {
     }
   }
 
-  /** Hook for future turn-completion consumers (Task 8); intentionally empty for now. */
-  protected onTurnCompleted(_threadId: string): void {}
+  /** Auto-syncs the completed turn's Q&A into the paper's `zotkit-chat`-tagged note. */
+  protected onTurnCompleted(threadId: string): void {
+    if (!prefBool("noteSync", true)) return;
+    const context = this.context;
+    if (!context || threadId !== this.codex?.state.activeThreadId) return;
+    const thread = this.codex.getThreadOptions().find((option) => option.active);
+    const section: NoteThreadSection = {
+      threadId,
+      title: thread?.title || "对话",
+      dateLabel: new Date().toISOString().slice(0, 10),
+      exchanges: buildExchangesFromEntries(this.codex.getChatEntries(), this.turnMeta.get(threadId)),
+    };
+    if (!section.exchanges.length) return;
+    void syncChatNote({
+      zotero: Zotero,
+      readerItem: this.readerContextItem(),
+      paperTitle: paperTitle(context),
+      section,
+    }).catch(() => {});
+  }
+
+  /** Resolves the current reader attachment to a live Zotero item for note-sync writes. */
+  private readerContextItem(): any {
+    const attachment = this.context?.attachment;
+    if (!attachment?.id) return null;
+    return Zotero.Items?.get?.(attachment.id)
+      ?? Zotero.Items?.getByLibraryAndKey?.(attachment.libraryID, attachment.key)
+      ?? null;
+  }
 
   private renderChatViews(): void {
     this.trackTurnTiming();
