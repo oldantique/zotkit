@@ -161,6 +161,20 @@ describe("mergeChatNoteHtml", () => {
     expect((twice.match(/<h2\b/g) ?? []).length).toBe(1);
   });
 
+  it("handles threadIds with special characters (escaped HTML): no duplicates on re-merge", () => {
+    const specialSection: NoteThreadSection = {
+      threadId: 'th"1&x',
+      title: "线程",
+      dateLabel: "2026-07-23",
+      exchanges: [{ question: "问", answerMarkdown: "答" }],
+    };
+    const once = mergeChatNoteHtml(null, "论文A", [specialSection]);
+    expect(once).toContain('data-zotkit-thread="th&quot;1&amp;x"');
+    const twice = mergeChatNoteHtml(once, "论文A", [specialSection]);
+    expect(twice).toBe(once);
+    expect((twice.match(/<h2\b/g) ?? []).length).toBe(1);
+  });
+
   it("builds a fresh body when existingHtml is an empty string", () => {
     const html = mergeChatNoteHtml("", "论文A", [section]);
     expect(html).toContain("<h1>AI 研究笔记 — 论文A</h1>");

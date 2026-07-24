@@ -773,5 +773,21 @@ describe("Reader context copied into the terminal", () => {
       vi.unstubAllGlobals();
       (globalThis as any).Zotero = previousZotero;
     });
+
+    it("does not throw when getThreadOptions throws; note-sync must never break chat", () => {
+      const previousZotero = (globalThis as any).Zotero;
+      (globalThis as any).Zotero = { Items: { get: () => null }, debug: vi.fn() };
+      vi.stubGlobal("Services", { prefs: { getBoolPref: (_key: string, fallback: boolean) => fallback } });
+
+      const plugin = pluginWithCompletedTurn();
+      plugin.codex.getThreadOptions = vi.fn(() => { throw new Error("thread options failed"); });
+
+      expect(() => {
+        plugin.onTurnCompleted("th1");
+      }).not.toThrow();
+
+      vi.unstubAllGlobals();
+      (globalThis as any).Zotero = previousZotero;
+    });
   });
 });

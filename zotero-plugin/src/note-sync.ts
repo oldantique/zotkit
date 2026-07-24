@@ -100,7 +100,7 @@ export function mergeChatNoteHtml(
 }
 
 function matchesSection(parsed: ParsedSection, section: NoteThreadSection): boolean {
-  if (parsed.threadId !== null) return parsed.threadId === section.threadId;
+  if (parsed.threadId !== null) return parsed.threadId === escapeHtml(section.threadId);
   return parsed.headingText.startsWith(`${section.title} · `);
 }
 
