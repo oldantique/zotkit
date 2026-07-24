@@ -5,6 +5,7 @@ import {
   ZoteroMutationService,
   createZoteroMutationHost,
   parseOperations,
+  validatePdfPath,
   type MutationHost,
   type PaperCheckpoint,
   type PaperMutationSnapshot,
@@ -687,6 +688,71 @@ describe("createZoteroMutationHost", () => {
         // validateOperations canonicalizes operation.newPath in place, so the
         // diff (built from the same operations array) also reflects it.
         expect(operations[0]).toMatchObject({ newPath: canonicalPath });
+      }
+      finally {
+        restore();
+      }
+    });
+  });
+
+  describe("validatePdfPath empty-root fail-closed", () => {
+    it("rejects PDF when allowedRoots is an array with only an empty string", async () => {
+      const { host, ioUtils, restore } = makeRelinkTestBed();
+      try {
+        await expect(validatePdfPath(
+          "/anywhere/x.pdf",
+          [""],
+          ioUtils,
+          "test containment error"
+        )).rejects.toThrow("test containment error");
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects PDF when allowedRoots contains null (type-unsafe)", async () => {
+      const { host, ioUtils, restore } = makeRelinkTestBed();
+      try {
+        await expect(validatePdfPath(
+          "/anywhere/x.pdf",
+          [null as any],
+          ioUtils,
+          "test containment error"
+        )).rejects.toThrow("test containment error");
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects PDF when allowedRoots is an array with only a root slash", async () => {
+      const { host, ioUtils, restore } = makeRelinkTestBed();
+      try {
+        await expect(validatePdfPath(
+          "/anywhere/x.pdf",
+          ["/"],
+          ioUtils,
+          "test containment error"
+        )).rejects.toThrow("test containment error");
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("accepts PDF when allowedRoots contains a valid path alongside invalid entries", async () => {
+      const { ioUtils, restore } = makeRelinkTestBed();
+      try {
+        const result = await validatePdfPath(
+          "/valid/x.pdf",
+          ["", "/valid"],
+          ioUtils
+        );
+        expect(result).toMatchObject({
+          canonicalPath: "/valid/x.pdf",
+          size: 16
+        });
       }
       finally {
         restore();

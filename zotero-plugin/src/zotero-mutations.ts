@@ -1062,12 +1062,26 @@ async function validatePdfPath(
   if (file.isSymlink?.()) throw new Error("Symbolic-link PDF targets are not accepted");
   file.normalize?.();
   const canonicalPath = String(file.path || path);
-  if (allowedRoots && !allowedRoots.some((root) => {
-    const rootFile = makeLocalFile(root);
-    rootFile.normalize?.();
-    return isWithin(canonicalPath, String(rootFile.path || root));
-  })) {
-    throw new Error(containmentError);
+  if (allowedRoots) {
+    // Defense-in-depth: filter out invalid roots (falsy, empty, whitespace-only, or "/")
+    // to prevent an empty root from accepting any absolute path via isWithin("")
+    const validRoots = allowedRoots.filter((root) => {
+      if (!root) return false;
+      const trimmed = root.trim();
+      if (!trimmed || trimmed === "/") return false;
+      return true;
+    });
+    if (validRoots.length === 0 && allowedRoots.length > 0) {
+      // Provided roots but none valid — fail closed
+      throw new Error(containmentError);
+    }
+    if (validRoots.length > 0 && !validRoots.some((root) => {
+      const rootFile = makeLocalFile(root);
+      rootFile.normalize?.();
+      return isWithin(canonicalPath, String(rootFile.path || root));
+    })) {
+      throw new Error(containmentError);
+    }
   }
   const stat = await ioUtils.stat(canonicalPath);
   if (stat?.type !== "regular") throw new Error("The PDF path is not a regular file");
@@ -1077,6 +1091,9 @@ async function validatePdfPath(
   if (String.fromCharCode(...header) !== "%PDF-") throw new Error("The staged file does not have a PDF header");
   return { canonicalPath, size };
 }
+
+// Exported for testing empty-root edge cases
+export { validatePdfPath };
 
 function isWithin(path: string, root: string): boolean {
   const cleanRoot = root.replace(/\/+$/, "");
