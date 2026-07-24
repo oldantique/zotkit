@@ -458,6 +458,184 @@ function unescapeMarkdown(value: string): string {
   return value.replace(/\\([\\`*_$[\]()|])/g, "$1");
 }
 
+/**
+ * Renders a safe Markdown subset to a compact HTML string suitable for
+ * insertion into the Zotero note editor. Unlike {@link renderMarkdown} this
+ * does not touch the DOM: it is a pure string-emitting line scanner that
+ * shares this module's pure parsing helpers (readMathBlock, readTable,
+ * readMarkdownLink, findUnescaped, safeHttpUrl, …) without altering their
+ * behavior.
+ */
+export function markdownToNoteHtml(markdown: string): string {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: string[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index] || "";
+
+    if (line.startsWith("```")) {
+      const codeBlock = readCodeBlock(lines, index);
+      blocks.push(`<pre>${escapeHtml(codeBlock.content.join("\n"))}</pre>`);
+      index = codeBlock.nextIndex;
+      continue;
+    }
+
+    const mathBlock = readMathBlock(lines, index);
+    if (mathBlock) {
+      blocks.push(`<p>$$${escapeHtml(mathBlock.expression)}$$</p>`);
+      index = mathBlock.nextIndex;
+      continue;
+    }
+
+    const table = readTable(lines, index);
+    if (table) {
+      const raw = lines.slice(index, table.nextIndex).join("\n");
+      blocks.push(`<pre>${escapeHtml(raw)}</pre>`);
+      index = table.nextIndex;
+      continue;
+    }
+
+    if (!line.trim()) {
+      index++;
+      continue;
+    }
+
+    const heading = /^(#{1,4})\s+(.+)$/.exec(line);
+    if (heading) {
+      const level = (heading[1]?.length || 2) <= 2 ? 3 : 4;
+      blocks.push(`<h${level}>${inlineToHtml(heading[2] || "")}</h${level}>`);
+      index++;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index] || "")) {
+        items.push(`<li>${inlineToHtml((lines[index] || "").replace(/^[-*]\s+/, ""))}</li>`);
+        index++;
+      }
+      blocks.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index] || "")) {
+        items.push(`<li>${inlineToHtml((lines[index] || "").replace(/^\d+\.\s+/, ""))}</li>`);
+        index++;
+      }
+      blocks.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    if (line.startsWith("> ")) {
+      const quoteLines: string[] = [];
+      while (index < lines.length && (lines[index] || "").startsWith("> ")) {
+        quoteLines.push((lines[index] || "").slice(2));
+        index++;
+      }
+      blocks.push(`<blockquote><p>${inlineToHtml(quoteLines.join(" "))}</p></blockquote>`);
+      continue;
+    }
+
+    const paragraphLines = [line];
+    index++;
+    while (index < lines.length && !startsBlock(lines, index)) {
+      paragraphLines.push(lines[index] || "");
+      index++;
+    }
+    blocks.push(`<p>${inlineToHtml(paragraphLines.join(" "))}</p>`);
+  }
+
+  return blocks.join("");
+}
+
+function readCodeBlock(
+  lines: readonly string[],
+  startIndex: number,
+): { content: string[]; nextIndex: number } {
+  const content: string[] = [];
+  let index = startIndex + 1;
+  while (index < lines.length && !(lines[index] || "").startsWith("```")) {
+    content.push(lines[index] || "");
+    index++;
+  }
+  if (index < lines.length) index++;
+  return { content, nextIndex: index };
+}
+
+function inlineToHtml(text: string, allowLinks = true): string {
+  let index = 0;
+  let out = "";
+
+  while (index < text.length) {
+    if (text[index] === "`") {
+      const end = findUnescaped(text, "`", index + 1);
+      if (end !== -1) {
+        out += `<code>${escapeHtml(text.slice(index + 1, end))}</code>`;
+        index = end + 1;
+        continue;
+      }
+    }
+
+    if (allowLinks && text[index] === "[") {
+      const link = readMarkdownLink(text, index);
+      if (link) {
+        if (isNoteSafeHttpUrl(link.destination)) {
+          out += `<a href="${escapeHtml(link.destination)}">${inlineToHtml(link.label, false)}</a>`;
+        }
+        else {
+          out += escapeHtml(link.label);
+        }
+        index = link.end;
+        continue;
+      }
+    }
+
+    if (text.startsWith("**", index)) {
+      const end = findUnescaped(text, "**", index + 2);
+      if (end !== -1) {
+        out += `<strong>${inlineToHtml(text.slice(index + 2, end), allowLinks)}</strong>`;
+        index = end + 2;
+        continue;
+      }
+    }
+
+    if (text[index] === "*") {
+      const end = findUnescaped(text, "*", index + 1);
+      if (end !== -1) {
+        out += `<em>${inlineToHtml(text.slice(index + 1, end), allowLinks)}</em>`;
+        index = end + 1;
+        continue;
+      }
+    }
+
+    if (text[index] === "\\" && isEscapableMarkdownCharacter(text[index + 1])) {
+      out += escapeHtml(text[index + 1] || "");
+      index += 2;
+      continue;
+    }
+
+    out += escapeHtml(text[index] || "");
+    index++;
+  }
+
+  return out;
+}
+
+function isNoteSafeHttpUrl(value: string): boolean {
+  return safeHttpUrl(value) !== null;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function readTable(lines: readonly string[], startIndex: number): {
   header: string[];
   alignments: Array<"left" | "center" | "right" | null>;

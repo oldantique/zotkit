@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { renderMarkdown } from "../src/markdown";
+import { markdownToNoteHtml, renderMarkdown } from "../src/markdown";
 
 function render(markdown: string): HTMLDivElement {
   const host = document.createElement("div");
@@ -116,5 +116,33 @@ describe("safe paper Markdown renderer", () => {
 
     expect(fallback.getAttribute("data-latex")).toBe("\\notARealCommand{");
     expect(fallback.getAttribute("title")).toBe("点击复制 LaTeX");
+  });
+});
+
+describe("markdownToNoteHtml", () => {
+  it("demotes headings and keeps structure Zotero-safe", () => {
+    expect(markdownToNoteHtml("# 标题\n\n正文 **粗** *斜* `code`")).toBe(
+      "<h3>标题</h3><p>正文 <strong>粗</strong> <em>斜</em> <code>code</code></p>",
+    );
+    expect(markdownToNoteHtml("### 小节")).toBe("<h4>小节</h4>");
+  });
+  it("keeps LaTeX as literal escaped text", () => {
+    expect(markdownToNoteHtml("$$E < mc^2$$")).toBe("<p>$$E &lt; mc^2$$</p>");
+    expect(markdownToNoteHtml("内联 $a<b$ 完")).toBe("<p>内联 $a&lt;b$ 完</p>");
+  });
+  it("renders lists, quotes and fenced code", () => {
+    expect(markdownToNoteHtml("- 一\n- 二")).toBe("<ul><li>一</li><li>二</li></ul>");
+    expect(markdownToNoteHtml("> 引用")).toBe("<blockquote><p>引用</p></blockquote>");
+    expect(markdownToNoteHtml("```js\nconst a = 1 < 2;\n```")).toBe(
+      "<pre>const a = 1 &lt; 2;</pre>",
+    );
+  });
+  it("emits markdown tables as preformatted text and whitelists links", () => {
+    expect(markdownToNoteHtml("| a | b |\n| --- | --- |\n| 1 | 2 |")).toBe(
+      "<pre>| a | b |\n| --- | --- |\n| 1 | 2 |</pre>",
+    );
+    expect(markdownToNoteHtml("[官网](https://example.com) [坏](javascript:x)")).toBe(
+      '<p><a href="https://example.com">官网</a> 坏</p>',
+    );
   });
 });
