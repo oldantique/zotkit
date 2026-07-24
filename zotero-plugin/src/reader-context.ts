@@ -2979,24 +2979,46 @@ export function createZotero9ReadAdapter(
     return rawPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rawPath) ? rawPath : null;
   };
 
+  // Session-memoized per attachment identity: this hot path runs inside
+  // capture() on every page turn (800ms debounce) and on most tool calls, but
+  // Zotero.Fulltext.getPages() is a DB read, so each attachment should pay
+  // for it at most once per session. Trade-off: a full-text index rebuild
+  // that happens mid-session (e.g. the user re-indexes the PDF) will not be
+  // observed until the plugin/session restarts. That's acceptable here --
+  // this is a completeness signal, not the indexed text itself, and a stale
+  // "still truncated"/"was complete" read is far cheaper than a DB hit on
+  // every debounce tick.
+  const fullTextPageCountsMemo = new Map<
+    string,
+    Promise<{ indexedPages?: number; totalPages?: number } | null>
+  >();
+
   /**
    * Zotero's authoritative indexed-vs-total page counts for one attachment,
    * straight from its full-text index database row. Shared by the public
    * `getFullTextPageCounts` adapter method and `getIndexedFullTextReference`'s
-   * own truncation check below.
+   * own truncation check below -- both consumers share the same memoized
+   * promise, so the underlying DB read happens at most once.
    */
   const getFullTextPageCounts = async (
     attachment: unknown,
   ): Promise<{ indexedPages?: number; totalPages?: number } | null> => {
-    const fulltext = zotero.Fulltext ?? zotero.FullText;
-    const getPages = method(fulltext, "getPages");
-    if (!getPages) return null;
     const { id } = itemIdentity(attachment);
-    const record = asRecord(await getPages(id));
-    const indexedPages = toFiniteNumber(record.indexedPages);
-    const totalPages = toFiniteNumber(record.totalPages);
-    if (indexedPages === undefined && totalPages === undefined) return null;
-    return { indexedPages, totalPages };
+    const key = String(id);
+    const cached = fullTextPageCountsMemo.get(key);
+    if (cached) return cached;
+    const pending = (async () => {
+      const fulltext = zotero.Fulltext ?? zotero.FullText;
+      const getPages = method(fulltext, "getPages");
+      if (!getPages) return null;
+      const record = asRecord(await getPages(id));
+      const indexedPages = toFiniteNumber(record.indexedPages);
+      const totalPages = toFiniteNumber(record.totalPages);
+      if (indexedPages === undefined && totalPages === undefined) return null;
+      return { indexedPages, totalPages };
+    })();
+    fullTextPageCountsMemo.set(key, pending);
+    return pending;
   };
 
   return {
@@ -3110,7 +3132,11 @@ export function createZotero9ReadAdapter(
         ?? (typeof cacheFile === "string" ? cacheFile : undefined);
       if (!path || !path.startsWith("/")) return null;
       if (environment.fileExists && !(await environment.fileExists(path))) return null;
-      const dbCounts = await getFullTextPageCounts(attachment);
+      // A DB read failure here must not sink an otherwise-valid reference:
+      // the cache path is confirmed to exist above, so on failure fall back
+      // to the pre-page-counts semantics (no dbCounts => truncated stays
+      // false) rather than losing the reference entirely.
+      const dbCounts = await getFullTextPageCounts(attachment).catch(() => null);
       const truncated = Boolean(
         dbCounts
         && dbCounts.indexedPages !== undefined

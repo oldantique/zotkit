@@ -1245,6 +1245,34 @@ describe("ReaderContextService", () => {
     expect(readPdfWorkerText).toHaveBeenCalledWith(attachment, null);
   });
 
+  it("falls back to the truncated index, with a warning, when the pdf worker yields nothing", async () => {
+    // Same truncated-index scenario as above, but the uncapped PDFWorker
+    // extraction itself comes back empty (e.g. a locked/corrupt file).
+    // loadFullText must still surface the truncated index rather than
+    // silently returning no text, with an explicit warning about how much
+    // of the document it actually covers.
+    const indexedPages = Array.from({ length: 100 }, (_, index) => `indexed page ${index + 1}`);
+    const getFullTextPageCounts = vi.fn(async () => ({ indexedPages: 100, totalPages: 250 }));
+    const { adapter, reader, attachment } = makeAdapter({
+      getPageStats: vi.fn(async () => ({ pageIndex: 0, pageNumber: 1 })),
+      getFullTextPageCounts,
+      readIndexedFullText: vi.fn(async () => ({
+        text: indexedPages.join("\f"),
+        extractedPages: 100,
+      })),
+      readPdfWorkerText: vi.fn(async () => null),
+    });
+    const service = new ReaderContextService(adapter, host);
+    const context = await service.acceptReaderHook({ reader, item: attachment });
+
+    const result = await service.searchCurrentPdf("indexed page 1");
+
+    expect(result.source).toBe("indexed-fulltext");
+    expect(context.warnings).toContainEqual(
+      expect.stringContaining("Indexed full text contains 100 of 250 pages"),
+    );
+  });
+
   it("treats a cache as complete when no authoritative counts exist", async () => {
     const getFullTextPageCounts = vi.fn(async () => null);
     const { adapter, reader, attachment } = makeAdapter({
@@ -1975,6 +2003,10 @@ describe("createZotero9ReadAdapter", () => {
       totalPages: 250,
       truncated: true,
     });
+    // Session-memoized: the second consumer (getIndexedFullTextReference)
+    // reuses the first consumer's (getFullTextPageCounts) in-flight/resolved
+    // DB read instead of issuing its own.
+    expect(getPages).toHaveBeenCalledTimes(1);
   });
 
   it("reports no page counts and an untruncated reference when Zotero exposes no getPages API", async () => {
@@ -1989,6 +2021,28 @@ describe("createZotero9ReadAdapter", () => {
       path: "/cache/.zotero-ft-cache",
       truncated: false,
     });
+  });
+
+  it("keeps the indexed reference in place when Zotero.Fulltext.getPages throws", async () => {
+    // A DB read failure on the authoritative page-count lookup must not sink
+    // the whole reference: the cache path is still valid and usable, it's
+    // only the truncation signal that becomes unknown.
+    const attachment = { id: 17, key: "ATTACH01" };
+    const getPages = vi.fn(async () => {
+      throw new Error("database is locked");
+    });
+    const runtime = {
+      Fulltext: { getItemCacheFile: () => ({ path: "/cache/.zotero-ft-cache" }), getPages },
+    };
+    const adapter = createZotero9ReadAdapter(runtime, { fileExists: vi.fn(async () => true) });
+
+    const reference = await adapter.getIndexedFullTextReference?.(attachment);
+    expect(reference).toMatchObject({
+      schemaVersion: 1,
+      path: "/cache/.zotero-ft-cache",
+      source: "indexed-fulltext",
+    });
+    expect(reference?.truncated).not.toBe(true);
   });
 
   it("finds an unloaded attachment through Zotero's public read-only library API", async () => {
