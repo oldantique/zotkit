@@ -212,6 +212,14 @@ export class FloatPanelView {
       const { scrollTop, clientHeight, scrollHeight } = this.transcript;
       this.pinnedToBottom = scrollTop + clientHeight >= scrollHeight - 4;
     });
+    this.transcript.addEventListener("click", (event) => {
+      const target = (event.target as HTMLElement | null)?.closest?.(".zc-math-copy");
+      if (!target) return;
+      const latex = target.getAttribute("data-latex");
+      if (!latex || !copyToClipboard(latex)) return;
+      target.classList.add("is-copied");
+      this.doc.defaultView?.setTimeout(() => target.classList.remove("is-copied"), 1200);
+    });
 
     this.root.addEventListener("keydown", (event) => {
       if (event.isComposing) return;

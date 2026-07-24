@@ -98,4 +98,23 @@ describe("safe paper Markdown renderer", () => {
     expect(fallback?.textContent).toBe("$\\notARealCommand{$");
     expect(host.textContent).toContain("after");
   });
+
+  it("wraps math output with a copyable container carrying the LaTeX source", () => {
+    const fragment = renderMarkdown(document, "$$E = mc^2$$\n\n行内 $a+b$ 检查");
+    const display = document.createElement("div");
+    display.appendChild(fragment);
+    const block = display.querySelector(".zc-math-display.zc-math-copy")!;
+    expect(block.getAttribute("data-latex")).toBe("E = mc^2");
+    expect(block.getAttribute("title")).toBe("点击复制 LaTeX");
+    const inline = display.querySelector(".zc-math-inline.zc-math-copy")!;
+    expect(inline.getAttribute("data-latex")).toBe("a+b");
+  });
+
+  it("carries the copy attributes on the KaTeX-error fallback too", () => {
+    const host = render("Before $\\notARealCommand{$ after");
+    const fallback = host.querySelector(".zc-math-error.zc-math-copy")!;
+
+    expect(fallback.getAttribute("data-latex")).toBe("\\notARealCommand{");
+    expect(fallback.getAttribute("title")).toBe("点击复制 LaTeX");
+  });
 });

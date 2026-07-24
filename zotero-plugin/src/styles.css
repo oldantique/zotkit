@@ -341,6 +341,9 @@
   white-space: pre-wrap;
 }
 .zc-math-display.zc-math-error { display: block; text-align: left; }
+.zc-math-copy { cursor: pointer; border-radius: 6px; transition: background .15s ease; }
+.zc-math-copy:hover { background: color-mix(in srgb, var(--zc-accent) 10%, transparent); }
+.zc-math-copy.is-copied { background: color-mix(in srgb, var(--zc-accent) 18%, transparent); }
 
 .zc-code-block {
   overflow: hidden;

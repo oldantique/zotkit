@@ -299,6 +299,69 @@ describe("SidebarView", () => {
     });
   });
 
+  describe("formula click-to-copy", () => {
+    beforeEach(() => {
+      vi.mocked(copyToClipboard).mockClear();
+      vi.mocked(copyToClipboard).mockReturnValue(true);
+    });
+
+    it("copies the bare LaTeX source when a rendered formula is clicked, briefly marking it copied", () => {
+      vi.useFakeTimers();
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const view = new SidebarView(body, callbacks());
+      view.setState({
+        phase: "ready",
+        entries: [{ id: "a1", kind: "assistant", text: "$$x$$" }],
+      });
+
+      const formula = body.querySelector<HTMLElement>(".zc-math-copy")!;
+      expect(formula).not.toBeNull();
+
+      formula.click();
+
+      expect(copyToClipboard).toHaveBeenCalledWith("x");
+      expect(formula.classList.contains("is-copied")).toBe(true);
+
+      vi.advanceTimersByTime(1200);
+      expect(formula.classList.contains("is-copied")).toBe(false);
+      vi.useRealTimers();
+    });
+
+    it("does not mark the formula copied when the clipboard helper reports failure", () => {
+      vi.mocked(copyToClipboard).mockReturnValue(false);
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const view = new SidebarView(body, callbacks());
+      view.setState({
+        phase: "ready",
+        entries: [{ id: "a1", kind: "assistant", text: "$$x$$" }],
+      });
+
+      const formula = body.querySelector<HTMLElement>(".zc-math-copy")!;
+      formula.click();
+
+      expect(formula.classList.contains("is-copied")).toBe(false);
+    });
+
+    it("does not trigger formula copy behavior when the answer-copy button is clicked", () => {
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const view = new SidebarView(body, callbacks());
+      view.setState({
+        phase: "ready",
+        entries: [{ id: "a1", kind: "assistant", text: "$$x$$ answer" }],
+      });
+
+      const answerButton = body.querySelector<HTMLButtonElement>(".zc-copy-answer")!;
+      vi.mocked(copyToClipboard).mockClear();
+      answerButton.click();
+
+      expect(copyToClipboard).toHaveBeenCalledWith("$$x$$ answer");
+      expect(copyToClipboard).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("submits with Enter and keeps Shift+Enter available for multiline input", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);

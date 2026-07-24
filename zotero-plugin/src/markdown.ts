@@ -235,8 +235,10 @@ function appendMath(
     element.classList.add("zc-math-error");
     const closing = opening === "\\[" ? "\\]" : opening === "\\(" ? "\\)" : opening;
     element.textContent = `${opening}${expression}${closing}`;
-    element.title = "无法渲染此公式";
   }
+  element.classList.add("zc-math-copy");
+  element.setAttribute("data-latex", expression);
+  element.setAttribute("title", "点击复制 LaTeX");
   parent.appendChild(element);
 }
 
