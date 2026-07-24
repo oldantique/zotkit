@@ -420,6 +420,51 @@ describe("diff fidelity: review must show exactly what Apply will write", () => 
     expect(diffText).toContain("\\u001B");
     expect(diffText).not.toMatch(/[\x00-\x08\x0B-\x1F]/);
   });
+
+  it("sanitizes bidi-override characters in review.title to prevent card/checkpoint label scrambling", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      title: "Malicious‮title",
+      operations: [{ type: "set_fields", fields: { title: "New title" } }],
+    });
+
+    const review = service.getReviews()[0]!;
+    expect(review.title).toContain("\\u202E");
+    expect(review.title).not.toMatch(/‮/);
+  });
+
+  it("sanitizes control/bidi characters in boundedError output to prevent error-message injection", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.apply).mockRejectedValueOnce(new Error("Error with‮bidi"));
+
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "New title" } }],
+    });
+
+    let errorThrown = "";
+    try {
+      await service.resolveReview("review-1", "accept");
+    }
+    catch (e) {
+      errorThrown = String(e);
+    }
+
+    expect(errorThrown).toContain("\\u202E");
+    expect(errorThrown).not.toMatch(/‮/);
+  });
+
+  it("sanitizes DEL (U+007F) along with other control characters", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: "Text withDel" } }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("\\u007F");
+    expect(diffText).not.toMatch(//);
+  });
 });
 
 describe("parseOperations", () => {

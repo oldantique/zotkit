@@ -191,7 +191,7 @@ export class ZoteroMutationService {
     const review: DiffReview = {
       id,
       title: typeof rawArguments.title === "string" && rawArguments.title.trim()
-        ? rawArguments.title.trim().slice(0, 160)
+        ? sanitizeDiffText(rawArguments.title.trim().slice(0, 160))
         : "Review proposed Zotero changes",
       summary: summarizeOperations(operations),
       diff,
@@ -947,12 +947,12 @@ function snapshotFingerprint(snapshot: PaperMutationSnapshot): string {
   return JSON.stringify(snapshot);
 }
 
-// C0 controls (except the \t/\n we render verbatim), C1 controls, and the
-// Unicode bidi-override/embedding/isolate characters that can visually
+// C0 controls (except the \t/\n we render verbatim), C1 controls, DEL (U+007F),
+// and the Unicode bidi-override/embedding/isolate characters that can visually
 // reorder or hide text in a terminal or HTML view. A prompt-injected
 // proposal could otherwise use these to make the reviewed diff *display*
 // something other than the bytes Apply actually writes.
-const DANGEROUS_DIFF_CHARS = /[\u0000-\u0008\u000B-\u001F\u0080-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const DANGEROUS_DIFF_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F\u0080-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
 /**
  * Replaces control characters and bidi-override characters with a visible
@@ -985,7 +985,7 @@ function diffValueLines(sign: "-" | "+", value: unknown, labelPrefix = ""): stri
 
 function boundedError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const clean = message.replace(/[\r\n]+/g, " ").trim() || "unknown error";
+  const clean = sanitizeDiffText(message.replace(/[\r\n]+/g, " ").trim() || "unknown error");
   return clean.length > 500 ? `${clean.slice(0, 500)}…` : clean;
 }
 
