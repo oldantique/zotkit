@@ -935,8 +935,9 @@ export class ZoteroChatPlugin {
     }
     catch (error) {
       // note-sync is a best-effort side effect and must never break chat.
-      // Swallow errors silently; debug logging follows the existing zotero.debug
-      // pattern used in note-sync.ts's syncChatNote for consistency.
+      // Swallow errors after logging, matching the guarded `zotero.debug?.(…)`
+      // idiom note-sync.ts's syncChatNote already uses for the same reason.
+      Zotero?.debug?.(`[Zotkit] onTurnCompleted failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

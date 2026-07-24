@@ -323,6 +323,35 @@ describe("FloatPanelView activity line", () => {
     expect(host.querySelector(".zc-turn-summary")).toBeNull();
   });
 
+  it("reuses the same .zc-activity DOM node across renders while streaming (I2), only updating its label text", () => {
+    const { host, view } = mount();
+    view.setState({
+      phase: "ready",
+      running: true,
+      turnStartedAt: Date.now(),
+      entries: [
+        { id: "u1", kind: "user", text: "问" },
+        { id: "r1", kind: "reasoning", text: "…", state: "running" },
+      ],
+    });
+    const node = host.querySelector(".zc-activity");
+    expect(node).not.toBeNull();
+    expect(host.querySelector(".zc-activity-label")?.textContent).toBe("思考中…");
+
+    // The float panel rebuilds its whole transcript on every render; the
+    // spinner/shimmer node identity must still be stable so the CSS
+    // animation is not restarted mid-stream.
+    view.setState({
+      entries: [
+        { id: "u1", kind: "user", text: "问" },
+        { id: "t1", kind: "tool", title: "zotero_read_pdf_pages", text: "", state: "running" },
+      ],
+    });
+
+    expect(host.querySelector(".zc-activity")).toBe(node);
+    expect(host.querySelector(".zc-activity-label")?.textContent).toBe("正在调用 读取论文页面");
+  });
+
   describe("pinned autoscroll", () => {
     // happy-dom's scrollHeight/clientHeight getters are hardcoded to 0, so a
     // real "is the transcript visually at the bottom" check is unavailable

@@ -77,6 +77,9 @@ export class FloatPanelView {
   private position: { left: number; top: number } | null = null;
   private readonly expandedTurns = new Set<string>();
   private activityTimer: number | null = null;
+  private activityNode: HTMLElement | null = null;
+  private activityLabelEl: HTMLElement | null = null;
+  private activityElapsedEl: HTMLElement | null = null;
   private pinnedToBottom = true;
   private readonly handleResize = () => {
     if (this.root.hidden) return;
@@ -367,21 +370,45 @@ export class FloatPanelView {
     return container;
   }
 
+  /**
+   * The activity line's spinner/shimmer are CSS animations keyed to the DOM
+   * node's lifetime. `renderTranscript` wipes and rebuilds the whole
+   * transcript on every render, so a freshly created node here would reset
+   * those animations to frame 0 on each of the ~20/s streaming renders. This
+   * node is created once and reused across renders (only its label/elapsed
+   * text is patched in place) so the same element re-enters the transcript
+   * each time instead of a brand-new one.
+   */
   private renderActivityLine(group: Exchange): HTMLElement {
-    const line = this.doc.createElement("div");
-    line.className = "zc-activity";
-    const spinner = this.doc.createElement("span");
-    spinner.className = "zc-activity-spinner";
-    spinner.setAttribute("aria-hidden", "true");
-    const label = this.doc.createElement("span");
-    label.className = "zc-activity-label";
-    label.textContent = activityLabel(group.entries);
-    line.append(spinner, label);
+    if (!this.activityNode) {
+      const line = this.doc.createElement("div");
+      line.className = "zc-activity";
+      const spinner = this.doc.createElement("span");
+      spinner.className = "zc-activity-spinner";
+      spinner.setAttribute("aria-hidden", "true");
+      const label = this.doc.createElement("span");
+      label.className = "zc-activity-label";
+      line.append(spinner, label);
+      this.activityNode = line;
+      this.activityLabelEl = label;
+    }
+    const line = this.activityNode;
+    const nextLabel = activityLabel(group.entries);
+    if (this.activityLabelEl!.textContent !== nextLabel) this.activityLabelEl!.textContent = nextLabel;
+
     if (this.state.turnStartedAt !== null) {
-      const elapsed = this.doc.createElement("span");
-      elapsed.className = "zc-activity-elapsed";
-      elapsed.textContent = formatElapsed(Date.now() - this.state.turnStartedAt);
-      line.appendChild(elapsed);
+      const nextElapsed = formatElapsed(Date.now() - this.state.turnStartedAt);
+      if (!this.activityElapsedEl) {
+        const elapsed = this.doc.createElement("span");
+        elapsed.className = "zc-activity-elapsed";
+        line.appendChild(elapsed);
+        this.activityElapsedEl = elapsed;
+      }
+      if (this.activityElapsedEl.textContent !== nextElapsed) this.activityElapsedEl.textContent = nextElapsed;
+    }
+    else if (this.activityElapsedEl) {
+      this.activityElapsedEl.remove();
+      this.activityElapsedEl = null;
     }
     return line;
   }

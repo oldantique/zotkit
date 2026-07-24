@@ -42,6 +42,28 @@ describe("buildExchangesFromEntries", () => {
   it("returns an empty array when there are no entries", () => {
     expect(buildExchangesFromEntries([], undefined)).toEqual([]);
   });
+
+  it("drops a group whose turn errored, even though it has a completed-looking assistant entry (I1)", () => {
+    const out = buildExchangesFromEntries([
+      { id: "u1", kind: "user", text: "问" },
+      { id: "a1", kind: "assistant", text: "半截答案", state: "complete" },
+      { id: "e1", kind: "error", text: "网络错误" },
+    ] as ChatEntry[], undefined);
+
+    expect(out).toEqual([]);
+  });
+
+  it("keeps a clean completed group and drops only a later errored group (I1)", () => {
+    const out = buildExchangesFromEntries([
+      { id: "u1", kind: "user", text: "问一" },
+      { id: "a1", kind: "assistant", text: "答一", state: "complete" },
+      { id: "u2", kind: "user", text: "问二" },
+      { id: "a2", kind: "assistant", text: "半截答案", state: "complete" },
+      { id: "e1", kind: "error", text: "网络错误" },
+    ] as ChatEntry[], undefined);
+
+    expect(out).toEqual([{ question: "问一", answerMarkdown: "答一" }]);
+  });
 });
 
 describe("mergeChatNoteHtml", () => {
@@ -152,6 +174,20 @@ describe("mergeChatNoteHtml", () => {
     ]).replace(' data-zotkit-thread="th1"', "");
     const html = mergeChatNoteHtml(stripped, "论文A", [section]);
     expect((html.match(/主线程/g) ?? []).length).toBe(1);
+  });
+
+  it("falls back to heading-text matching for titles with HTML-escapable characters (M1)", () => {
+    const specialTitleSection: NoteThreadSection = {
+      threadId: "th1",
+      title: "A & B",
+      dateLabel: "2026-07-23",
+      exchanges: [{ question: "老", answerMarkdown: "老" }],
+    };
+    const stripped = mergeChatNoteHtml(null, "论文A", [specialTitleSection])
+      .replace(' data-zotkit-thread="th1"', "");
+    const merged = mergeChatNoteHtml(stripped, "论文A", [specialTitleSection]);
+    expect((merged.match(/<h2\b/g) ?? []).length).toBe(1);
+    expect((merged.match(/A &amp; B/g) ?? []).length).toBe(1);
   });
 
   it("is idempotent: merging the same section twice does not duplicate it", () => {

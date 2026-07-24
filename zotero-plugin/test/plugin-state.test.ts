@@ -776,7 +776,28 @@ describe("Reader context copied into the terminal", () => {
 
     it("does not throw when getThreadOptions throws; note-sync must never break chat", () => {
       const previousZotero = (globalThis as any).Zotero;
-      (globalThis as any).Zotero = { Items: { get: () => null }, debug: vi.fn() };
+      const debug = vi.fn();
+      (globalThis as any).Zotero = { Items: { get: () => null }, debug };
+      vi.stubGlobal("Services", { prefs: { getBoolPref: (_key: string, fallback: boolean) => fallback } });
+
+      const plugin = pluginWithCompletedTurn();
+      plugin.codex.getThreadOptions = vi.fn(() => { throw new Error("thread options failed"); });
+
+      expect(() => {
+        plugin.onTurnCompleted("th1");
+      }).not.toThrow();
+
+      // M2: the catch block must actually log, not just claim to in a comment.
+      expect(debug).toHaveBeenCalledOnce();
+      expect(debug.mock.calls[0]?.[0]).toContain("thread options failed");
+
+      vi.unstubAllGlobals();
+      (globalThis as any).Zotero = previousZotero;
+    });
+
+    it("does not throw when Zotero.debug itself is unavailable (M2 must stay failure-proof)", () => {
+      const previousZotero = (globalThis as any).Zotero;
+      (globalThis as any).Zotero = { Items: { get: () => null } };
       vi.stubGlobal("Services", { prefs: { getBoolPref: (_key: string, fallback: boolean) => fallback } });
 
       const plugin = pluginWithCompletedTurn();

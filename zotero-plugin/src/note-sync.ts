@@ -41,7 +41,11 @@ interface ParsedSection {
 /**
  * Turns raw chat entries into the Q&A pairs a note section is built from.
  * Groups without a completed assistant answer (dangling questions, or a
- * leading run of process entries with no user turn) are dropped.
+ * leading run of process entries with no user turn) are dropped. Groups
+ * whose turn errored (a `kind: "error"` entry is present) are also dropped:
+ * codex-service never marks an item `state: "failed"`, so a `kind: "error"`
+ * entry is the only reliable signal that the turn's assistant text is a
+ * partial answer, not a canonical one.
  */
 export function buildExchangesFromEntries(
   entries: ChatEntry[],
@@ -49,6 +53,7 @@ export function buildExchangesFromEntries(
 ): NoteExchange[] {
   const exchanges: NoteExchange[] = [];
   for (const group of groupEntries(entries)) {
+    if (group.entries.some((entry) => entry.kind === "error")) continue;
     const userEntry = group.entries.find((entry) => entry.kind === "user");
     if (!userEntry) continue;
     const assistantEntries = contentEntries(group).filter((entry) => entry.kind === "assistant");
@@ -101,7 +106,7 @@ export function mergeChatNoteHtml(
 
 function matchesSection(parsed: ParsedSection, section: NoteThreadSection): boolean {
   if (parsed.threadId !== null) return parsed.threadId === escapeHtml(section.threadId);
-  return parsed.headingText.startsWith(`${section.title} · `);
+  return parsed.headingText.startsWith(`${escapeHtml(section.title)} · `);
 }
 
 function parseExistingSections(existingHtml: string | null): ParsedSection[] {
