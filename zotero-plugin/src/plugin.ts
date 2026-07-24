@@ -126,7 +126,7 @@ export class ZoteroChatPlugin {
     });
     this.selectedModel = this.settings.defaultModel;
     this.selectedEffort = this.settings.reasoningEffort;
-    this.floatOpacity = Number(prefString("floatOpacity", "100")) || 100;
+    this.floatOpacity = clampFloatOpacity(prefString("floatOpacity", "100"));
     this.mutations = new ZoteroMutationService(
       createZoteroMutationHost(Zotero, IOUtils, PathUtils),
       {
@@ -740,7 +740,8 @@ export class ZoteroChatPlugin {
         this.renderChatViews();
       },
       onPanelResize: (width, height) => {
-        setPrefString("floatSize", `${width}x${height}`);
+        const clamped = clampFloatSize(width, height);
+        setPrefString("floatSize", `${clamped.width}x${clamped.height}`);
       },
     });
     const storedSize = /^(\d+)x(\d+)$/.exec(prefString("floatSize", ""));
@@ -1481,6 +1482,26 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
   const localName = element.localName?.toLowerCase();
   if (["input", "textarea", "select"].includes(localName)) return true;
   return Boolean(element.closest?.('[contenteditable="true"], [contenteditable="plaintext-only"]'));
+}
+
+/**
+ * Clamps a raw `floatOpacity` pref value to the slider's [60, 100] range.
+ * Only a genuine parse failure (NaN) falls back to 100 -- unlike the old
+ * `Number(pref) || 100`, a valid-but-falsy 0 is not silently promoted to
+ * 100; it clamps to the 60 floor like any other too-low value.
+ */
+export function clampFloatOpacity(raw: string): number {
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) return 100;
+  return Math.min(100, Math.max(60, parsed));
+}
+
+/** Clamps a panel size before it is persisted, so outliers never round-trip. */
+export function clampFloatSize(width: number, height: number): { width: number; height: number } {
+  return {
+    width: Math.min(760, Math.max(380, width)),
+    height: Math.min(2000, Math.max(220, height)),
+  };
 }
 
 export function pdfDirectory(pdfPath: string | null | undefined): string | null {

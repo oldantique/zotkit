@@ -602,6 +602,63 @@ describe("FloatPanelView background opacity slider", () => {
     expect(root.style.left).toBe("");
     expect(root.classList.contains("is-dragged")).toBe(false);
   });
+
+  it("live-previews the CSS variable on input, and only forwards the value to onOpacityChange on change", () => {
+    const { host, handlers } = mount();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    const slider = host.querySelector<HTMLInputElement>("input.zc-float-alpha")!;
+
+    slider.value = "70";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(root.style.getPropertyValue("--zc-float-alpha")).toBe("0.7");
+    expect(handlers.onOpacityChange).not.toHaveBeenCalled();
+
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(handlers.onOpacityChange).toHaveBeenCalledWith(70);
+  });
+});
+
+describe("FloatPanelView empty-state height", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("clears a restored/persisted inline height while the transcript is empty, and re-applies it once entries return", () => {
+    const { host, view, handlers } = mount();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    view.restoreSize(620, 480);
+    expect(root.style.width).toBe("620px");
+    expect(root.style.height).toBe("480px");
+
+    // Entries present: the restored height stays as-is.
+    view.setState({ phase: "ready", entries: [{ id: "u1", kind: "user", text: "问" }] });
+    expect(root.style.height).toBe("480px");
+
+    // No entries (fresh thread / cleared transcript): a tall persisted height
+    // next to an empty transcript would otherwise leave a huge void, so the
+    // inline height is cleared. Width is never touched.
+    view.setState({ entries: [] });
+    expect(root.style.height).toBe("");
+    expect(root.style.width).toBe("620px");
+
+    // Entries return: the previously known height comes back.
+    view.setState({ entries: [{ id: "u1", kind: "user", text: "问" }] });
+    expect(root.style.height).toBe("480px");
+
+    // None of this bookkeeping is a user resize, so nothing was persisted.
+    expect(handlers.onPanelResize).not.toHaveBeenCalled();
+  });
+
+  it("leaves an unrestored panel's height alone across empty/non-empty transitions", () => {
+    const { host, view } = mount();
+    const root = host.querySelector<HTMLElement>(".zc-float")!;
+    view.setState({ phase: "ready", entries: [{ id: "u1", kind: "user", text: "问" }] });
+    expect(root.style.height).toBe("");
+    view.setState({ entries: [] });
+    expect(root.style.height).toBe("");
+    view.setState({ entries: [{ id: "u1", kind: "user", text: "问" }] });
+    expect(root.style.height).toBe("");
+  });
 });
 
 describe("FloatPanelView ResizeObserver guard", () => {

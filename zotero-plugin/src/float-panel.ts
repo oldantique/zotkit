@@ -45,6 +45,11 @@ export interface FloatPanelCallbacks {
   onPanelResize(width: number, height: number): void;
 }
 
+/** Joins an inline width/height style pair into a single comparable key. */
+function inlineSizeKey(width: string, height: string): string {
+  return `${width}|${height}`;
+}
+
 /** Entries belonging to the latest question: from the last user entry onward. */
 export function latestExchange(entries: ChatEntry[]): ChatEntry[] {
   for (let index = entries.length - 1; index >= 0; index--) {
@@ -88,7 +93,22 @@ export class FloatPanelView {
   private pinnedToBottom = true;
   private resizeObserver: ResizeObserver | null = null;
   private resizeDebounceTimer: number | null = null;
-  private hasObservedInitialSize = false;
+  /**
+   * Snapshot of the panel's own inline `style.width`+`style.height` pair.
+   * Gecko's native `resize: both` grip writes those inline styles directly
+   * on the element when the user drags the corner; a window resize (or any
+   * other reflow of the CSS `min()`/`max()` bounds) never touches them.
+   * Comparing the current inline pair against this snapshot -- instead of
+   * just skipping the ResizeObserver's first callback -- is what lets a real
+   * user resize be told apart from incidental reflow.
+   */
+  private lastInlineSize = inlineSizeKey("", "");
+  /**
+   * The last known-good inline height, from a persisted restore or a user
+   * drag. Reapplied once the transcript regains entries after its height was
+   * cleared for the empty state (see `applyHeightForEmptyState`).
+   */
+  private persistedHeight: string | null = null;
   private readonly handleResize = () => {
     if (this.root.hidden) return;
     if (this.position) this.applyPosition(this.position.left, this.position.top);
@@ -133,20 +153,29 @@ export class FloatPanelView {
   restoreSize(width: number, height: number): void {
     this.root.style.width = `${width}px`;
     this.root.style.height = `${height}px`;
+    this.persistedHeight = this.root.style.height;
+    this.lastInlineSize = this.currentInlineSize();
+  }
+
+  private currentInlineSize(): string {
+    return inlineSizeKey(this.root.style.width, this.root.style.height);
   }
 
   /**
-   * ResizeObserver fires once immediately when `observe()` starts, reporting
-   * whatever size the panel already has (default or pref-restored) — that
-   * first notification is not a user resize and must not be persisted.
+   * Gecko's native `resize: both` grip writes inline `style.width`/
+   * `style.height` directly on the panel when the user drags the corner.
+   * Window-driven responsive reflow (the CSS `min()`/`max()` bounds
+   * recomputing against the viewport) changes the observed content box too,
+   * but never touches those inline properties. Only a change in the inline
+   * pair -- never a bare content-box change -- is treated as a user resize
+   * and persisted.
    */
   private handlePanelResize(entries: ResizeObserverEntry[]): void {
     const entry = entries[0];
     if (!entry) return;
-    if (!this.hasObservedInitialSize) {
-      this.hasObservedInitialSize = true;
-      return;
-    }
+    const inlineSize = this.currentInlineSize();
+    if (inlineSize === this.lastInlineSize) return;
+    this.lastInlineSize = inlineSize;
     const width = Math.round(entry.contentRect.width);
     const height = Math.round(entry.contentRect.height);
     const win = this.doc.defaultView;
@@ -197,9 +226,15 @@ export class FloatPanelView {
     this.alphaSlider.step = "5";
     this.alphaSlider.title = "背景透明度";
     this.alphaSlider.setAttribute("aria-label", this.alphaSlider.title);
-    const emitOpacity = () => this.callbacks.onOpacityChange(Number(this.alphaSlider.value));
-    this.alphaSlider.addEventListener("input", emitOpacity);
-    this.alphaSlider.addEventListener("change", emitOpacity);
+    // `input` fires continuously while dragging: only preview it locally (no
+    // callback into the plugin, which would re-render every listening view
+    // on every tick) and forward the settled value to the plugin on `change`.
+    this.alphaSlider.addEventListener("input", () => {
+      this.root.style.setProperty("--zc-float-alpha", String(Number(this.alphaSlider.value) / 100));
+    });
+    this.alphaSlider.addEventListener("change", () => {
+      this.callbacks.onOpacityChange(Number(this.alphaSlider.value));
+    });
     const close = this.doc.createElement("button");
     close.type = "button";
     close.className = "zc-float-close";
@@ -313,7 +348,32 @@ export class FloatPanelView {
     this.renderModels();
     this.renderNote();
     this.renderTranscript();
+    this.applyHeightForEmptyState();
     this.renderOpacity();
+  }
+
+  /**
+   * A tall persisted/restored height next to an empty transcript (a fresh
+   * thread, or one that was just cleared) leaves a mostly-empty panel
+   * towering over the composer. Clear the inline height while there's
+   * nothing to show, remembering it so it comes back once the transcript
+   * has entries again. The width is never touched either way, and the
+   * ResizeObserver snapshot is kept in sync so this bookkeeping is never
+   * mistaken for a user resize.
+   */
+  private applyHeightForEmptyState(): void {
+    const hasEntries = this.state.entries.length > 0;
+    if (!hasEntries) {
+      if (this.root.style.height === "") return;
+      this.persistedHeight = this.root.style.height;
+      this.root.style.height = "";
+      this.lastInlineSize = this.currentInlineSize();
+      return;
+    }
+    if (this.root.style.height === "" && this.persistedHeight) {
+      this.root.style.height = this.persistedHeight;
+      this.lastInlineSize = this.currentInlineSize();
+    }
   }
 
   private renderOpacity(): void {

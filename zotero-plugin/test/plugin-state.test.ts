@@ -11,6 +11,8 @@ import {
   MAX_SELECTION_PROMPT_CHARACTERS,
   ZoteroChatPlugin,
   buildSelectionPrompt,
+  clampFloatOpacity,
+  clampFloatSize,
   formatPendingApprovalDescription,
   pdfDirectory,
 } from "../src/plugin";
@@ -234,16 +236,16 @@ describe("Zotkit Reader terminal state", () => {
       plugin.floatPanels.clear();
     });
 
-    it("persists the debounced panel size from onPanelResize, skipping the initial observation", () => {
-      vi.useFakeTimers();
-      const setStringPref = vi.fn();
+    function stubFakeResizeObserver(setStringPref = vi.fn(), getStringPref?: (key: string, fallback: string) => string): {
+      setStringPref: ReturnType<typeof vi.fn>;
+      getObservedCallback: () => ResizeObserverCallback;
+    } {
       vi.stubGlobal("Services", {
         prefs: {
-          getStringPref: (_key: string, fallback: string) => fallback,
+          getStringPref: getStringPref ?? ((_key: string, fallback: string) => fallback),
           setStringPref,
         },
       });
-
       let observedCallback: ResizeObserverCallback | null = null;
       class FakeResizeObserver {
         constructor(callback: ResizeObserverCallback) {
@@ -253,24 +255,109 @@ describe("Zotkit Reader terminal state", () => {
         disconnect(): void {}
       }
       vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+      return { setStringPref, getObservedCallback: () => observedCallback! };
+    }
+
+    it("persists a grip-driven resize: the observer fires after the native `resize: both` grip writes inline style", () => {
+      vi.useFakeTimers();
+      const { setStringPref, getObservedCallback } = stubFakeResizeObserver();
 
       const plugin = new ZoteroChatPlugin() as any;
       const entry = plugin.mountFloatPanel(window);
-      expect(observedCallback).not.toBeNull();
+      const root = document.querySelector<HTMLElement>(".zc-float")!;
+      const observedCallback = getObservedCallback();
+      expect(observedCallback).not.toBeUndefined();
 
-      // The first ResizeObserver notification reflects the panel's initial
-      // (possibly pref-restored) size, not a user drag, so it must not be
-      // persisted.
-      observedCallback!([{ contentRect: { width: 620, height: 400 } } as ResizeObserverEntry], {} as ResizeObserver);
+      // The initial notification reflects the panel's starting size (no
+      // inline style change yet) and must not be persisted.
+      observedCallback([{ contentRect: { width: 620, height: 400 } } as ResizeObserverEntry], {} as ResizeObserver);
       expect(setStringPref).not.toHaveBeenCalled();
 
-      // A subsequent notification is a real user resize.
-      observedCallback!([{ contentRect: { width: 700, height: 500 } } as ResizeObserverEntry], {} as ResizeObserver);
+      // Gecko's native `resize: both` grip writes inline style.width/height
+      // directly on the element -- simulate the grip drag, then the
+      // observer notification it triggers.
+      root.style.width = "700px";
+      root.style.height = "500px";
+      observedCallback([{ contentRect: { width: 700, height: 500 } } as ResizeObserverEntry], {} as ResizeObserver);
       expect(setStringPref).not.toHaveBeenCalled();
       vi.advanceTimersByTime(499);
       expect(setStringPref).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
       expect(setStringPref).toHaveBeenCalledWith("extensions.zotkit.floatSize", "700x500");
+
+      entry.view.destroy();
+      entry.host.remove();
+      plugin.floatPanels.clear();
+    });
+
+    it("does not persist a window-driven reflow that never touches the inline style", () => {
+      vi.useFakeTimers();
+      const { setStringPref, getObservedCallback } = stubFakeResizeObserver();
+
+      const plugin = new ZoteroChatPlugin() as any;
+      const entry = plugin.mountFloatPanel(window);
+      const observedCallback = getObservedCallback();
+      expect(observedCallback).not.toBeUndefined();
+
+      observedCallback([{ contentRect: { width: 620, height: 400 } } as ResizeObserverEntry], {} as ResizeObserver);
+      // A responsive reflow (e.g. the window shrinking so the CSS
+      // `min(620px, 100vw - 48px)` bound recomputes) changes the observed
+      // content box without ever writing to `style.width`/`style.height`.
+      observedCallback([{ contentRect: { width: 500, height: 400 } } as ResizeObserverEntry], {} as ResizeObserver);
+      vi.advanceTimersByTime(1000);
+      expect(setStringPref).not.toHaveBeenCalled();
+
+      entry.view.destroy();
+      entry.host.remove();
+      plugin.floatPanels.clear();
+    });
+
+    it("does not mistake clearing the inline height for an empty transcript as a user resize", () => {
+      vi.useFakeTimers();
+      const { setStringPref, getObservedCallback } = stubFakeResizeObserver(
+        vi.fn(),
+        (key, fallback) => (key === "extensions.zotkit.floatSize" ? "620x480" : fallback),
+      );
+
+      const plugin = new ZoteroChatPlugin() as any;
+      const entry = plugin.mountFloatPanel(window);
+      const root = document.querySelector<HTMLElement>(".zc-float")!;
+      expect(root.style.height).toBe("480px");
+      const observedCallback = getObservedCallback();
+
+      observedCallback([{ contentRect: { width: 620, height: 480 } } as ResizeObserverEntry], {} as ResizeObserver);
+
+      entry.view.setState({ phase: "ready", entries: [] });
+      expect(root.style.height).toBe("");
+
+      // happy-dom never actually fires ResizeObserver callbacks, but a real
+      // browser would notify it of the resulting content-box change; that
+      // notification must not be mistaken for a user resize.
+      observedCallback([{ contentRect: { width: 620, height: 220 } } as ResizeObserverEntry], {} as ResizeObserver);
+      vi.advanceTimersByTime(1000);
+      expect(setStringPref).not.toHaveBeenCalled();
+
+      entry.view.destroy();
+      entry.host.remove();
+      plugin.floatPanels.clear();
+    });
+
+    it("clamps outlier resized dimensions before persisting them", () => {
+      vi.useFakeTimers();
+      const { setStringPref, getObservedCallback } = stubFakeResizeObserver();
+
+      const plugin = new ZoteroChatPlugin() as any;
+      const entry = plugin.mountFloatPanel(window);
+      const root = document.querySelector<HTMLElement>(".zc-float")!;
+      const observedCallback = getObservedCallback();
+
+      observedCallback([{ contentRect: { width: 620, height: 400 } } as ResizeObserverEntry], {} as ResizeObserver);
+
+      root.style.width = "50px";
+      root.style.height = "5000px";
+      observedCallback([{ contentRect: { width: 50, height: 5000 } } as ResizeObserverEntry], {} as ResizeObserver);
+      vi.advanceTimersByTime(500);
+      expect(setStringPref).toHaveBeenCalledWith("extensions.zotkit.floatSize", "380x2000");
 
       entry.view.destroy();
       entry.host.remove();
@@ -906,5 +993,37 @@ describe("Reader context copied into the terminal", () => {
       vi.unstubAllGlobals();
       (globalThis as any).Zotero = previousZotero;
     });
+  });
+});
+
+describe("clampFloatOpacity", () => {
+  it("clamps parsed values to the 60-100 slider range", () => {
+    expect(clampFloatOpacity("100")).toBe(100);
+    expect(clampFloatOpacity("85")).toBe(85);
+    expect(clampFloatOpacity("40")).toBe(60);
+    expect(clampFloatOpacity("250")).toBe(100);
+  });
+
+  it("clamps a valid-but-falsy 0 to the 60 floor instead of the old `|| 100` trap promoting it to 100", () => {
+    // `Number("0")` is a legitimate (if out-of-range) 0, not NaN -- the old
+    // `Number(pref) || 100` fallback silently turned it into 100 by treating
+    // falsy-but-valid 0 the same as "missing". It should now simply clamp to
+    // the 60 floor like any other too-low value.
+    expect(clampFloatOpacity("0")).toBe(60);
+  });
+
+  it("falls back to 100 only for genuinely unparsable (NaN) values, not merely falsy/empty ones", () => {
+    expect(clampFloatOpacity("not-a-number")).toBe(100);
+    // `Number("")` is 0, not NaN, so this clamps like any other 0 -- it must
+    // not be confused with the NaN fallback case.
+    expect(clampFloatOpacity("")).toBe(60);
+  });
+});
+
+describe("clampFloatSize", () => {
+  it("clamps width to [380, 760] and height to [220, 2000]", () => {
+    expect(clampFloatSize(620, 480)).toEqual({ width: 620, height: 480 });
+    expect(clampFloatSize(50, 5000)).toEqual({ width: 380, height: 2000 });
+    expect(clampFloatSize(10_000, 10)).toEqual({ width: 760, height: 220 });
   });
 });

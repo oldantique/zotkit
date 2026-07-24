@@ -84,5 +84,12 @@ describe("browser style bundle", () => {
     );
     // The panel itself must be user-resizable via the native corner grip.
     expect(css).toMatch(/\.zc-float\s*\{[^}]*resize:\s*both;[^}]*\}/);
+    // The blanket `cursor: auto` on every transcript descendant (needed so
+    // selectable prose doesn't show a pointer) must not beat `cursor: pointer`
+    // on the transcript's actually-clickable elements -- it only wins if this
+    // rule comes later in the stylesheet.
+    expect(css).toMatch(
+      /\.zc-float-transcript \.zc-math-copy,\s*\.zc-float-transcript \.zc-copy-answer,\s*\.zc-float-transcript \.zc-turn-summary\s*\{[^}]*cursor:\s*pointer;[^}]*\}/,
+    );
   });
 });

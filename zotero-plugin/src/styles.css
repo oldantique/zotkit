@@ -618,9 +618,9 @@
   resize: both;
   overflow: hidden;
   width: min(620px, calc(100vw - 48px));
-  min-width: 380px;
+  min-width: min(380px, calc(100vw - 48px));
   max-width: 760px;
-  min-height: 220px;
+  min-height: min(220px, 60vh);
   max-height: 85vh;
   box-sizing: border-box;
   padding: 0 0 2px;
@@ -774,6 +774,9 @@
   line-height: 1.55;
 }
 .zc-float-transcript, .zc-float-transcript * { user-select: text; -moz-user-select: text; cursor: auto; }
+.zc-float-transcript .zc-math-copy,
+.zc-float-transcript .zc-copy-answer,
+.zc-float-transcript .zc-turn-summary { cursor: pointer; }
 .zc-float-transcript[hidden] { display: none; }
 .zc-float-entry { margin: 0 0 12px; }
 .zc-float-entry:last-child { margin-bottom: 2px; }
