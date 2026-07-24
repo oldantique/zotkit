@@ -145,4 +145,10 @@ describe("markdownToNoteHtml", () => {
       '<p><a href="https://example.com">官网</a> 坏</p>',
     );
   });
+  it("keeps inline math opaque to inline markup", () => {
+    expect(markdownToNoteHtml("公式 $a*b*c$ 结束")).toBe("<p>公式 $a*b*c$ 结束</p>");
+    expect(markdownToNoteHtml("公式 $a`code`b$ 结束")).toBe("<p>公式 $a`code`b$ 结束</p>");
+    expect(markdownToNoteHtml("公式 $a[l](https://x.com)b$ 结束")).toBe("<p>公式 $a[l](https://x.com)b$ 结束</p>");
+    expect(markdownToNoteHtml("单个 $ 不是公式 *强调*")).toBe("<p>单个 $ 不是公式 <em>强调</em></p>");
+  });
 });

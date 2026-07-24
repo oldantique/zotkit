@@ -611,6 +611,15 @@ function inlineToHtml(text: string, allowLinks = true): string {
       }
     }
 
+    if (text[index] === "$" && text[index + 1] !== "$" && !/\s/.test(text[index + 1] || "")) {
+      const end = findClosingDollar(text, index + 1);
+      if (end !== -1) {
+        out += `$${escapeHtml(text.slice(index + 1, end))}$`;
+        index = end + 1;
+        continue;
+      }
+    }
+
     if (text[index] === "\\" && isEscapableMarkdownCharacter(text[index + 1])) {
       out += escapeHtml(text[index + 1] || "");
       index += 2;
