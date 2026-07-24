@@ -8,6 +8,7 @@ const EDITABLE_FIELDS = ["title", "abstractNote", "date", "DOI", "url", "extra"]
 const MAX_PDF_BYTES = 512 * 1024 * 1024;
 const MAX_CHECKPOINTS = 20;
 const MAX_PDF_CHECKPOINT_BYTES = 1024 * 1024 * 1024;
+const MAX_REVIEWABLE_FIELD_CHARS = 20_000;
 
 type EditableField = (typeof EDITABLE_FIELDS)[number];
 
@@ -767,7 +768,10 @@ export function parseOperations(raw: unknown): ZoteroMutationOperation[] {
       for (const [field, fieldValue] of Object.entries(operation.fields as Record<string, unknown>)) {
         if (!EDITABLE_FIELDS.includes(field as EditableField)) throw new Error(`Field ${field} is not editable`);
         if (typeof fieldValue !== "string") throw new Error(`Field ${field} must be text`);
-        fields[field as EditableField] = fieldValue.slice(0, 100_000);
+        if (fieldValue.length > MAX_REVIEWABLE_FIELD_CHARS) {
+          throw new Error(`Field ${field} exceeds the ${MAX_REVIEWABLE_FIELD_CHARS}-character reviewable limit`);
+        }
+        fields[field as EditableField] = fieldValue;
       }
       if (!Object.keys(fields).length) throw new Error("set_fields cannot be empty");
       operations.push({ type: "set_fields", fields });
@@ -817,7 +821,11 @@ async function buildMutationDiff(
     const operation = operations[operationIndex]!;
     if (operation.type === "set_fields") {
       for (const [field, value] of Object.entries(operation.fields)) {
-        lines.push(`@@ metadata.${field} @@`, `- ${diffValue(snapshot.paper.fields[field as EditableField])}`, `+ ${diffValue(value)}`);
+        lines.push(
+          `@@ metadata.${field} @@`,
+          ...diffValueLines("-", snapshot.paper.fields[field as EditableField]),
+          ...diffValueLines("+", value),
+        );
       }
     }
     else if (operation.type === "set_collections") {
@@ -825,22 +833,26 @@ async function buildMutationDiff(
       const labels = await host.describeCollections(snapshot.paper.libraryID, allKeys);
       lines.push("@@ collections @@");
       for (const key of snapshot.paper.collectionKeys.filter((key) => !operation.collectionKeys.includes(key))) {
-        lines.push(`- ${labels.get(key) || key} (${key})`);
+        lines.push(`- ${sanitizeDiffText(labels.get(key) || key)} (${key})`);
       }
       for (const key of operation.collectionKeys.filter((key) => !snapshot.paper.collectionKeys.includes(key))) {
-        lines.push(`+ ${labels.get(key) || key} (${key})`);
+        lines.push(`+ ${sanitizeDiffText(labels.get(key) || key)} (${key})`);
       }
       if (snapshot.paper.collectionKeys.join("\0") === operation.collectionKeys.join("\0")) lines.push("  (no membership change)");
     }
     else if (operation.type === "relink_attachment") {
-      lines.push("@@ attachment.link @@", `- ${diffValue(snapshot.attachment.resolvedPath || snapshot.attachment.rawPath)}`, `+ ${diffValue(operation.newPath)}`);
+      lines.push(
+        "@@ attachment.link @@",
+        ...diffValueLines("-", snapshot.attachment.resolvedPath || snapshot.attachment.rawPath),
+        ...diffValueLines("+", operation.newPath),
+      );
     }
     else {
       const binding = stagedPdfBindings.find((entry) => entry.operationIndex === operationIndex);
       lines.push(
         "@@ PDF contents @@",
-        `- ${diffValue(snapshot.attachment.resolvedPath || "current PDF")}`,
-        `+ staged replacement: ${diffValue(operation.stagedPath)}`,
+        ...diffValueLines("-", snapshot.attachment.resolvedPath || "current PDF"),
+        ...diffValueLines("+", operation.stagedPath, "staged replacement: "),
         binding ? `  SHA-256 ${binding.sha256} · ${binding.size} bytes` : "  (staged PDF fingerprint unavailable)",
         "  A byte-for-byte backup will be checkpointed before Apply.",
       );
@@ -935,10 +947,40 @@ function snapshotFingerprint(snapshot: PaperMutationSnapshot): string {
   return JSON.stringify(snapshot);
 }
 
-function diffValue(value: unknown): string {
-  const text = String(value ?? "").replace(/[\r\n]+/g, " ").trim();
-  if (!text) return "(empty)";
-  return text.length > 800 ? `${text.slice(0, 800)}…` : text;
+// C0 controls (except the \t/\n we render verbatim), C1 controls, and the
+// Unicode bidi-override/embedding/isolate characters that can visually
+// reorder or hide text in a terminal or HTML view. A prompt-injected
+// proposal could otherwise use these to make the reviewed diff *display*
+// something other than the bytes Apply actually writes.
+const DANGEROUS_DIFF_CHARS = /[\u0000-\u0008\u000B-\u001F\u0080-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
+/**
+ * Replaces control characters and bidi-override characters with a visible
+ * `\uXXXX` literal escape so they can never render as invisible or
+ * direction-flipping bytes inside the reviewed diff. `\n` and `\t` pass
+ * through untouched -- they are rendered as real line breaks/tabs by the
+ * line-splitting in {@link diffValueLines}.
+ */
+export function sanitizeDiffText(value: string): string {
+  return value.replace(DANGEROUS_DIFF_CHARS, (char) => (
+    `\\u${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`
+  ));
+}
+
+/**
+ * Renders `value` as diff lines carrying `sign` ("-" or "+"), showing every
+ * character that will actually be read or written -- no truncation, no
+ * newline-flattening. The first line carries an optional label prefix
+ * (e.g. "staged replacement: "); every line after the first repeats the
+ * same sign with matching indentation so `.zc-diff-view`'s prefix-based
+ * `+`/`-` styling stays correct for the full value, not just its first line.
+ */
+function diffValueLines(sign: "-" | "+", value: unknown, labelPrefix = ""): string[] {
+  const text = sanitizeDiffText(String(value ?? ""));
+  if (!text) return [`${sign} ${labelPrefix}(empty)`];
+  return text.split("\n").map((row, index) => (
+    index === 0 ? `${sign} ${labelPrefix}${row}` : `${sign}   ${row}`
+  ));
 }
 
 function boundedError(error: unknown): string {

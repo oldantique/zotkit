@@ -357,6 +357,71 @@ describe("ZoteroMutationService", () => {
   });
 });
 
+describe("diff fidelity: review must show exactly what Apply will write", () => {
+  it("keeps every character of a long value instead of hiding the tail past 800 chars", async () => {
+    const { service } = harness();
+    const longValue = `${"A".repeat(800)}TAIL_MARKER_NEVER_SHOWN_BEFORE`;
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: longValue } }],
+    });
+
+    expect(result.diff).toContain("TAIL_MARKER_NEVER_SHOWN_BEFORE");
+    expect(result.diff).not.toContain("…");
+  });
+
+  it("renders multi-line values line by line with matching diff-sign continuation prefixes, without flattening", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: "First line\nSecond line\nThird line" } }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("+ First line");
+    expect(diffText).toContain("+   Second line");
+    expect(diffText).toContain("+   Third line");
+    expect(diffText).not.toContain("First line Second line Third line");
+  });
+
+  it("escapes bidi override characters into a visible literal escape instead of passing them through invisibly", async () => {
+    const { service } = harness();
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Evil‮title" } }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("\\u202E");
+    expect(diffText).not.toMatch(/‮/);
+  });
+
+  it("rejects field values beyond the 20000-character reviewable limit instead of silently truncating them", async () => {
+    const { service } = harness();
+
+    await expect(service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { abstractNote: "A".repeat(20_001) } }],
+    })).rejects.toThrow("Field abstractNote exceeds the 20000-character reviewable limit");
+  });
+
+  it("escapes control characters hidden inside a collection label before they reach the diff", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.describeCollections).mockResolvedValueOnce(new Map([
+      ["ABCDEFGH", "Old collection"],
+      ["IJKLMNOP", "Evil\x07Label\x1BHidden"],
+    ]));
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_collections", collectionKeys: ["IJKLMNOP"] }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("\\u0007");
+    expect(diffText).toContain("\\u001B");
+    expect(diffText).not.toMatch(/[\x00-\x08\x0B-\x1F]/);
+  });
+});
+
 describe("parseOperations", () => {
   it("rejects unknown fields, malformed collection keys, and empty operations", () => {
     expect(() => parseOperations([])).toThrow("between 1 and 20");
