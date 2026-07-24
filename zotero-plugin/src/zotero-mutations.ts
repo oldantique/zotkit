@@ -147,6 +147,7 @@ export class ZoteroMutationService {
   private readonly pending = new Map<string, PendingMutation>();
   private readonly checkpoints = new Map<string, PaperCheckpoint>();
   private loadedCheckpoints = false;
+  private resolveQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly host: MutationHost,
@@ -213,84 +214,130 @@ export class ZoteroMutationService {
     };
   }
 
+  /**
+   * Entry point is deliberately synchronous up to the first await: it must
+   * observe and flip `review.state` before yielding control, otherwise two
+   * back-to-back clicks (or a double-submit) would both read "pending" and
+   * both proceed to snapshot -> checkpoint -> apply. For replace_pdf the
+   * second run would back up the already-replaced bytes as the checkpoint's
+   * original.pdf, permanently destroying the only usable rollback.
+   *
+   * Once past that guard, the actual work is threaded through
+   * `resolveQueue` so concurrent accepts on *different* reviews still run
+   * one at a time rather than interleaving their host calls.
+   */
   async resolveReview(
     reviewId: string,
     decision: "accept" | "reject",
   ): Promise<MutationResolution> {
     const pending = this.pending.get(reviewId);
     if (!pending) throw new Error("This change review has expired");
-    const effects = effectsForOperations(pending.snapshot, pending.operations);
-    if (decision === "reject") {
-      pending.review.state = "rejected";
-      this.callbacks.onState();
-      return { decision: "rejected", effects: noMutationEffects(pending.snapshot) };
+    if (pending.review.state !== "pending") {
+      throw new Error("This change review was already resolved or is being applied");
     }
-    const context = this.requireContext();
-    if (paperIdentity(context) !== pending.paperIdentity) {
-      throw new Error("The active Zotero paper changed. Re-open the proposal before applying it.");
-    }
-    const current = await this.host.snapshot(context);
-    if (snapshotFingerprint(current) !== snapshotFingerprint(pending.snapshot)) {
-      throw new Error("The Zotero item or attachment changed after this diff was prepared. Generate a fresh proposal.");
-    }
-    await this.host.validateOperations(context, current, pending.operations);
-    const checkpointID = this.idFactory("checkpoint");
-    const checkpoint = await this.host.createCheckpoint(
-      checkpointID,
-      pending.review.title,
-      context,
-      current,
-      pending.operations.some((operation) => operation.type === "replace_pdf"),
-    );
-    await this.retainCheckpoint(checkpoint);
+    pending.review.state = "resolving";
+    this.callbacks.onState();
+
+    const run = () => this.runResolveReview(pending, decision);
+    // Chain onto the shared queue so a rejected run doesn't wedge later
+    // reviews: the queue link swallows the error (`.catch(() => {})`) purely
+    // to keep the chain alive, while the promise returned to *this* caller
+    // is `result` itself, which still carries the real rejection.
+    const result = this.resolveQueue.catch(() => {}).then(run);
+    this.resolveQueue = result;
+    return result;
+  }
+
+  private async runResolveReview(
+    pending: PendingMutation,
+    decision: "accept" | "reject",
+  ): Promise<MutationResolution> {
     try {
-      await assertStagedPdfBindings(
-        this.host,
-        context,
-        pending.operations,
-        pending.stagedPdfBindings,
-      );
-    }
-    catch (error) {
-      pending.review.state = "failed";
-      pending.review.summary = `The staged PDF no longer matches this review. Safety checkpoint ${checkpoint.id} remains available; generate a fresh proposal.`;
-      this.callbacks.onState();
-      throw error;
-    }
-    try {
-      await this.host.apply(
+      const effects = effectsForOperations(pending.snapshot, pending.operations);
+      if (decision === "reject") {
+        pending.review.state = "rejected";
+        this.callbacks.onState();
+        return { decision: "rejected", effects: noMutationEffects(pending.snapshot) };
+      }
+      const context = this.requireContext();
+      if (paperIdentity(context) !== pending.paperIdentity) {
+        throw new Error("The active Zotero paper changed. Re-open the proposal before applying it.");
+      }
+      const current = await this.host.snapshot(context);
+      if (snapshotFingerprint(current) !== snapshotFingerprint(pending.snapshot)) {
+        throw new Error("The Zotero item or attachment changed after this diff was prepared. Generate a fresh proposal.");
+      }
+      await this.host.validateOperations(context, current, pending.operations);
+      const checkpointID = this.idFactory("checkpoint");
+      const checkpoint = await this.host.createCheckpoint(
+        checkpointID,
+        pending.review.title,
         context,
         current,
-        pending.operations,
-        pending.stagedPdfBindings,
+        pending.operations.some((operation) => operation.type === "replace_pdf"),
       );
+      await this.retainCheckpoint(checkpoint);
+      try {
+        await assertStagedPdfBindings(
+          this.host,
+          context,
+          pending.operations,
+          pending.stagedPdfBindings,
+        );
+      }
+      catch (error) {
+        pending.review.state = "failed";
+        pending.review.summary = `The staged PDF no longer matches this review. Safety checkpoint ${checkpoint.id} remains available; generate a fresh proposal.`;
+        this.callbacks.onState();
+        throw error;
+      }
+      try {
+        await this.host.apply(
+          context,
+          current,
+          pending.operations,
+          pending.stagedPdfBindings,
+        );
+      }
+      catch (error) {
+        let rollbackError: unknown = null;
+        try {
+          await this.host.restore(checkpoint);
+        }
+        catch (restoreError) {
+          rollbackError = restoreError;
+        }
+        pending.review.state = "failed";
+        pending.review.summary = rollbackError
+          ? `Apply failed and automatic rollback also failed. Safety checkpoint ${checkpoint.id} remains available.`
+          : `Apply failed and was rolled back automatically. Safety checkpoint ${checkpoint.id} remains available.`;
+        this.callbacks.onState();
+        const applyMessage = boundedError(error);
+        const message = rollbackError
+          ? `Apply failed: ${applyMessage}. Automatic rollback also failed: ${boundedError(rollbackError)}. Checkpoint ${checkpoint.id} remains available for manual Restore.`
+          : `Apply failed: ${applyMessage}. Automatic rollback completed; checkpoint ${checkpoint.id} remains available.`;
+        throw new ZoteroMutationApplyError(message, effects, checkpoint.id, { cause: error });
+      }
+      pending.review.state = "accepted";
+      await this.host.pruneCheckpoints();
+      this.checkpoints.clear();
+      this.loadedCheckpoints = false;
+      await this.ensureCheckpointsLoaded();
+      this.callbacks.onState();
+      return { decision: "accepted", effects, checkpointID: checkpoint.id };
     }
     catch (error) {
-      let rollbackError: unknown = null;
-      try {
-        await this.host.restore(checkpoint);
+      // Only revert to "pending" if nothing above already committed this
+      // review to a terminal "failed" state. That preserves the pre-existing
+      // behavior where a stale-context/stale-snapshot guard failure leaves
+      // the review retriable, while a failure after the point of no return
+      // (checkpointed and applying) keeps its explicit "failed" state.
+      if (pending.review.state === "resolving") {
+        pending.review.state = "pending";
+        this.callbacks.onState();
       }
-      catch (restoreError) {
-        rollbackError = restoreError;
-      }
-      pending.review.state = "failed";
-      pending.review.summary = rollbackError
-        ? `Apply failed and automatic rollback also failed. Safety checkpoint ${checkpoint.id} remains available.`
-        : `Apply failed and was rolled back automatically. Safety checkpoint ${checkpoint.id} remains available.`;
-      this.callbacks.onState();
-      const applyMessage = boundedError(error);
-      const message = rollbackError
-        ? `Apply failed: ${applyMessage}. Automatic rollback also failed: ${boundedError(rollbackError)}. Checkpoint ${checkpoint.id} remains available for manual Restore.`
-        : `Apply failed: ${applyMessage}. Automatic rollback completed; checkpoint ${checkpoint.id} remains available.`;
-      throw new ZoteroMutationApplyError(message, effects, checkpoint.id, { cause: error });
+      throw error;
     }
-    pending.review.state = "accepted";
-    await this.host.pruneCheckpoints();
-    this.checkpoints.clear();
-    this.loadedCheckpoints = false;
-    await this.ensureCheckpointsLoaded();
-    this.callbacks.onState();
-    return { decision: "accepted", effects, checkpointID: checkpoint.id };
   }
 
   async restoreCheckpoint(checkpointID: string): Promise<MutationResolution> {

@@ -92,7 +92,7 @@ export interface DiffReview {
   title: string;
   summary?: string;
   diff: string;
-  state?: "pending" | "accepted" | "rejected" | "failed";
+  state?: "pending" | "resolving" | "accepted" | "rejected" | "failed";
 }
 
 export interface PendingApproval {

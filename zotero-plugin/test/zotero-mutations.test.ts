@@ -258,6 +258,103 @@ describe("ZoteroMutationService", () => {
     await expect(service.restoreCheckpoint("checkpoint-2"))
       .rejects.toThrow("Open the checkpoint's paper");
   });
+
+  it("rejects a concurrent second accept on the same review and applies only once", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Improved title" } }],
+    });
+
+    const first = service.resolveReview("review-1", "accept");
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("This change review was already resolved or is being applied");
+
+    await expect(first).resolves.toMatchObject({ decision: "accepted" });
+    expect(host.createCheckpoint).toHaveBeenCalledOnce();
+    expect(host.apply).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a second accept after replace_pdf already completed, so the rollback checkpoint is never overwritten", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "replace_pdf", stagedPath: "/profile/papers/1-ATTACH/output.pdf" }],
+    });
+
+    await service.resolveReview("review-1", "accept");
+    expect(host.createCheckpoint).toHaveBeenCalledOnce();
+    expect(host.apply).toHaveBeenCalledOnce();
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("This change review was already resolved or is being applied");
+
+    // The second click must never re-run snapshot -> checkpoint -> apply: doing
+    // so would back up the already-replaced PDF bytes as "original.pdf" and
+    // destroy the only usable rollback checkpoint.
+    expect(host.createCheckpoint).toHaveBeenCalledOnce();
+    expect(host.apply).toHaveBeenCalledOnce();
+  });
+
+  it("refuses accept after the review was already rejected", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Improved title" } }],
+    });
+
+    await service.resolveReview("review-1", "reject");
+    expect(service.getReviews()[0]?.state).toBe("rejected");
+
+    await expect(service.resolveReview("review-1", "accept"))
+      .rejects.toThrow("This change review was already resolved or is being applied");
+    expect(host.createCheckpoint).not.toHaveBeenCalled();
+    expect(host.apply).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent accepts for different reviews without interleaving their apply calls", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Title A" } }],
+    });
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Title B" } }],
+    });
+
+    const order: string[] = [];
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+    const gateA = deferred<void>();
+    const gateB = deferred<void>();
+
+    vi.mocked(host.apply).mockImplementation(async (_context, _current, operations) => {
+      const label = (operations[0] as { type: "set_fields"; fields: { title?: string } }).fields.title === "Title A" ? "A" : "B";
+      order.push(`start-${label}`);
+      await (label === "A" ? gateA.promise : gateB.promise);
+      order.push(`end-${label}`);
+    });
+
+    const flush = async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    };
+
+    const acceptA = service.resolveReview("review-1", "accept");
+    const acceptB = service.resolveReview("review-2", "accept");
+
+    await flush();
+    // Review B must never start applying while review A's run is still in
+    // flight, proving the queue serializes rather than interleaves.
+    expect(order).toEqual(["start-A"]);
+
+    gateA.resolve();
+    await acceptA;
+    await flush();
+    expect(order).toEqual(["start-A", "end-A", "start-B"]);
+
+    gateB.resolve();
+    await acceptB;
+    expect(order).toEqual(["start-A", "end-A", "start-B", "end-B"]);
+  });
 });
 
 describe("parseOperations", () => {
