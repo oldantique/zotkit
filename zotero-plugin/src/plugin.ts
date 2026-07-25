@@ -32,13 +32,11 @@ import {
   createZoteroMutationHost,
   type MutationResolution,
 } from "./zotero-mutations";
-import { buildExchangesFromEntries, syncChatNote, type NoteThreadSection } from "./note-sync";
 import {
   debug,
   logError,
   PANE_ID,
   PLUGIN_ID,
-  prefBool,
   prefString,
   profilePath,
   setPrefString,
@@ -919,7 +917,6 @@ export class ZoteroChatPlugin {
             model: this.selectedModel,
           });
           this.turnMeta.set(threadId, perThread);
-          this.onTurnCompleted(threadId);
         }
       }
       // `running` is service-wide: once nothing is running, every remaining start
@@ -930,36 +927,7 @@ export class ZoteroChatPlugin {
     }
   }
 
-  /** Auto-syncs the completed turn's Q&A into the paper's `zotkit-chat`-tagged note. */
-  protected onTurnCompleted(threadId: string): void {
-    try {
-      if (!prefBool("noteSync", true)) return;
-      const context = this.context;
-      if (!context || threadId !== this.codex?.state.activeThreadId) return;
-      const thread = this.codex.getThreadOptions().find((option) => option.active);
-      const section: NoteThreadSection = {
-        threadId,
-        title: thread?.title || "对话",
-        dateLabel: new Date().toISOString().slice(0, 10),
-        exchanges: buildExchangesFromEntries(this.codex.getChatEntries(), this.turnMeta.get(threadId)),
-      };
-      if (!section.exchanges.length) return;
-      void syncChatNote({
-        zotero: Zotero,
-        readerItem: this.readerContextItem(),
-        paperTitle: paperTitle(context),
-        section,
-      }).catch(() => {});
-    }
-    catch (error) {
-      // note-sync is a best-effort side effect and must never break chat.
-      // Swallow errors after logging, matching the guarded `zotero.debug?.(…)`
-      // idiom note-sync.ts's syncChatNote already uses for the same reason.
-      Zotero?.debug?.(`[Zotkit] onTurnCompleted failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  /** Resolves the current reader attachment to a live Zotero item for note-sync writes. */
+  /** Resolves the current reader attachment to a live Zotero item. */
   private readerContextItem(): any {
     const attachment = this.context?.attachment;
     if (!attachment?.id) return null;

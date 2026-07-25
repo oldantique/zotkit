@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  activityLabel, contentEntries, formatElapsed, friendlyToolName,
+  activityLabel, buildQaFromEntries, contentEntries, formatElapsed, friendlyToolName,
   groupEntries, processEntries,
+  type ExchangeMeta,
 } from "../src/exchanges";
 import type { ChatEntry } from "../src/sidebar";
 
@@ -43,5 +44,63 @@ describe("friendlyToolName / formatElapsed", () => {
     expect(formatElapsed(4_200)).toBe("4s");
     expect(formatElapsed(102_000)).toBe("1m 42s");
     expect(formatElapsed(500)).toBe("1s"); // 向上取整,不显示 0s
+  });
+});
+
+describe("buildQaFromEntries", () => {
+  it("keeps only completed Q&A pairs and attaches meta", () => {
+    const meta = new Map<string, ExchangeMeta>([
+      ["u1", { elapsedMs: 28_000, completedAt: "2026-07-23T10:00:28Z", model: "gpt-5-codex" }],
+    ]);
+    const out = buildQaFromEntries([
+      { id: "u1", kind: "user", text: "问一" },
+      { id: "r1", kind: "reasoning", text: "…", state: "complete" },
+      { id: "a1", kind: "assistant", text: "答一", state: "complete" },
+      { id: "u2", kind: "user", text: "悬空问题" },
+    ] as ChatEntry[], meta);
+
+    expect(out).toEqual([
+      {
+        question: "问一",
+        answerMarkdown: "答一",
+        meta: { elapsedMs: 28_000, completedAt: "2026-07-23T10:00:28Z", model: "gpt-5-codex" },
+      },
+    ]);
+  });
+
+  it("joins multiple assistant entries in one turn with a blank line", () => {
+    const out = buildQaFromEntries([
+      { id: "u1", kind: "user", text: "问" },
+      { id: "a1", kind: "assistant", text: "第一段", state: "complete" },
+      { id: "a2", kind: "assistant", text: "第二段", state: "complete" },
+    ] as ChatEntry[], undefined);
+
+    expect(out).toEqual([{ question: "问", answerMarkdown: "第一段\n\n第二段" }]);
+  });
+
+  it("returns an empty array when there are no entries", () => {
+    expect(buildQaFromEntries([], undefined)).toEqual([]);
+  });
+
+  it("drops a group whose turn errored, even though it has a completed-looking assistant entry (I1)", () => {
+    const out = buildQaFromEntries([
+      { id: "u1", kind: "user", text: "问" },
+      { id: "a1", kind: "assistant", text: "半截答案", state: "complete" },
+      { id: "e1", kind: "error", text: "网络错误" },
+    ] as ChatEntry[], undefined);
+
+    expect(out).toEqual([]);
+  });
+
+  it("keeps a clean completed group and drops only a later errored group (I1)", () => {
+    const out = buildQaFromEntries([
+      { id: "u1", kind: "user", text: "问一" },
+      { id: "a1", kind: "assistant", text: "答一", state: "complete" },
+      { id: "u2", kind: "user", text: "问二" },
+      { id: "a2", kind: "assistant", text: "半截答案", state: "complete" },
+      { id: "e1", kind: "error", text: "网络错误" },
+    ] as ChatEntry[], undefined);
+
+    expect(out).toEqual([{ question: "问一", answerMarkdown: "答一" }]);
   });
 });

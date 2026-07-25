@@ -63,3 +63,46 @@ export function formatElapsed(ms: number): string {
   if (totalSeconds < 60) return `${totalSeconds}s`;
   return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
+
+export interface QaExchange {
+  question: string;
+  answerMarkdown: string;
+  meta?: { completedAt?: string; model?: string; elapsedMs?: number };
+}
+
+export interface ExchangeMeta {
+  elapsedMs?: number;
+  completedAt?: string;
+  model?: string;
+}
+
+/**
+ * Turns raw chat entries into the Q&A pairs a note section is built from.
+ * Groups without a completed assistant answer (dangling questions, or a
+ * leading run of process entries with no user turn) are dropped. Groups
+ * whose turn errored (a `kind: "error"` entry is present) are also dropped:
+ * codex-service never marks an item `state: "failed"`, so a `kind: "error"`
+ * entry is the only reliable signal that the turn's assistant text is a
+ * partial answer, not a canonical one.
+ */
+export function buildQaFromEntries(
+  entries: ChatEntry[],
+  meta: ReadonlyMap<string, ExchangeMeta> | undefined,
+): QaExchange[] {
+  const exchanges: QaExchange[] = [];
+  for (const group of groupEntries(entries)) {
+    if (group.entries.some((entry) => entry.kind === "error")) continue;
+    const userEntry = group.entries.find((entry) => entry.kind === "user");
+    if (!userEntry) continue;
+    const assistantEntries = contentEntries(group).filter((entry) => entry.kind === "assistant");
+    if (!assistantEntries.length) continue;
+    const answerMarkdown = assistantEntries.map((entry) => entry.text).join("\n\n");
+    const exchangeMeta = meta?.get(userEntry.id);
+    exchanges.push({
+      question: userEntry.text,
+      answerMarkdown,
+      ...(exchangeMeta ? { meta: exchangeMeta } : {}),
+    });
+  }
+  return exchanges;
+}
