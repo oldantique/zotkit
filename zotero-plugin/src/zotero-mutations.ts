@@ -1,5 +1,6 @@
 import type { ReaderContext } from "./reader-context";
 import type { CheckpointOption, DiffReview } from "./sidebar";
+import { sha256Bytes, sha256File } from "./hashing";
 import { configuredLibraryRoot, makeLocalFile, profilePath, randomID } from "./platform";
 
 export const ZOTERO_MUTATION_TOOL = "zotero_propose_changes" as const;
@@ -1009,36 +1010,6 @@ function boundedError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const clean = sanitizeDiffText(message.replace(/[\r\n]+/g, " ").trim() || "unknown error");
   return clean.length > 500 ? `${clean.slice(0, 500)}…` : clean;
-}
-
-function sha256Bytes(bytes: Uint8Array): string {
-  const hash = Components.classes["@mozilla.org/security/hash;1"]
-    .createInstance(Components.interfaces.nsICryptoHash);
-  hash.init(hash.SHA256);
-  hash.update(bytes, bytes.length);
-  return binaryDigestToHex(hash.finish(false));
-}
-
-function sha256File(path: string, size: number): string {
-  const input = Components.classes["@mozilla.org/network/file-input-stream;1"]
-    .createInstance(Components.interfaces.nsIFileInputStream);
-  input.init(makeLocalFile(path), 0x01, 0, 0);
-  try {
-    const hash = Components.classes["@mozilla.org/security/hash;1"]
-      .createInstance(Components.interfaces.nsICryptoHash);
-    hash.init(hash.SHA256);
-    hash.updateFromStream(input, size);
-    return binaryDigestToHex(hash.finish(false));
-  }
-  finally {
-    input.close();
-  }
-}
-
-function binaryDigestToHex(value: string): string {
-  return [...value]
-    .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
-    .join("");
 }
 
 const DEFAULT_PDF_CONTAINMENT_ERROR = "Replacement PDFs must be staged inside Zotkit's private paper workspace";
