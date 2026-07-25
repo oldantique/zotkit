@@ -103,6 +103,12 @@ describe("notingFileName", () => {
   });
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 function notingHost(): NotingHost & { imported: any[]; erased: string[]; staged: string[] } {
   const imported: any[] = []; const erased: string[] = []; const staged: string[] = [];
   return {
@@ -178,5 +184,41 @@ describe("NotingService", () => {
     await service.run();
     expect(service.view()!.phase).toBe("failed");
     expect(host.stageNote).not.toHaveBeenCalled();
+  });
+
+  it("a double-clicked Apply only imports the attachment once", async () => {
+    const host = notingHost();
+    const gate = deferred<string>();
+    // stageNote is the first host call apply() awaits; gating it keeps the
+    // first apply() genuinely mid-flight (phase "applying") while the
+    // second, un-awaited call is fired.
+    (host.stageNote as any).mockImplementation((name: string) => {
+      host.staged.push(name);
+      return gate.promise;
+    });
+    const service = new NotingService(deps(host) as any);
+    await service.run();
+    const first = service.apply({ kind: "new" });
+    const second = service.apply({ kind: "new" }); // fired before the first resolves
+    gate.resolve("/staging/staged.md");
+    await Promise.all([first, second]);
+    expect(host.importAttachment).toHaveBeenCalledTimes(1);
+    expect(service.view()!.phase).toBe("done");
+  });
+
+  it("run() is a no-op while already generating", async () => {
+    const host = notingHost();
+    const gate = deferred<string>();
+    const generate = vi.fn(() => gate.promise);
+    const service = new NotingService(deps(host, generate as any) as any);
+    const first = service.run();
+    // Let buildSnapshot's microtask land so generate() has actually been
+    // invoked and phase is genuinely "generating" before the second call.
+    await Promise.resolve();
+    const second = service.run();
+    gate.resolve("# Citation\n\n$x$");
+    await Promise.all([first, second]);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(service.view()!.phase).toBe("preview");
   });
 });

@@ -355,6 +355,11 @@ export class NotingService {
   }
 
   async run(): Promise<void> {
+    // Reentrancy guard: a mid-flight Note-button click (before the ~50ms
+    // render debounce hides the button) must not start a second run() that
+    // stomps this.snapshot/this.markdown out from under the first one, or
+    // interleave a fresh snapshot with stale in-flight markdown.
+    if (this.current?.phase === "generating" || this.current?.phase === "applying") return;
     this.snapshot = null;
     this.markdown = null;
     this.setView({ ...EMPTY_NOTING_VIEW, phase: "generating" });
@@ -398,6 +403,10 @@ export class NotingService {
    * UI layer to swallow (the failure is already visible via `view()`).
    */
   async apply(mode: { kind: "new" } | { kind: "replace"; key: string }): Promise<void> {
+    // Reentrancy guard: a fast double-click on Apply (before the ~50ms
+    // render debounce can disable the button) must not re-enter and import
+    // the attachment twice. Checked first, before any await.
+    if (this.current?.phase === "applying") return;
     const snapshot = this.snapshot;
     const markdown = this.markdown;
     if (!snapshot || markdown === null) return;

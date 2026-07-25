@@ -1442,7 +1442,14 @@ export class SidebarView {
     apply.type = "button";
     apply.className = "zc-noting-apply is-primary";
     apply.textContent = "Apply 写入附件";
-    apply.addEventListener("click", () => this.callbacks.onNotingApply?.(selectedMode));
+    apply.addEventListener("click", () => {
+      // Belt-and-suspenders alongside NotingService's own reentrancy guard:
+      // disable immediately so a rapid double-click can't even dispatch a
+      // second click before the ~50ms debounced re-render swaps this card
+      // out for the "applying" phase.
+      apply.disabled = true;
+      this.callbacks.onNotingApply?.(selectedMode);
+    });
     actions.append(cancel, apply);
 
     article.append(stats, preview, versionGroup, actions);
