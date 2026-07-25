@@ -5,6 +5,7 @@
  * anchors) can hash a file without depending on the mutations module.
  */
 
+// keep in sync with platform.ts#makeLocalFile
 function makeLocalFile(path: string): any {
   const file = Components.classes["@mozilla.org/file/local;1"]
     .createInstance(Components.interfaces.nsIFile);
