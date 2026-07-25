@@ -47,7 +47,7 @@ Ask 模式使用 Codex 的只读沙箱、关闭网络访问，并以 `approvalPo
 
 Agent 模式可在 `<Zotero Profile>/zotkit/` 下的私有论文工作区中创建或修改暂存文件。命令和文件审批显示在侧栏；插件拒绝 app-server 对原 PDF 目录的直接写入请求。论文原目录仍会作为研究上下文提供给 Codex，但不是 Agent 的可写根目录。
 
-对真实 Zotero/PDF 状态的修改只有一条受控路径：
+Agent 模式下模型能触发的元数据/collection/附件/PDF 修改只有一条受控路径（阅读留痕与 Note 的批注、附件写入不经过模型工具调用，是另一条完全独立的确定性写入路径，见下文《阅读留痕与 Note》）：
 
 ```text
 Codex 调用 zotero_propose_changes
@@ -71,6 +71,20 @@ Apply 前创建 checkpoint，再执行写入
 模型调用 `zotero_propose_changes` 只会产生提案，不能替用户点击 Apply。Apply 前还会再次核对当前打开论文及其快照；若条目或附件在 Diff 生成后发生变化，提案会失效。执行失败时插件会尝试自动恢复刚创建的 checkpoint。
 
 Checkpoint 保存在插件私有目录并自动回收：最多保留 20 个；PDF 备份总量最多约 1 GiB，单个可替换 PDF 上限 512 MiB。只有 PDF 替换才复制一份原 PDF 作为恢复备份，普通阅读不会产生 PDF 副本。Restore 前还会创建一个反向 checkpoint。会话 checkpoint 通过 Codex thread fork 恢复对话边界，不等同于恢复文件；真实 Zotero/PDF 恢复使用上述变更 checkpoint。
+
+## 阅读留痕（Paper Trail）与 Note
+
+阅读留痕和 Note 按钮是与上面 `zotero_propose_changes` 完全独立的第二条写入路径：模型在 Ask、Agent 任何模式下都不持有任何批注或附件写入工具；下面的每一次 Zotero 写入都由用户的一次具体点击（发问、撤销、已理解、Apply）触发，并由插件里的确定性代码执行，逐条可撤销。
+
+### 自动高亮
+
+针对一段选中文字发起的提问，在其**首轮回答完成后**（而不是提问的瞬间），插件会在该选区位置自动创建一条 Zotero 高亮批注：专用色 `#a28ae5`，标签 `zotkit-chat` + `zotkit-open`，批注内容是问题原文加 2–3 句答案要点。首次触发前会弹出一次性授权卡，同意后写入偏好 `extensions.zotkit.paperTrail`（默认 `unset`）且不再重复询问；拒绝则本次会话只在本地记录锚点、不写批注。每个问题最多写入一次批注。浮窗里的确认 chip（“已留痕 · 第 N 页 · 撤销”）可以立即撤销：删除该批注并清除本地记录，不留残留。浮窗“已理解”按钮把该问题标记为已解决，只把批注标签从 `zotkit-open` 换成 `zotkit-resolved`，不改动批注的内容、颜色或位置。
+
+侧栏“问题清单”按页码列出当前论文全部留痕锚点（未解决 / 已解决两态），点击可跳转到对应批注位置并展开该段对话。Reader 自带的批注侧栏会给带 `zotkit-chat` 标签的高亮追加一个“继续对话”按钮，点击后打开（或按需切换到）浮动提问窗并定位到该锚点所在的对话线程。
+
+### Note 按钮：一次性综合阅读笔记
+
+侧栏顶部的 Note 按钮把当前论文积累的全部留痕问答、用户自己的批注和当前 PDF 哈希冻结为一份快照；若某个锚点创建时记录的 PDF 哈希与当前文件不一致，会先提示“论文文件已变化”供用户选择继续或取消。随后一个隐藏的只读 Codex 回合（5 分钟上限）把快照综合成结构化 Markdown + LaTeX 笔记（Citation / One-sentence Takeaway / Method / Key Equations / Reading Q&A / Open Questions / My Understanding），本地做 KaTeX 逐式校验后给出预览，包含锚点覆盖数、未解决问题数、待核对公式数的统计，以及“新建版本 / 替换某个已有版本”单选（默认新建）。预览阶段不产生任何写入；只有点击 Apply 才会把结果作为带 YAML front matter（条目/附件 key、PDF 哈希、生成时间、模型、各项计数）的 `.md` 子附件导入 Zotero。选择替换已有版本时，插件先导入新版本、成功后才删除旧版本，中途失败不影响旧附件。
 
 ## 当前上下文与文库查询
 
@@ -137,6 +151,9 @@ Zotero Reader Item Pane
 │       ├── Agent：private staging workspace
 │       ├── live Reader tools
 │       └── zotero_propose_changes → Diff → Apply → Checkpoint
+├── Paper Trail / Note（用户手势触发，模型零写权限）
+│   ├── 首轮回答完成 → 确定性写入高亮批注（consent · 撤销 · 已理解）
+│   └── Note 按钮 → 快照 → 只读综合回合 → 本地校验 → 预览 → Apply → .md 子附件
 └── Advanced Terminal
     └── authenticated local helper → real PTY → codex / claude
         └── live Reader + bundled Zotkit query tools
