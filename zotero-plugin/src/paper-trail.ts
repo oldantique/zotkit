@@ -345,6 +345,12 @@ export class PaperTrailService {
       this.pendingConsentRequest = { context, record };
       this.callbacks.onState();
     }
+    else if (consent === "off") {
+      // No annotation write, but the question list (which reads anchors via
+      // getAnchors) has a new record-only entry -- render now instead of
+      // waiting for some unrelated future onState() call.
+      this.callbacks.onState();
+    }
 
     return record;
   }
@@ -356,13 +362,30 @@ export class PaperTrailService {
     return { question: record.question, pageNumber: record.pageNumber };
   }
 
+  /**
+   * Accepting turns consent on for every future turn, but by the time the
+   * user sees the consent card there is often more than one record-only
+   * anchor already saved for this paper -- every unset turn after the first
+   * parks nothing new (see the "first parked request" comment in
+   * completeTurn) and just stays record-only. Accept must backfill ALL of
+   * them, not just the one that happened to trigger the card, or the
+   * earlier questions silently keep no highlight forever.
+   */
   async resolveConsent(context: ReaderContext, decision: "accept" | "decline"): Promise<void> {
     const pending = this.pendingConsentRequest;
     this.pendingConsentRequest = null;
     if (decision === "accept") {
       this.callbacks.setConsent("on");
       if (pending) {
-        await this.enqueue(() => this.writeAnnotation(pending.context, pending.record));
+        const backfillTargets = this.callbacks.getAnchors(pending.context).filter(
+          (anchor) => !anchor.annotationKey && anchor.position !== undefined && anchor.position !== null,
+        );
+        for (const anchor of backfillTargets) {
+          // writeAnnotation() never throws (it catches and reports via
+          // onState() internally), so one failed write can never stop the
+          // rest of the loop -- each anchor's write is isolated.
+          await this.enqueue(() => this.writeAnnotation(pending.context, anchor));
+        }
       }
     }
     else {
@@ -443,7 +466,13 @@ export class PaperTrailService {
    * same paper.
    */
   private async writeAnnotation(context: ReaderContext, record: AnchorRecord): Promise<AnchorRecord> {
-    if (record.position === undefined || record.position === null) return record;
+    if (record.position === undefined || record.position === null) {
+      // Nothing to write, but the question list still gained a record-only
+      // entry -- render now instead of waiting for an unrelated future
+      // onState() call.
+      this.callbacks.onState();
+      return record;
+    }
     try {
       const annotationKey = await this.host.createHighlight({
         libraryID: record.libraryID,

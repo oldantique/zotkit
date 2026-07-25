@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexService } from "../src/codex-service";
+import { READER_CONTEXT_TOOLS, READER_TOOL_NAMES } from "../src/reader-context";
 import type { ReaderContext, ReaderContextService } from "../src/reader-context";
 import type { NativeBridge } from "../src/native-bridge";
+import { ZOTERO_MUTATION_TOOL, ZoteroMutationService } from "../src/zotero-mutations";
 
 function paperContext(): ReaderContext {
   return {
@@ -542,6 +544,45 @@ describe("CodexService Cursor-style modes and approvals", () => {
     );
   });
 
+  it("statically composes only the real read-only reader tools + zotero_propose_changes for Agent-mode turns -- no annotation/attachment/write tool ever reaches app-server (ADR-0002, MUST 3)", () => {
+    // Uses the REAL tool registries (not a hand-rolled fake list), so this
+    // locks the actual composition site (dynamicToolSpecs(), around
+    // codex-service.ts:readerContext.tools + agentToolProvider.tools).
+    const readerContext = { tools: READER_CONTEXT_TOOLS } as unknown as ReaderContextService;
+    const mutations = new ZoteroMutationService(
+      {} as any,
+      { onState: () => {}, getContext: () => null },
+    );
+    const provider = { tools: mutations.tools, invokeTool: async () => undefined };
+    const service = new CodexService(
+      {} as NativeBridge,
+      readerContext,
+      "test",
+      { onState: vi.fn(), onError: vi.fn() },
+      provider,
+    );
+    const internal = service as any;
+    service.state.mode = "agent";
+
+    const names: string[] = internal.dynamicToolSpecs().map((tool: { name: string }) => tool.name);
+
+    // The full composed set is exactly the known read-only reader tools plus
+    // the single reviewed-mutation tool -- nothing more, nothing renamed.
+    expect(names).toEqual([...READER_TOOL_NAMES, ZOTERO_MUTATION_TOOL]);
+
+    // Defense in depth: no composed name reads as an annotation/attachment/
+    // write tool. zotero_propose_changes is the one legitimate write-shaped
+    // name (a reviewed proposal, not a direct mutation); zotero_list_annotations
+    // is a legitimate read tool that happens to contain the substring "annot"
+    // (it *lists* existing annotations, it does not create/delete them).
+    const writeLike = /annot|attach|write|create|delete|erase/i;
+    const knownSafeSubstringHits = new Set([ZOTERO_MUTATION_TOOL, "zotero_list_annotations"]);
+    for (const name of names) {
+      if (knownSafeSubstringHits.has(name)) continue;
+      expect(name).not.toMatch(writeLike);
+    }
+  });
+
   it("restores a checkpoint by forking before its turn without claiming file restoration", async () => {
     const client = {
       threadFork: vi.fn().mockResolvedValue({
@@ -621,6 +662,44 @@ describe("CodexService anchors", () => {
     expect(service.getAnchors(paperContext())).toEqual([]);
     (service as any).store = { getThread: () => ({ turns: [{}, {}, {}] }) };
     expect(service.activeThreadTurnCount()).toBe(3);
+  });
+
+  it("buckets a recorded anchor by the RECORD's own identity, not the live context passed in (MUST 2)", async () => {
+    const { service } = serviceWithClient({});
+    (service as any).saveSessions = vi.fn(async () => {});
+    // The live context is a different paper than the anchor's own identity --
+    // this can happen after a live-context flip mid-turn.
+    const liveContext = paperContext();
+    const recordAnchor = anchor("a1");
+    recordAnchor.libraryID = 2;
+    recordAnchor.attachmentKey = "OTHER_ATTACH";
+
+    await service.recordAnchor(liveContext, recordAnchor);
+
+    expect(service.getAnchors(liveContext)).toEqual([]);
+    const recordContext: ReaderContext = {
+      ...paperContext(),
+      attachment: { ...paperContext().attachment, key: "OTHER_ATTACH", libraryID: 2 },
+    };
+    expect(service.getAnchors(recordContext).map((a) => a.anchorId)).toEqual(["a1"]);
+  });
+
+  it("updateAnchor/removeAnchor locate the anchor across buckets, bucket-agnostic (MUST 2)", async () => {
+    const { service } = serviceWithClient({});
+    (service as any).saveSessions = vi.fn(async () => {});
+    const recordContext = paperContext();
+    await service.recordAnchor(recordContext, anchor("a1"));
+
+    // Called with a context for a DIFFERENT paper than the anchor's bucket.
+    const otherLiveContext: ReaderContext = {
+      ...paperContext(),
+      attachment: { ...paperContext().attachment, key: "DIFFERENT", libraryID: 9 },
+    };
+    await service.updateAnchor(otherLiveContext, "a1", { status: "resolved", annotationKey: "ANN1" });
+    expect(service.getAnchors(recordContext)[0]).toMatchObject({ status: "resolved", annotationKey: "ANN1" });
+
+    await service.removeAnchor(otherLiveContext, "a1");
+    expect(service.getAnchors(recordContext)).toEqual([]);
   });
 });
 

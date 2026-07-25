@@ -221,4 +221,25 @@ describe("NotingService", () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(service.view()!.phase).toBe("preview");
   });
+
+  it("decide(\"continue\") is a no-op while already generating (CHEAP: same guard as run()/apply())", async () => {
+    const host = notingHost();
+    const gate = deferred<string>();
+    const generate = vi.fn(() => gate.promise);
+    const d = deps(host, generate as any);
+    (d.buildSnapshot as any).mockResolvedValue({ ...snapshot, hashMismatch: true });
+    const service = new NotingService(d as any);
+    await service.run();
+    expect(service.view()!.phase).toBe("confirm-mismatch");
+
+    const first = service.decide("continue");
+    // Let generateAndPreview's synchronous setup land so phase is genuinely
+    // "generating" before the fast double-click's second call.
+    await Promise.resolve();
+    const second = service.decide("continue");
+    gate.resolve("# Citation\n\n$x$");
+    await Promise.all([first, second]);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(service.view()!.phase).toBe("preview");
+  });
 });

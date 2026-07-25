@@ -788,6 +788,36 @@
 .zc-float-understood:hover { background: var(--zc-accent-strong); }
 .zc-float-understood[hidden] { display: none; }
 
+.zc-float-consent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0 10px 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--zc-accent) 30%, var(--zc-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--zc-accent) 6%, var(--zc-bg-raised));
+  flex: none;
+}
+.zc-float-consent[hidden] { display: none; }
+.zc-float-consent-text { min-width: 0; flex: 1 1 160px; color: var(--zc-text); font-size: 10.5px; line-height: 1.4; }
+.zc-float-consent-actions { display: flex; flex: none; gap: 6px; margin-left: auto; }
+.zc-float-consent-actions button {
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--zc-border);
+  border-radius: 7px;
+  color: var(--zc-text);
+  background: var(--zc-bg-raised);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.zc-float-consent-actions button.zc-float-consent-accept { border-color: transparent; color: #fff; background: var(--zc-accent); }
+.zc-float-consent-actions button.zc-float-consent-accept:hover { background: var(--zc-accent-strong); }
+
 .zc-float-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

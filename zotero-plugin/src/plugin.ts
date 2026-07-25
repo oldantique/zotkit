@@ -838,6 +838,11 @@ export class ZoteroChatPlugin {
         if (context && anchor) void this.paperTrail.resolveAnchor(context, anchor.anchorId);
         this.hideFloatPanel(win);
       },
+      onPaperTrailConsent: (decision) => {
+        const context = this.context;
+        if (!context) return;
+        void this.paperTrail.resolveConsent(context, decision);
+      },
     });
     const storedSize = /^(\d+)x(\d+)$/.exec(prefString("floatSize", ""));
     if (storedSize) {
@@ -946,6 +951,7 @@ export class ZoteroChatPlugin {
         opacity: this.floatOpacity,
         anchorConfirmation: this.paperTrail?.lastConfirmation() ?? null,
         canResolveAnchor: Boolean(this.paperTrail && this.latestOpenAnchor()),
+        paperTrailConsent: this.paperTrail?.consentRequest() ?? null,
       });
     }
   }
@@ -1033,7 +1039,7 @@ export class ZoteroChatPlugin {
             model: this.selectedModel,
           });
           this.turnMeta.set(threadId, perThread);
-          if (this.paperTrail && this.context && threadId === this.codex?.state.activeThreadId) {
+          if (this.paperTrail && this.context) {
             void this.paperTrail.completeTurn(
               this.context,
               threadId,

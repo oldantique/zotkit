@@ -384,6 +384,10 @@ export class NotingService {
       this.cancel();
       return;
     }
+    // Reentrancy guard: mirrors run()/apply() -- a fast double-click on the
+    // confirm-mismatch card's "继续生成" (before the ~50ms render debounce
+    // hides it) must not start a second generateAndPreview() run.
+    if (this.current?.phase === "generating" || this.current?.phase === "applying") return;
     await this.generateAndPreview();
   }
 

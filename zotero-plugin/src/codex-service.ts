@@ -750,27 +750,54 @@ export class CodexService {
     return this.sessions.anchors?.[paperIdentity(context)] ?? [];
   }
 
+  /**
+   * Anchors are bucketed by the RECORD's own attachment identity
+   * (`anchorIdentity(anchor)`), never by the live `context` passed in --
+   * `beginPendingAnchor`/`completeTurn` in paper-trail.ts snapshot the
+   * selection's paper at question time, but the *live* Reader context can
+   * flip to a different paper before the write lands (fast tab switches,
+   * follow-up turns). Bucketing by the live context would strand the anchor
+   * under the wrong (or a since-abandoned) paper's list.
+   */
   async recordAnchor(context: ReaderContext, anchor: AnchorRecord): Promise<void> {
     this.sessions.anchors ||= {};
-    const key = paperIdentity(context);
+    const key = anchorIdentity(anchor);
     this.sessions.anchors[key] = [...(this.sessions.anchors[key] ?? []), anchor];
     await this.saveSessions();
   }
 
+  /**
+   * Bucket-agnostic: scans every paper's anchor list for `anchorId` rather
+   * than trusting `context` to name the anchor's bucket. `context` here is
+   * the caller's *live* Reader context, which -- per the recordAnchor note
+   * above -- need not match the bucket the anchor actually lives in.
+   */
   async updateAnchor(context: ReaderContext, anchorId: string, patch: Partial<AnchorRecord>): Promise<void> {
-    const key = paperIdentity(context);
-    const list = this.sessions.anchors?.[key];
-    if (!list) return;
-    this.sessions.anchors![key] = list.map((entry) => (entry.anchorId === anchorId ? { ...entry, ...patch } : entry));
-    await this.saveSessions();
+    void context;
+    const anchors = this.sessions.anchors;
+    if (!anchors) return;
+    for (const key of Object.keys(anchors)) {
+      const list = anchors[key]!;
+      const index = list.findIndex((entry) => entry.anchorId === anchorId);
+      if (index === -1) continue;
+      anchors[key] = list.map((entry, i) => (i === index ? { ...entry, ...patch } : entry));
+      await this.saveSessions();
+      return;
+    }
   }
 
+  /** Bucket-agnostic for the same reason as updateAnchor above. */
   async removeAnchor(context: ReaderContext, anchorId: string): Promise<void> {
-    const key = paperIdentity(context);
-    const list = this.sessions.anchors?.[key];
-    if (!list) return;
-    this.sessions.anchors![key] = list.filter((entry) => entry.anchorId !== anchorId);
-    await this.saveSessions();
+    void context;
+    const anchors = this.sessions.anchors;
+    if (!anchors) return;
+    for (const key of Object.keys(anchors)) {
+      const list = anchors[key]!;
+      if (!list.some((entry) => entry.anchorId === anchorId)) continue;
+      anchors[key] = list.filter((entry) => entry.anchorId !== anchorId);
+      await this.saveSessions();
+      return;
+    }
   }
 
   activeThreadTurnCount(): number {
@@ -1160,6 +1187,11 @@ export class CodexService {
 
 function paperIdentity(context: ReaderContext): string {
   return `${context.attachment.libraryID ?? "0"}-${context.attachment.key}`;
+}
+
+/** Same shape as paperIdentity(), but keyed off an AnchorRecord's own attachment fields. */
+function anchorIdentity(anchor: AnchorRecord): string {
+  return `${anchor.libraryID ?? "0"}-${anchor.attachmentKey}`;
 }
 
 function buildAdditionalContext(

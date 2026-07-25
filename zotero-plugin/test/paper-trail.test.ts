@@ -213,6 +213,79 @@ describe("PaperTrailService", () => {
     expect(host.swapAnnotationTags).toHaveBeenCalledTimes(1);
   });
 
+  it("accept backfills every record-only anchor for the paper, not just the parked one (MUST 1)", async () => {
+    const host = makeHost();
+    const callbacks = makeCallbacks("unset");
+    const service = new PaperTrailService(host, callbacks);
+    const context = trailContext();
+
+    service.beginPendingAnchor(context, "q1", "thread-a");
+    await service.completeTurn(context, "thread-a", entries, 0);   // parks (record #1)
+
+    // A second question while still unset: per the existing "first parked
+    // request kept" comment, this stays record-only without re-parking --
+    // but it must still be backfilled once the user accepts.
+    const context2 = { ...context, selection: { ...context.selection!, text: "另一段选中文字" } };
+    service.beginPendingAnchor(context2, "q2", "thread-a");
+    await service.completeTurn(context2, "thread-a", entries, 1);   // record-only (record #2)
+
+    expect(callbacks.anchors).toHaveLength(2);
+    expect(callbacks.anchors.every((a: any) => a.annotationKey === undefined)).toBe(true);
+    expect(service.consentRequest()).toMatchObject({ question: "q1" });
+
+    await service.resolveConsent(context, "accept");
+
+    expect(host.createHighlight).toHaveBeenCalledTimes(2);
+    expect(callbacks.anchors[0].annotationKey).toBe("ANN1");
+    expect(callbacks.anchors[1].annotationKey).toBe("ANN2");
+  });
+
+  it("accept isolates a single anchor's write failure -- the rest still get backfilled (MUST 1)", async () => {
+    const host = makeHost();
+    host.createHighlight = vi.fn(async (target: any) => {
+      if (target.attachmentKey === "ATTACH" && target.comment.startsWith("Q: q1")) {
+        throw new Error("Zotero write failed");
+      }
+      return "ANN-ok";
+    });
+    const callbacks = makeCallbacks("unset");
+    const service = new PaperTrailService(host, callbacks);
+    const context = trailContext();
+
+    service.beginPendingAnchor(context, "q1", "thread-a");
+    await service.completeTurn(context, "thread-a", entries, 0);
+    const context2 = { ...context, selection: { ...context.selection!, text: "另一段选中文字" } };
+    service.beginPendingAnchor(context2, "q2", "thread-a");
+    await service.completeTurn(context2, "thread-a", entries, 1);
+
+    await service.resolveConsent(context, "accept");
+
+    expect(host.createHighlight).toHaveBeenCalledTimes(2);
+    expect(callbacks.anchors[0].annotationKey).toBeUndefined();   // failed write: no key
+    expect(callbacks.anchors[1].annotationKey).toBe("ANN-ok");    // isolated: still written
+  });
+
+  it("acceptance: A/B identity snapshot -- the Zotero write and recorded anchor always carry the ORIGINAL selection context's identity, even when a different context is passed to completeTurn (MUST 3)", async () => {
+    const host = makeHost();
+    const callbacks = makeCallbacks("on");
+    const service = new PaperTrailService(host, callbacks, () => new Date("2026-07-25T01:00:00Z"), (p) => `${p}-1`);
+    const contextA = trailContext();   // attachment key ATTACH, library 1
+    service.beginPendingAnchor(contextA, "q", "thread-a");
+
+    const contextB: ReaderContext = {
+      ...contextA,
+      attachment: { ...(contextA as any).attachment, key: "OTHER_ATTACH", libraryID: 2 },
+    } as ReaderContext;
+
+    const anchor = await service.completeTurn(contextB, "thread-a", entries, 0);
+
+    // The Zotero write landed under A's identity, not B's.
+    expect(host.created[0]).toMatchObject({ libraryID: 1, attachmentKey: "ATTACH" });
+    // The recorded anchor itself carries A's identity too.
+    expect(anchor).toMatchObject({ libraryID: 1, attachmentKey: "ATTACH" });
+    expect(callbacks.anchors[0]).toMatchObject({ libraryID: 1, attachmentKey: "ATTACH" });
+  });
+
   it("skips highlight silently when the selection has no position", async () => {
     const host = makeHost();
     const callbacks = makeCallbacks("on");

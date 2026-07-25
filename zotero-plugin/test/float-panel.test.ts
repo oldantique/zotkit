@@ -25,6 +25,7 @@ function callbacks(): FloatPanelCallbacks {
     onPanelResize: vi.fn(),
     onUndoAnchor: vi.fn(),
     onMarkUnderstood: vi.fn(),
+    onPaperTrailConsent: vi.fn(),
   };
 }
 
@@ -288,6 +289,32 @@ describe("FloatPanelView selection chip and transcript", () => {
     expect(handlers.onUndoAnchor).toHaveBeenCalledWith("a1");
     (host.querySelector(".zc-float-understood") as HTMLButtonElement).click();
     expect(handlers.onMarkUnderstood).toHaveBeenCalled();
+  });
+
+  it("renders the paper-trail consent block only while a request is pending, and dispatches accept/decline (MUST 1)", () => {
+    const handlers = { ...callbacks(), onPaperTrailConsent: vi.fn() };
+    const { host, view } = mount(handlers);
+    expect(host.querySelector<HTMLElement>(".zc-float-consent")!.hidden).toBe(true);
+
+    view.setState({ paperTrailConsent: { question: "为什么用 KL 散度?", pageNumber: 7 } });
+    const block = host.querySelector<HTMLElement>(".zc-float-consent");
+    expect(block).not.toBeNull();
+    expect(block!.hidden).toBe(false);
+    expect(host.textContent).toContain("zotkit 将在你提问的位置自动创建高亮批注");
+    expect(host.textContent).toContain("允许");
+    expect(host.textContent).toContain("不写批注");
+
+    const buttons = Array.from(block!.querySelectorAll("button"));
+    const declineButton = buttons.find((b) => b.textContent === "不写批注")!;
+    const acceptButton = buttons.find((b) => b.textContent === "允许")!;
+
+    declineButton.click();
+    expect(handlers.onPaperTrailConsent).toHaveBeenCalledWith("decline");
+    acceptButton.click();
+    expect(handlers.onPaperTrailConsent).toHaveBeenCalledWith("accept");
+
+    view.setState({ paperTrailConsent: null });
+    expect(host.querySelector<HTMLElement>(".zc-float-consent")!.hidden).toBe(true);
   });
 });
 

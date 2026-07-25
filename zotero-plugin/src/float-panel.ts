@@ -34,6 +34,7 @@ export interface FloatPanelState {
   opacity: number;
   anchorConfirmation: { anchorId: string; pageNumber?: number } | null;
   canResolveAnchor: boolean;
+  paperTrailConsent: { question: string; pageNumber?: number } | null;
 }
 
 export interface FloatPanelCallbacks {
@@ -47,6 +48,7 @@ export interface FloatPanelCallbacks {
   onPanelResize(width: number, height: number): void;
   onUndoAnchor(anchorId: string): void;
   onMarkUnderstood(): void;
+  onPaperTrailConsent(decision: "accept" | "decline"): void;
 }
 
 /** Joins an inline width/height style pair into a single comparable key. */
@@ -73,6 +75,8 @@ export class FloatPanelView {
   private anchorChip!: HTMLElement;
   private anchorChipLabel!: HTMLElement;
   private understoodButton!: HTMLButtonElement;
+  private consentBlock!: HTMLElement;
+  private consentText!: HTMLElement;
   private textarea!: HTMLTextAreaElement;
   private sendButton!: HTMLButtonElement;
   private stopButton!: HTMLButtonElement;
@@ -92,6 +96,7 @@ export class FloatPanelView {
     opacity: 100,
     anchorConfirmation: null,
     canResolveAnchor: false,
+    paperTrailConsent: null,
   };
   private position: { left: number; top: number } | null = null;
   private readonly expandedTurns = new Set<string>();
@@ -327,6 +332,26 @@ export class FloatPanelView {
     this.understoodButton.hidden = true;
     this.understoodButton.addEventListener("click", () => this.callbacks.onMarkUnderstood());
 
+    this.consentBlock = this.doc.createElement("div");
+    this.consentBlock.className = "zc-float-consent";
+    this.consentBlock.hidden = true;
+    this.consentText = this.doc.createElement("span");
+    this.consentText.className = "zc-float-consent-text";
+    const consentActions = this.doc.createElement("div");
+    consentActions.className = "zc-float-consent-actions";
+    const consentDecline = this.doc.createElement("button");
+    consentDecline.type = "button";
+    consentDecline.className = "zc-float-consent-decline";
+    consentDecline.textContent = "不写批注";
+    consentDecline.addEventListener("click", () => this.callbacks.onPaperTrailConsent("decline"));
+    const consentAccept = this.doc.createElement("button");
+    consentAccept.type = "button";
+    consentAccept.className = "zc-float-consent-accept";
+    consentAccept.textContent = "允许";
+    consentAccept.addEventListener("click", () => this.callbacks.onPaperTrailConsent("accept"));
+    consentActions.append(consentDecline, consentAccept);
+    this.consentBlock.append(this.consentText, consentActions);
+
     const composer = this.doc.createElement("div");
     composer.className = "zc-float-composer";
     this.textarea = this.doc.createElement("textarea");
@@ -401,7 +426,10 @@ export class FloatPanelView {
       }
     });
 
-    this.root.append(this.bar, this.chip, this.anchorChip, this.understoodButton, composer, this.note, this.transcript);
+    this.root.append(
+      this.bar, this.chip, this.anchorChip, this.understoodButton,
+      this.consentBlock, composer, this.note, this.transcript,
+    );
   }
 
   private render(): void {
@@ -409,6 +437,7 @@ export class FloatPanelView {
     this.renderChip();
     this.renderAnchorChip();
     this.renderUnderstoodButton();
+    this.renderConsent();
     this.textarea.disabled = this.state.phase !== "ready";
     this.stopButton.hidden = !this.state.running;
     this.stopButton.style.display = this.state.running ? "grid" : "none";
@@ -493,6 +522,13 @@ export class FloatPanelView {
 
   private renderUnderstoodButton(): void {
     this.understoodButton.hidden = !this.state.canResolveAnchor;
+  }
+
+  private renderConsent(): void {
+    const consent = this.state.paperTrailConsent;
+    this.consentBlock.hidden = !consent;
+    if (!consent) return;
+    this.consentText.textContent = "zotkit 将在你提问的位置自动创建高亮批注";
   }
 
   private renderNote(): void {
