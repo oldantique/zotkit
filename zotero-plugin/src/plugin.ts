@@ -655,7 +655,9 @@ export class ZoteroChatPlugin {
         void this.restoreCheckpoint(checkpointID).catch((error) => this.reportError(error));
       },
       onPaperTrailConsent: (decision) => {
-        void this.paperTrail.resolveConsent(this.context!, decision);
+        const context = this.context;
+        if (!context) return;
+        void this.paperTrail.resolveConsent(context, decision);
       },
     });
     this.chatViews.set(body, view);
@@ -778,11 +780,14 @@ export class ZoteroChatPlugin {
         setPrefString("floatSize", `${clamped.width}x${clamped.height}`);
       },
       onUndoAnchor: (anchorId) => {
-        void this.paperTrail.undoAnchor(this.context!, anchorId);
+        const context = this.context;
+        if (!context) return;
+        void this.paperTrail.undoAnchor(context, anchorId);
       },
       onMarkUnderstood: () => {
-        const anchor = this.latestOpenAnchor();
-        if (anchor) void this.paperTrail.resolveAnchor(this.context!, anchor.anchorId);
+        const context = this.context;
+        const anchor = context ? this.latestOpenAnchor() : null;
+        if (context && anchor) void this.paperTrail.resolveAnchor(context, anchor.anchorId);
         this.hideFloatPanel(win);
       },
     });
