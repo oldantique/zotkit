@@ -844,12 +844,24 @@ export class CodexService {
       ? params.threadId
       : typeof turn?.threadId === "string" ? turn.threadId : null;
     const belongsToActiveThread = !eventThreadId || eventThreadId === this.state.activeThreadId;
-    if (notification.method === "turn/completed" || notification.method === "turn/failed") {
+    if (notification.method === "turn/completed") {
       const waiter = eventThreadId ? this.utilityWaiters.get(eventThreadId) : undefined;
       if (waiter) {
         clearTimeout(waiter.timer);
         this.utilityWaiters.delete(eventThreadId!);
         waiter.resolve();
+      }
+    }
+    else if (notification.method === "turn/failed") {
+      const waiter = eventThreadId ? this.utilityWaiters.get(eventThreadId) : undefined;
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        this.utilityWaiters.delete(eventThreadId!);
+        // A failed turn must reject, not resolve — resolving here would let
+        // runUtilityTurn scan the store and hand back a partial/streamed
+        // agentMessage from the failed turn as if it were a real result.
+        const reason = turn?.error ?? params.error;
+        waiter.reject(new Error(reason !== undefined && reason !== null ? errorText(reason) : "工具轮执行失败"));
       }
     }
     if (notification.method === "turn/started") {

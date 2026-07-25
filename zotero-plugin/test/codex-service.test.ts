@@ -678,6 +678,31 @@ describe("CodexService utility turns", () => {
     expect(service.state.running).toBe(false);
   });
 
+  it("rejects (not resolves) when the hidden turn fails, so a partial agentMessage is never returned as success", async () => {
+    const store = new Map<string, any>();
+    // The failed turn still has a partially-streamed agentMessage in the
+    // store; runUtilityTurn must never hand this back as if it succeeded.
+    store.set("util-4", { turns: [{ id: "t1", status: "failed", items: [
+      { id: "i1", type: "agentMessage", text: "半句还没说完" },
+    ] }] });
+    const client = {
+      threadStart: vi.fn(async () => ({ thread: { id: "util-4" } })),
+      turnStart: vi.fn(async () => ({ turn: { id: "t1" } })),
+    };
+    const { service } = serviceWithClient(client);
+    (service as any).store = { getThread: (id: string) => store.get(id) };
+    const pending = service.runUtilityTurn("总结一下", { timeoutMs: 5000 });
+    await Promise.resolve();
+    (service as any).handleNotification({
+      method: "turn/failed",
+      params: { threadId: "util-4", turn: { id: "t1", error: { message: "沙盒被拒绝" } } },
+    });
+    await expect(pending).rejects.toThrow("沙盒被拒绝");
+    expect((service as any).utilityWaiters.size).toBe(0);
+    expect(service.state.activeThreadId).toBe("thread-a");
+    expect(service.state.running).toBe(false);
+  });
+
   it("reads another thread's turns without touching active state", async () => {
     const client = { threadRead: vi.fn(async () => ({ thread: { id: "old" } })) };
     const { service } = serviceWithClient(client);
