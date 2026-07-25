@@ -110,6 +110,13 @@ export interface CheckpointOption {
   createdAt?: string;
 }
 
+export interface QuestionListItem {
+  anchorId: string;
+  pageNumber?: number;
+  question: string;
+  status: "open" | "resolved";
+}
+
 export interface SidebarState {
   phase: SidebarPhase;
   accountLabel?: string;
@@ -132,6 +139,7 @@ export interface SidebarState {
   turnStartedAt: number | null;
   turnDurations: Record<string, number>;
   paperTrailConsent: { question: string; pageNumber?: number } | null;
+  anchors: QuestionListItem[];
 }
 
 export interface SidebarCallbacks {
@@ -153,6 +161,8 @@ export interface SidebarCallbacks {
   onApprovalDecision?(approvalId: string, decision: "approve-once" | "reject"): void;
   onRestoreCheckpoint?(checkpointId: string): void;
   onPaperTrailConsent?(decision: "accept" | "decline"): void;
+  onAnchorJump?(anchorId: string): void;
+  onAnchorResolve?(anchorId: string): void;
 }
 
 export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close" | "copy";
@@ -160,6 +170,7 @@ export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | 
 export class SidebarView {
   private readonly doc: Document;
   private readonly root: HTMLElement;
+  private questionList!: HTMLElement;
   private transcript!: HTMLElement;
   private textarea!: HTMLTextAreaElement;
   private sendButton!: HTMLButtonElement;
@@ -221,6 +232,7 @@ export class SidebarView {
       turnStartedAt: null,
       turnDurations: {},
       paperTrailConsent: null,
+      anchors: [],
     };
     this.build();
     this.render();
@@ -304,6 +316,12 @@ export class SidebarView {
     contextCopy.append(this.contextTitle, this.contextMeta);
     const refresh = this.iconButton("refresh", "刷新 Reader 上下文", () => this.callbacks.onRefreshContext());
     contextCard.append(contextIcon, contextCopy, refresh);
+
+    // Attached/detached dynamically by renderQuestionList() -- absent from
+    // the DOM entirely (not merely `hidden`) when there are no anchors, so
+    // it never claims a CSS Grid row (or a querySelector hit) while empty.
+    this.questionList = this.doc.createElement("section");
+    this.questionList.className = "zc-question-list";
 
     this.transcript = this.doc.createElement("main");
     this.transcript.className = "zc-transcript";
@@ -445,6 +463,7 @@ export class SidebarView {
       : "Agent 模式的命令、文件或文库变更必须经过审批";
     this.renderThreadTabs();
     this.renderContext();
+    this.renderQuestionList();
     this.renderContextChips();
     this.renderContextMenu();
     this.renderModels();
@@ -477,6 +496,51 @@ export class SidebarView {
       context.selectionText ? `选区 ${context.selectionText.length} 字` : "未选中文本"
     ].filter(Boolean);
     this.contextMeta.textContent = pieces.join(" · ");
+  }
+
+  private renderQuestionList(): void {
+    this.questionList.replaceChildren();
+    if (!this.state.anchors.length) {
+      this.questionList.remove();
+      return;
+    }
+    for (const anchor of this.state.anchors) {
+      const item = this.doc.createElement("div");
+      item.className = `zc-question-item is-${anchor.status}`;
+      item.dataset.anchorId = anchor.anchorId;
+      const status = this.doc.createElement("span");
+      status.className = "zc-question-status";
+      status.textContent = anchor.status === "resolved" ? "✓" : "●";
+      status.setAttribute("aria-hidden", "true");
+      const page = this.doc.createElement("span");
+      page.className = "zc-question-page";
+      page.textContent = anchor.pageNumber !== undefined ? `p.${anchor.pageNumber}` : "p.?";
+      const text = this.doc.createElement("span");
+      text.className = "zc-question-text";
+      text.textContent = anchor.question;
+      text.title = anchor.question;
+      const actions = this.doc.createElement("div");
+      actions.className = "zc-question-actions";
+      const jump = this.doc.createElement("button");
+      jump.type = "button";
+      jump.className = "zc-question-jump";
+      jump.textContent = "跳转";
+      jump.addEventListener("click", () => this.callbacks.onAnchorJump?.(anchor.anchorId));
+      actions.appendChild(jump);
+      if (anchor.status === "open") {
+        const resolve = this.doc.createElement("button");
+        resolve.type = "button";
+        resolve.className = "zc-question-resolve";
+        resolve.textContent = "已理解";
+        resolve.addEventListener("click", () => this.callbacks.onAnchorResolve?.(anchor.anchorId));
+        actions.appendChild(resolve);
+      }
+      item.append(status, page, text, actions);
+      this.questionList.appendChild(item);
+    }
+    if (!this.questionList.isConnected) {
+      this.root.insertBefore(this.questionList, this.transcript);
+    }
   }
 
   private renderThreadTabs(): void {

@@ -936,6 +936,16 @@ describe("paper-trail wiring", () => {
     const source = readFileSync(join(__dirname, "../src/paper-trail.ts"), "utf8");
     expect(source).not.toMatch(/tools\s*[:=]/);   // paper-trail 永不注册模型工具
   });
+
+  it("jumpToAnchor opens the reader at the annotation", async () => {
+    const previousZotero = (globalThis as any).Zotero;
+    const open = vi.fn(async () => {});
+    (globalThis as any).Zotero = { Items: { getByLibraryAndKey: () => ({ id: 42 }) }, Reader: { open } };
+    const plugin = new ZoteroChatPlugin() as any;
+    await plugin.jumpToAnchor({ libraryID: 1, attachmentKey: "A", annotationKey: "ANN1", anchorId: "a1" });
+    expect(open).toHaveBeenCalledWith(42, { annotationID: "ANN1" }, { allowDuplicate: false });
+    (globalThis as any).Zotero = previousZotero;
+  });
 });
 
 describe("clampFloatSize", () => {

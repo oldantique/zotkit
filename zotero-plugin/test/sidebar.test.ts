@@ -8,9 +8,17 @@ vi.mock("../src/platform", () => ({
   copyToClipboard: vi.fn(() => true),
 }));
 
-import { SidebarView, type SidebarCallbacks } from "../src/sidebar";
+import { SidebarView, type SidebarCallbacks, type SidebarState } from "../src/sidebar";
 import { renderMarkdown } from "../src/markdown";
 import { copyToClipboard } from "../src/platform";
+
+// Minimal Partial<SidebarState> merged into setState() calls that only care
+// about one slice of state (mirrors the `phase: "ready"` seed the other
+// tests in this file set inline) -- kept `as any` at the call site since a
+// real SidebarState has many unrelated required fields.
+function baseState(): Partial<SidebarState> {
+  return { phase: "ready" };
+}
 
 function callbacks(): SidebarCallbacks {
   return {
@@ -473,6 +481,32 @@ describe("SidebarView", () => {
     (buttons.find((b) => b.textContent?.includes("允许")) as HTMLButtonElement).click();
     expect(handlers.onPaperTrailConsent).toHaveBeenCalledWith("accept");
   });
+
+  it("renders the question list ordered as given, with status marks and jump", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onAnchorJump: vi.fn(), onAnchorResolve: vi.fn() };
+    const view = new SidebarView(body, handlers as any);
+    view.setState({ ...baseState(), anchors: [
+      { anchorId: "a1", pageNumber: 3, question: "为什么收敛?", status: "open" },
+      { anchorId: "a2", pageNumber: 9, question: "数据集?", status: "resolved" },
+    ] } as any);
+    const items = [...body.querySelectorAll(".zc-question-item")];
+    expect(items).toHaveLength(2);
+    expect(items[0]!.textContent).toContain("p.3");
+    expect(items[0]!.textContent).toContain("●");
+    expect(items[1]!.textContent).toContain("✓");
+    (items[0]!.querySelector(".zc-question-jump") as HTMLButtonElement).click();
+    expect(handlers.onAnchorJump).toHaveBeenCalledWith("a1");
+  });
+
+  it("hides the question list when there are no anchors", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const view = new SidebarView(body, callbacks() as any);
+    view.setState({ ...baseState(), anchors: [] } as any);
+    expect(body.querySelector(".zc-question-list")).toBeNull();
+  });
 });
 
 describe("SidebarView activity line", () => {
@@ -726,9 +760,9 @@ describe("SidebarView activity line", () => {
 describe("Reader pane layout CSS", () => {
   it("uses a bounded compact grid without a transcript minimum that can push the composer below the pane", () => {
     const styles = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
-    expect(styles).toContain("grid-template-rows: auto auto auto minmax(0, 1fr) auto");
+    expect(styles).toContain("grid-template-rows: auto auto auto auto minmax(0, 1fr) auto");
     expect(styles).toContain("height: clamp(420px, 72vh, 780px)");
-    expect(styles).toContain(".zc-composer-wrap { position: sticky; bottom: 0;");
+    expect(styles).toContain(".zc-composer-wrap { grid-row: 6; position: sticky; bottom: 0;");
     expect(styles).toContain(".zc-context-menu { position: absolute;");
     // The optional formula rail is hidden by default. Pin the terminal surface
     // to the final flexible row so CSS Grid does not leave xterm at 0px tall.

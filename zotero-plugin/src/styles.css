@@ -49,7 +49,11 @@
 .zc-sidebar {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  /* .zc-question-list is only in the DOM when there are anchors (see
+     renderQuestionList()), so transcript/composer are pinned to explicit
+     row lines below instead of relying on auto-placement source-order --
+     otherwise they'd shift up a row whenever the question list disappears. */
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   width: 100%;
   height: clamp(420px, 72vh, 780px);
   min-height: 0;
@@ -213,7 +217,52 @@
   line-height: 15px;
 }
 
+.zc-question-list {
+  grid-row: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 9px 2px;
+  padding: 5px;
+  max-height: min(220px, 30vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  border: 1px solid var(--zc-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--zc-bg-subtle) 88%, transparent);
+}
+.zc-question-item { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 6px; border-radius: 6px; }
+.zc-question-item:hover { background: var(--zc-bg-hover); }
+.zc-question-status { flex: none; width: 12px; text-align: center; color: var(--zc-muted); font-size: 9px; }
+.zc-question-item.is-open .zc-question-status { color: var(--zc-accent); }
+.zc-question-page { flex: none; color: var(--zc-muted); font-size: 9.5px; font-variant-numeric: tabular-nums; }
+.zc-question-text { overflow: hidden; min-width: 0; flex: 1 1 auto; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+.zc-question-item.is-resolved { opacity: .55; }
+.zc-question-item.is-resolved .zc-question-text {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--zc-muted) 60%, transparent);
+}
+.zc-question-actions { display: flex; flex: none; gap: 4px; }
+.zc-question-jump,
+.zc-question-resolve {
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--zc-border);
+  border-radius: 6px;
+  color: var(--zc-text);
+  background: var(--zc-bg-raised);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.zc-question-jump:hover,
+.zc-question-resolve:hover {
+  border-color: color-mix(in srgb, var(--zc-accent) 30%, var(--zc-border));
+  background: var(--zc-accent-soft);
+}
+
 .zc-transcript {
+  grid-row: 5;
   min-width: 0;
   min-height: 0;
   padding: 12px 11px 30px;
@@ -450,7 +499,7 @@
 .zc-checkpoint-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9.5px; }
 .zc-checkpoint-list small { color: var(--zc-muted); font-size: 8px; }
 
-.zc-composer-wrap { position: sticky; bottom: 0; z-index: 6; min-width: 0; padding: 8px 9px 9px; background: linear-gradient(to bottom, transparent, var(--zc-bg) 15%); }
+.zc-composer-wrap { grid-row: 6; position: sticky; bottom: 0; z-index: 6; min-width: 0; padding: 8px 9px 9px; background: linear-gradient(to bottom, transparent, var(--zc-bg) 15%); }
 .zc-composer { position: relative; border: 1px solid var(--zc-border); border-radius: 14px; background: var(--zc-bg-raised); box-shadow: var(--zc-shadow); transition: border-color .15s, box-shadow .15s; }
 .zc-composer:focus-within { border-color: color-mix(in srgb, var(--zc-accent) 52%, var(--zc-border)); box-shadow: 0 0 0 3px var(--zc-accent-soft), var(--zc-shadow); }
 .zc-composer-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 31px; max-height: 66px; padding: 6px 8px 1px; overflow: auto; scrollbar-width: thin; }

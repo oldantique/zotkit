@@ -35,6 +35,7 @@ import {
 import {
   PaperTrailService,
   createZoteroAnchorHost,
+  ANCHOR_TAG,
   type AnchorRecord,
   type PaperTrailConsent,
 } from "./paper-trail";
@@ -434,6 +435,18 @@ export class ZoteroChatPlugin {
       group.append(ask);
       append(group);
     }, PLUGIN_ID);
+
+    Zotero.Reader.registerEventListener("renderSidebarAnnotationHeader", (event: any) => {
+      const { doc, append, params } = event;
+      const tags = Array.isArray(params?.annotation?.tags) ? params.annotation.tags : [];
+      const isAnchor = tags.some((tag: any) => (typeof tag === "string" ? tag : tag?.name) === ANCHOR_TAG);
+      if (!isAnchor) return;
+      const key = String(params?.annotation?.id ?? "");
+      if (!key) return;
+      append(this.readerPopupButton(doc, "继续对话", () => {
+        void this.resumeAnchorChat(key).catch((error) => this.reportError(error));
+      }));
+    }, PLUGIN_ID);
   }
 
   private registerPageObserver(): void {
@@ -658,6 +671,15 @@ export class ZoteroChatPlugin {
         const context = this.context;
         if (!context) return;
         void this.paperTrail.resolveConsent(context, decision);
+      },
+      onAnchorJump: (anchorId) => {
+        const anchor = this.findAnchor(anchorId);
+        if (anchor) void this.jumpToAnchor(anchor).catch((error) => this.reportError(error));
+      },
+      onAnchorResolve: (anchorId) => {
+        const context = this.context;
+        if (!context) return;
+        void this.paperTrail.resolveAnchor(context, anchorId);
       },
     });
     this.chatViews.set(body, view);
@@ -1070,6 +1092,10 @@ export class ZoteroChatPlugin {
           : null,
         turnDurations: this.turnDurationsForActiveThread(),
         paperTrailConsent: this.paperTrail?.consentRequest() ?? null,
+        anchors: (context ? this.codex.getAnchors(context) : [])
+          .slice()
+          .sort((a, b) => (a.pageNumber ?? Number.MAX_SAFE_INTEGER) - (b.pageNumber ?? Number.MAX_SAFE_INTEGER))
+          .map((a) => ({ anchorId: a.anchorId, pageNumber: a.pageNumber, question: a.question, status: a.status })),
       });
     }
     this.renderFloatPanels();
@@ -1082,6 +1108,42 @@ export class ZoteroChatPlugin {
         (anchor) => anchor.threadId === this.codex.state.activeThreadId && anchor.status === "open",
       ) ?? null
       : null;
+  }
+
+  /** Looks up a paper-trail anchor for the current paper by id -- null when there is no active context or no match. */
+  private findAnchor(anchorId: string): AnchorRecord | null {
+    const context = this.context;
+    if (!context) return null;
+    return this.codex.getAnchors(context).find((anchor) => anchor.anchorId === anchorId) ?? null;
+  }
+
+  /** Opens the Reader at the anchor's annotation (or raw position, when the highlight write never landed). */
+  private async jumpToAnchor(anchor: AnchorRecord): Promise<void> {
+    const attachment = Zotero.Items?.getByLibraryAndKey?.(anchor.libraryID, anchor.attachmentKey);
+    if (!attachment?.id) return;
+    const location = anchor.annotationKey
+      ? { annotationID: anchor.annotationKey }
+      : anchor.position
+        ? { position: anchor.position }
+        : undefined;
+    await Zotero.Reader?.open?.(attachment.id, location, { allowDuplicate: false });
+  }
+
+  /**
+   * "继续对话" from a batch-written annotation: switches to the anchor's
+   * thread (via the same codex.switchThread() path onSelectThread uses) when
+   * it isn't already active, then opens the float panel. When no anchor
+   * matches the annotation, just opens the panel as-is.
+   */
+  private async resumeAnchorChat(annotationKey: string): Promise<void> {
+    const context = this.context;
+    const anchor = context
+      ? this.codex.getAnchors(context).find((entry) => entry.annotationKey === annotationKey)
+      : undefined;
+    if (anchor && anchor.threadId !== this.codex.state.activeThreadId) {
+      await this.codex.switchThread(anchor.threadId);
+    }
+    await this.toggleFloatPanel();
   }
 
   private handleCodexState(): void {
