@@ -461,6 +461,18 @@ describe("SidebarView", () => {
     expect(handlers.onLogin).toHaveBeenCalledOnce();
     expect(body.querySelector('input[type="password"]')).toBeNull();
   });
+
+  it("renders the paper-trail consent card and forwards decisions", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onPaperTrailConsent: vi.fn() };
+    const view = new SidebarView(body, handlers as any);
+    view.setState({ phase: "ready", paperTrailConsent: { question: "为什么?", pageNumber: 7 } });
+    expect(body.textContent).toContain("自动创建高亮批注");
+    const buttons = [...body.querySelectorAll(".zc-consent-card button")];
+    (buttons.find((b) => b.textContent?.includes("允许")) as HTMLButtonElement).click();
+    expect(handlers.onPaperTrailConsent).toHaveBeenCalledWith("accept");
+  });
 });
 
 describe("SidebarView activity line", () => {

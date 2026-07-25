@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   MAX_SELECTION_PROMPT_CHARACTERS,
@@ -906,6 +908,33 @@ describe("clampFloatOpacity", () => {
     // `Number("")` is 0, not NaN, so this clamps like any other 0 -- it must
     // not be confused with the NaN fallback case.
     expect(clampFloatOpacity("")).toBe(60);
+  });
+});
+
+describe("paper-trail wiring", () => {
+  it("begins a pending anchor on sendChat only when the selection chip is attached", async () => {
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.context = { selection: { text: "s", position: { pageIndex: 1, rects: [[0, 0, 1, 1]] }, pageNumber: 2 }, attachment: { key: "A", libraryID: 1 } };
+    plugin.codex = {
+      state: { connected: true, activeThreadId: "th1" },
+      isSignedIn: () => true,
+      send: vi.fn(async () => {}),
+      getChatEntries: () => [],
+    };
+    plugin.paperTrail = { beginPendingAnchor: vi.fn() };
+    plugin.addedContextIDs = new Set(["current-selection"]);
+    await plugin.sendChat("为什么?");
+    expect(plugin.paperTrail.beginPendingAnchor).toHaveBeenCalledWith(plugin.context, "为什么?", "th1");
+    plugin.addedContextIDs = new Set();
+    await plugin.sendChat("再问");
+    expect(plugin.paperTrail.beginPendingAnchor).toHaveBeenCalledTimes(1);
+  });
+
+  it("model tool registry stays write-free (static guarantee)", async () => {
+    const { ZOTERO_MUTATION_TOOL } = await import("../src/zotero-mutations");
+    expect(ZOTERO_MUTATION_TOOL).toBe("zotero_propose_changes");
+    const source = readFileSync(join(__dirname, "../src/paper-trail.ts"), "utf8");
+    expect(source).not.toMatch(/tools\s*[:=]/);   // paper-trail 永不注册模型工具
   });
 });
 

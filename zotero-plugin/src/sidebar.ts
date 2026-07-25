@@ -131,6 +131,7 @@ export interface SidebarState {
   checkpoints: CheckpointOption[];
   turnStartedAt: number | null;
   turnDurations: Record<string, number>;
+  paperTrailConsent: { question: string; pageNumber?: number } | null;
 }
 
 export interface SidebarCallbacks {
@@ -151,6 +152,7 @@ export interface SidebarCallbacks {
   onReviewDecision?(reviewId: string, decision: "accept" | "reject"): void;
   onApprovalDecision?(approvalId: string, decision: "approve-once" | "reject"): void;
   onRestoreCheckpoint?(checkpointId: string): void;
+  onPaperTrailConsent?(decision: "accept" | "decline"): void;
 }
 
 export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close" | "copy";
@@ -218,6 +220,7 @@ export class SidebarView {
       checkpoints: [],
       turnStartedAt: null,
       turnDurations: {},
+      paperTrailConsent: null,
     };
     this.build();
     this.render();
@@ -882,6 +885,14 @@ export class SidebarView {
       desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderApprovalCard(approval)));
     }
 
+    if (this.state.paperTrailConsent) {
+      const consent = this.state.paperTrailConsent;
+      const id = "consent:paper-trail";
+      const fingerprint = JSON.stringify(consent);
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderConsentCard(consent)));
+    }
+
     if (this.state.checkpoints.length) {
       const id = "research-checkpoints";
       const fingerprint = JSON.stringify(this.state.checkpoints);
@@ -1161,6 +1172,42 @@ export class SidebarView {
       this.callbacks.onApprovalDecision?.(approval.id, "approve-once");
     });
     actions.append(reject, approve);
+    article.appendChild(actions);
+    return article;
+  }
+
+  private renderConsentCard(consent: { question: string; pageNumber?: number }): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = "zc-entry zc-consent-card";
+    article.dataset.entryId = "consent:paper-trail";
+    const heading = this.doc.createElement("div");
+    heading.className = "zc-approval-heading";
+    const badge = this.doc.createElement("span");
+    badge.textContent = "阅读留痕";
+    const title = this.doc.createElement("strong");
+    title.textContent = "自动创建高亮批注";
+    heading.append(badge, title);
+    article.appendChild(heading);
+    const description = this.doc.createElement("p");
+    const pageLabel = consent.pageNumber !== undefined ? `第 ${consent.pageNumber} 页` : "当前位置";
+    description.textContent = `zotkit 将在你提问的位置自动创建高亮批注（问题 + 答案要点），可随时在设置中关闭。${pageLabel}：“${consent.question}”`;
+    article.appendChild(description);
+    const actions = this.doc.createElement("div");
+    actions.className = "zc-approval-actions";
+    const decline = this.doc.createElement("button");
+    decline.type = "button";
+    decline.textContent = "不写批注";
+    decline.addEventListener("click", () => {
+      this.callbacks.onPaperTrailConsent?.("decline");
+    });
+    const accept = this.doc.createElement("button");
+    accept.type = "button";
+    accept.className = "is-primary";
+    accept.textContent = "允许";
+    accept.addEventListener("click", () => {
+      this.callbacks.onPaperTrailConsent?.("accept");
+    });
+    actions.append(decline, accept);
     article.appendChild(actions);
     return article;
   }

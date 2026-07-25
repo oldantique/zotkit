@@ -371,7 +371,8 @@
 .zc-plan-card,
 .zc-review-card,
 .zc-approval-card,
-.zc-checkpoint-card { overflow: hidden; border: 1px solid var(--zc-border); border-radius: 10px; background: var(--zc-bg-subtle); }
+.zc-checkpoint-card,
+.zc-consent-card { overflow: hidden; border: 1px solid var(--zc-border); border-radius: 10px; background: var(--zc-bg-subtle); }
 .zc-plan-card details > summary,
 .zc-review-card details > summary {
   display: flex;
@@ -434,6 +435,10 @@
 .zc-approval-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .zc-approval-card > p { margin: 7px 0 0; color: var(--zc-muted); font-size: 10.5px; }
 .zc-approval-card > code { display: block; margin-top: 7px; padding: 7px; overflow: auto; border-radius: 6px; background: var(--zc-code-bg); color: #e9e7ed; font: 9.5px/1.45 "SFMono-Regular", Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.zc-consent-card { padding: 10px; border-color: color-mix(in srgb, var(--zc-accent) 30%, var(--zc-border)); background: color-mix(in srgb, var(--zc-accent) 6%, var(--zc-bg-raised)); }
+.zc-consent-card > p { margin: 7px 0 0; color: var(--zc-muted); font-size: 10.5px; }
+.zc-consent-card .zc-approval-heading > span { color: var(--zc-accent); background: color-mix(in srgb, var(--zc-accent) 11%, transparent); }
 
 .zc-checkpoint-card { padding: 8px; background: color-mix(in srgb, var(--zc-accent) 4%, var(--zc-bg-subtle)); }
 .zc-checkpoint-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px 6px; }
@@ -690,6 +695,26 @@
 .zc-float-chip-remove { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px; color: inherit; background: transparent; cursor: pointer; opacity: .7; }
 .zc-float-chip-remove:hover { background: color-mix(in srgb, currentColor 12%, transparent); opacity: 1; }
 .zc-float-chip-remove .zc-button-icon { width: 10px; height: 10px; }
+
+.zc-float-anchor-chip { border-color: var(--zc-accent); background: var(--zc-accent-soft); }
+.zc-float-chip-undo { flex: none; padding: 3px 8px; border: 0; border-radius: 999px; color: inherit; background: color-mix(in srgb, currentColor 14%, transparent); font: inherit; font-size: 9.5px; font-weight: 650; cursor: pointer; opacity: .85; }
+.zc-float-chip-undo:hover { opacity: 1; }
+
+.zc-float-understood {
+  flex: none;
+  margin: 0 10px 6px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--zc-accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.zc-float-understood:hover { background: var(--zc-accent-strong); }
+.zc-float-understood[hidden] { display: none; }
 
 .zc-float-composer {
   display: grid;

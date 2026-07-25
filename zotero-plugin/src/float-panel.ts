@@ -32,6 +32,8 @@ export interface FloatPanelState {
   turnStartedAt: number | null;
   turnDurations: Record<string, number>;
   opacity: number;
+  anchorConfirmation: { anchorId: string; pageNumber?: number } | null;
+  canResolveAnchor: boolean;
 }
 
 export interface FloatPanelCallbacks {
@@ -43,6 +45,8 @@ export interface FloatPanelCallbacks {
   onModelChange(model: string): void;
   onOpacityChange(value: number): void;
   onPanelResize(width: number, height: number): void;
+  onUndoAnchor(anchorId: string): void;
+  onMarkUnderstood(): void;
 }
 
 /** Joins an inline width/height style pair into a single comparable key. */
@@ -66,6 +70,9 @@ export class FloatPanelView {
   private alphaSlider!: HTMLInputElement;
   private chip!: HTMLElement;
   private chipLabel!: HTMLElement;
+  private anchorChip!: HTMLElement;
+  private anchorChipLabel!: HTMLElement;
+  private understoodButton!: HTMLButtonElement;
   private textarea!: HTMLTextAreaElement;
   private sendButton!: HTMLButtonElement;
   private stopButton!: HTMLButtonElement;
@@ -83,6 +90,8 @@ export class FloatPanelView {
     turnStartedAt: null,
     turnDurations: {},
     opacity: 100,
+    anchorConfirmation: null,
+    canResolveAnchor: false,
   };
   private position: { left: number; top: number } | null = null;
   private readonly expandedTurns = new Set<string>();
@@ -290,6 +299,34 @@ export class FloatPanelView {
     remove.addEventListener("click", () => this.callbacks.onRemoveSelection());
     this.chip.append(glyph, this.chipLabel, remove);
 
+    this.anchorChip = this.doc.createElement("div");
+    this.anchorChip.className = "zc-float-chip zc-float-anchor-chip";
+    this.anchorChip.hidden = true;
+    const anchorGlyph = this.doc.createElement("span");
+    anchorGlyph.className = "zc-float-chip-glyph";
+    anchorGlyph.textContent = "✓";
+    anchorGlyph.setAttribute("aria-hidden", "true");
+    this.anchorChipLabel = this.doc.createElement("span");
+    this.anchorChipLabel.className = "zc-float-chip-label";
+    const undo = this.doc.createElement("button");
+    undo.type = "button";
+    undo.className = "zc-float-chip-undo";
+    undo.textContent = "撤销";
+    undo.title = "撤销高亮批注";
+    undo.setAttribute("aria-label", undo.title);
+    undo.addEventListener("click", () => {
+      const anchorId = this.state.anchorConfirmation?.anchorId;
+      if (anchorId) this.callbacks.onUndoAnchor(anchorId);
+    });
+    this.anchorChip.append(anchorGlyph, this.anchorChipLabel, undo);
+
+    this.understoodButton = this.doc.createElement("button");
+    this.understoodButton.type = "button";
+    this.understoodButton.className = "zc-float-understood";
+    this.understoodButton.textContent = "已理解 ✓";
+    this.understoodButton.hidden = true;
+    this.understoodButton.addEventListener("click", () => this.callbacks.onMarkUnderstood());
+
     const composer = this.doc.createElement("div");
     composer.className = "zc-float-composer";
     this.textarea = this.doc.createElement("textarea");
@@ -364,12 +401,14 @@ export class FloatPanelView {
       }
     });
 
-    this.root.append(this.bar, this.chip, composer, this.note, this.transcript);
+    this.root.append(this.bar, this.chip, this.anchorChip, this.understoodButton, composer, this.note, this.transcript);
   }
 
   private render(): void {
     this.title.textContent = this.state.paperTitle || "论文助手";
     this.renderChip();
+    this.renderAnchorChip();
+    this.renderUnderstoodButton();
     this.textarea.disabled = this.state.phase !== "ready";
     this.stopButton.hidden = !this.state.running;
     this.stopButton.style.display = this.state.running ? "grid" : "none";
@@ -441,6 +480,19 @@ export class FloatPanelView {
     this.chipLabel.textContent = selection.pageNumber
       ? `已选 ${selection.text.length} 字 · 第 ${selection.pageNumber} 页`
       : `已选 ${selection.text.length} 字`;
+  }
+
+  private renderAnchorChip(): void {
+    const confirmation = this.state.anchorConfirmation;
+    this.anchorChip.hidden = !confirmation;
+    if (!confirmation) return;
+    this.anchorChipLabel.textContent = confirmation.pageNumber
+      ? `已留痕 · 第 ${confirmation.pageNumber} 页`
+      : "已留痕";
+  }
+
+  private renderUnderstoodButton(): void {
+    this.understoodButton.hidden = !this.state.canResolveAnchor;
   }
 
   private renderNote(): void {

@@ -23,6 +23,8 @@ function callbacks(): FloatPanelCallbacks {
     onModelChange: vi.fn(),
     onOpacityChange: vi.fn(),
     onPanelResize: vi.fn(),
+    onUndoAnchor: vi.fn(),
+    onMarkUnderstood: vi.fn(),
   };
 }
 
@@ -275,6 +277,17 @@ describe("FloatPanelView selection chip and transcript", () => {
     expect(host.querySelector<HTMLElement>(".zc-float-stop")!.hidden).toBe(false);
     view.setState({ running: false });
     expect(host.querySelector<HTMLElement>(".zc-float-stop")!.hidden).toBe(true);
+  });
+
+  it("shows the anchor confirmation chip with undo, and the understood button", () => {
+    const handlers = { ...callbacks(), onUndoAnchor: vi.fn(), onMarkUnderstood: vi.fn() };
+    const { host, view } = mount(handlers);
+    view.setState({ anchorConfirmation: { anchorId: "a1", pageNumber: 7 }, canResolveAnchor: true });
+    expect(host.textContent).toContain("已留痕 · 第 7 页");
+    (host.querySelector(".zc-float-anchor-chip button") as HTMLButtonElement).click();
+    expect(handlers.onUndoAnchor).toHaveBeenCalledWith("a1");
+    (host.querySelector(".zc-float-understood") as HTMLButtonElement).click();
+    expect(handlers.onMarkUnderstood).toHaveBeenCalled();
   });
 });
 

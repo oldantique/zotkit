@@ -33,6 +33,12 @@ import {
   type MutationResolution,
 } from "./zotero-mutations";
 import {
+  PaperTrailService,
+  createZoteroAnchorHost,
+  type AnchorRecord,
+  type PaperTrailConsent,
+} from "./paper-trail";
+import {
   debug,
   logError,
   PANE_ID,
@@ -65,6 +71,7 @@ export class ZoteroChatPlugin {
   private terminal!: TerminalPanel;
   private codex!: CodexService;
   private mutations!: ZoteroMutationService;
+  private paperTrail!: PaperTrailService;
   private views = new Set<HTMLElement>();
   private chatViews = new Map<HTMLElement, SidebarView>();
   private floatPanels = new Map<
@@ -151,6 +158,27 @@ export class ZoteroChatPlugin {
       {
         tools: this.mutations.tools,
         invokeTool: (name, argumentsValue) => this.mutations.invokeTool(name, argumentsValue),
+      },
+    );
+    this.paperTrail = new PaperTrailService(
+      createZoteroAnchorHost(Zotero),
+      {
+        onState: () => this.scheduleChatRender(),
+        summarize: async (question, answer) => {
+          try {
+            return await this.codex.runUtilityTurn(
+              `用 2–3 句中文总结下面这轮问答的要点,只输出要点本身。\n\n问题:${question}\n\n回答:\n${answer.slice(0, 8000)}`,
+              { timeoutMs: 10_000 },
+            );
+          }
+          catch { return null; }
+        },
+        getAnchors: (context) => this.codex.getAnchors(context),
+        recordAnchor: (context, anchor) => this.codex.recordAnchor(context, anchor),
+        updateAnchor: (context, id, patch) => this.codex.updateAnchor(context, id, patch),
+        removeAnchor: (context, id) => this.codex.removeAnchor(context, id),
+        consent: () => (prefString("paperTrail", "unset") as PaperTrailConsent),
+        setConsent: (value) => setPrefString("paperTrail", value),
       },
     );
 
@@ -626,6 +654,9 @@ export class ZoteroChatPlugin {
       onRestoreCheckpoint: (checkpointID) => {
         void this.restoreCheckpoint(checkpointID).catch((error) => this.reportError(error));
       },
+      onPaperTrailConsent: (decision) => {
+        void this.paperTrail.resolveConsent(this.context!, decision);
+      },
     });
     this.chatViews.set(body, view);
     this.renderChatViews();
@@ -697,7 +728,12 @@ export class ZoteroChatPlugin {
     if (!this.codex.state.connected) await this.ensureChatSession();
     if (!this.codex.isSignedIn()) throw new Error("请先使用 ChatGPT 登录 Codex");
     this.chatPhase = "ready";
+    const context = this.context;
     await this.codex.send(text, this.selectedModel, this.selectedEffort);
+    const threadId = this.codex.state.activeThreadId;
+    if (threadId && context?.selection?.text && this.addedContextIDs.has("current-selection")) {
+      this.paperTrail.beginPendingAnchor(context, text, threadId);
+    }
   }
 
   private async newChat(): Promise<void> {
@@ -740,6 +776,14 @@ export class ZoteroChatPlugin {
       onPanelResize: (width, height) => {
         const clamped = clampFloatSize(width, height);
         setPrefString("floatSize", `${clamped.width}x${clamped.height}`);
+      },
+      onUndoAnchor: (anchorId) => {
+        void this.paperTrail.undoAnchor(this.context!, anchorId);
+      },
+      onMarkUnderstood: () => {
+        const anchor = this.latestOpenAnchor();
+        if (anchor) void this.paperTrail.resolveAnchor(this.context!, anchor.anchorId);
+        this.hideFloatPanel(win);
       },
     });
     const storedSize = /^(\d+)x(\d+)$/.exec(prefString("floatSize", ""));
@@ -830,6 +874,8 @@ export class ZoteroChatPlugin {
           : null,
         turnDurations: this.turnDurationsForActiveThread(),
         opacity: this.floatOpacity,
+        anchorConfirmation: this.paperTrail?.lastConfirmation() ?? null,
+        canResolveAnchor: Boolean(this.paperTrail && this.latestOpenAnchor()),
       });
     }
   }
@@ -917,6 +963,14 @@ export class ZoteroChatPlugin {
             model: this.selectedModel,
           });
           this.turnMeta.set(threadId, perThread);
+          if (this.paperTrail && this.context && threadId === this.codex?.state.activeThreadId) {
+            void this.paperTrail.completeTurn(
+              this.context,
+              threadId,
+              this.codex?.getChatEntries() ?? [],
+              Math.max(0, this.codex.activeThreadTurnCount() - 1),
+            ).catch((error) => Zotero?.debug?.(`[Zotkit] paper-trail completeTurn failed: ${String(error)}`));
+          }
         }
       }
       // `running` is service-wide: once nothing is running, every remaining start
@@ -1010,9 +1064,19 @@ export class ZoteroChatPlugin {
           ? this.turnStartedAt.get(this.codex.state.activeThreadId ?? "") ?? null
           : null,
         turnDurations: this.turnDurationsForActiveThread(),
+        paperTrailConsent: this.paperTrail?.consentRequest() ?? null,
       });
     }
     this.renderFloatPanels();
+  }
+
+  /** The active thread's most recently opened (unresolved) paper-trail anchor, if any. */
+  private latestOpenAnchor(): AnchorRecord | null {
+    return this.context
+      ? [...this.codex.getAnchors(this.context)].reverse().find(
+        (anchor) => anchor.threadId === this.codex.state.activeThreadId && anchor.status === "open",
+      ) ?? null
+      : null;
   }
 
   private handleCodexState(): void {
