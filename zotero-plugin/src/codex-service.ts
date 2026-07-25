@@ -22,6 +22,7 @@ import { NativeSessionSocket } from "./native-session-socket";
 import type { ReaderContext, ReaderContextService, ReaderToolName } from "./reader-context";
 import { findExecutable, launchURL, makeLocalFile, profilePath, randomID } from "./platform";
 import type { ChatEntry, ModelOption, ResearchMode, ThreadOption } from "./sidebar";
+import type { AnchorRecord } from "./paper-trail";
 
 export type CodexApprovalDecision = "approve-once" | "approve-session" | "reject" | "cancel";
 
@@ -125,6 +126,7 @@ interface SessionFile {
   papers: Record<string, SessionRecord>;
   history?: Record<string, SessionRecord[]>;
   checkpoints?: Record<string, CodexCheckpoint[]>;
+  anchors?: Record<string, AnchorRecord[]>;
 }
 
 const SHARED_DEVELOPER_INSTRUCTIONS = `You are the research assistant embedded in Zotero's PDF Reader.
@@ -675,6 +677,39 @@ export class CodexService {
   getCheckpoints(): readonly CodexCheckpoint[] {
     if (!this.activePaperKey) return [];
     return this.sessions.checkpoints?.[this.activePaperKey] || [];
+  }
+
+  getAnchors(context: ReaderContext): AnchorRecord[] {
+    return this.sessions.anchors?.[paperIdentity(context)] ?? [];
+  }
+
+  async recordAnchor(context: ReaderContext, anchor: AnchorRecord): Promise<void> {
+    this.sessions.anchors ||= {};
+    const key = paperIdentity(context);
+    this.sessions.anchors[key] = [...(this.sessions.anchors[key] ?? []), anchor];
+    await this.saveSessions();
+  }
+
+  async updateAnchor(context: ReaderContext, anchorId: string, patch: Partial<AnchorRecord>): Promise<void> {
+    const key = paperIdentity(context);
+    const list = this.sessions.anchors?.[key];
+    if (!list) return;
+    this.sessions.anchors![key] = list.map((entry) => (entry.anchorId === anchorId ? { ...entry, ...patch } : entry));
+    await this.saveSessions();
+  }
+
+  async removeAnchor(context: ReaderContext, anchorId: string): Promise<void> {
+    const key = paperIdentity(context);
+    const list = this.sessions.anchors?.[key];
+    if (!list) return;
+    this.sessions.anchors![key] = list.filter((entry) => entry.anchorId !== anchorId);
+    await this.saveSessions();
+  }
+
+  activeThreadTurnCount(): number {
+    const threadId = this.state.activeThreadId;
+    if (!threadId) return 0;
+    return this.store.getThread(threadId)?.turns.length ?? 0;
   }
 
   /**

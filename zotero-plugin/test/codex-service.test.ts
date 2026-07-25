@@ -592,3 +592,34 @@ describe("CodexService Cursor-style modes and approvals", () => {
     );
   });
 });
+
+describe("CodexService anchors", () => {
+  function anchor(id: string): any {
+    return {
+      anchorId: id, libraryID: 1, itemKey: "PARENT", attachmentKey: "ATTACH",
+      pdfSha256: null, selectedText: "s", question: "q", threadId: "thread-a",
+      turnRange: [0, 0], status: "open", createdAt: "2026-07-25T00:00:00.000Z",
+    };
+  }
+
+  it("records, updates, and removes anchors per paper", async () => {
+    const { service } = serviceWithClient({});
+    (service as any).saveSessions = vi.fn(async () => {});
+    const context = paperContext();
+    await service.recordAnchor(context, anchor("a1"));
+    await service.recordAnchor(context, anchor("a2"));
+    expect(service.getAnchors(context).map((a) => a.anchorId)).toEqual(["a1", "a2"]);
+    await service.updateAnchor(context, "a1", { status: "resolved", annotationKey: "ANN1" });
+    expect(service.getAnchors(context)[0]).toMatchObject({ status: "resolved", annotationKey: "ANN1" });
+    await service.removeAnchor(context, "a2");
+    expect(service.getAnchors(context).map((a) => a.anchorId)).toEqual(["a1"]);
+    expect((service as any).saveSessions).toHaveBeenCalledTimes(4);
+  });
+
+  it("returns [] for a paper with no anchors and counts active thread turns", () => {
+    const { service } = serviceWithClient({});
+    expect(service.getAnchors(paperContext())).toEqual([]);
+    (service as any).store = { getThread: () => ({ turns: [{}, {}, {}] }) };
+    expect(service.activeThreadTurnCount()).toBe(3);
+  });
+});
