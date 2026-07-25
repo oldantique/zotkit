@@ -48,7 +48,11 @@ serves from.
 Never needs the Zotero app or any window open; talks straight to the Web API. Property
 of the Python package only — the Reader plugin is by definition not headless.
 
-**read-only guarantee**:
-The Reader plugin's core promise: it never mutates items, collections, tags,
-annotations, attachment links, original PDFs, or files beside them; generated files
-stay under the add-on's private profile directory.
+**deterministic-write guarantee**:
+The Reader plugin's core promise, superseding the original read-only guarantee:
+the model is never given a Zotero write tool; every Zotero mutation (highlight
+anchors, note attachments, approved metadata changes) is executed by
+deterministic plugin code in response to an explicit user gesture, and is
+individually undoable. Generated files still stay under the add-on's private
+profile directory until the user applies them.
+_Avoid_: calling the plugin "read-only" without qualification.
