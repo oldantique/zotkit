@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from "vitest";
-import { buildFrontMatter, buildNotingPrompt, countMathErrors, notingFileName } from "../src/noting";
+import { describe, expect, it, vi } from "vitest";
+import { buildFrontMatter, buildNotingPrompt, countMathErrors, notingFileName, NotingService, type NotingHost } from "../src/noting";
 
 const snapshot = {
   paperTitle: "Attention Is All You Need",
@@ -100,5 +100,83 @@ describe("notingFileName", () => {
   });
   it("falls back for empty titles", () => {
     expect(notingFileName("  ", new Date("2026-07-25T00:00:00Z"))).toBe("paper-reading-notes-20260725.md");
+  });
+});
+
+function notingHost(): NotingHost & { imported: any[]; erased: string[]; staged: string[] } {
+  const imported: any[] = []; const erased: string[] = []; const staged: string[] = [];
+  return {
+    imported, erased, staged,
+    stageNote: vi.fn(async (name: string) => { staged.push(name); return `/staging/${name}`; }),
+    importAttachment: vi.fn(async (t: any) => { imported.push(t); return "NEWKEY"; }),
+    eraseAttachment: vi.fn(async (_l: any, key: string) => { erased.push(key); }),
+    listNoteAttachments: vi.fn(async () => [{ key: "OLD", title: "old-notes" }]),
+  };
+}
+
+describe("NotingService", () => {
+  const deps = (host: NotingHost, generate = vi.fn(async () => "# Citation\n\n$x$")) => ({
+    host,
+    generate,                                        // (prompt) => Promise<markdown>
+    buildSnapshot: vi.fn(async () => snapshot),      // Task 9 的 snapshot 常量
+    countMath: (md: string) => (md.includes("bad") ? 2 : 0),
+    onState: vi.fn(),
+  });
+
+  it("goes generating→preview and carries stats", async () => {
+    const service = new NotingService(deps(notingHost()) as any);
+    await service.run();
+    expect(service.view()).toMatchObject({ phase: "preview", mathErrors: 0, anchorCount: 1, openCount: 1 });
+    expect(service.view()!.markdown).toContain("# Citation");
+  });
+
+  it("parks at confirm-mismatch when the pdf hash changed, continues on decision", async () => {
+    const host = notingHost();
+    const d = deps(host);
+    (d.buildSnapshot as any).mockResolvedValue({ ...snapshot, hashMismatch: true });
+    const service = new NotingService(d as any);
+    await service.run();
+    expect(service.view()!.phase).toBe("confirm-mismatch");
+    await service.decide("continue");
+    expect(service.view()!.phase).toBe("preview");
+  });
+
+  it("apply new imports the staged file and finishes", async () => {
+    const host = notingHost();
+    const service = new NotingService(deps(host) as any);
+    await service.run();
+    await service.apply({ kind: "new" });
+    expect(host.staged[0]).toMatch(/-reading-notes-\d{8}\.md$/);
+    expect(host.imported[0]).toMatchObject({ parentItemKey: "PARENT" });
+    expect(host.erased).toEqual([]);
+    expect(service.view()!.phase).toBe("done");
+  });
+
+  it("apply replace imports first, erases old only on success", async () => {
+    const host = notingHost();
+    const service = new NotingService(deps(host) as any);
+    await service.run();
+    await service.apply({ kind: "replace", key: "OLD" });
+    expect(host.imported).toHaveLength(1);
+    expect(host.erased).toEqual(["OLD"]);
+  });
+
+  it("failed import leaves no erase and reports failed", async () => {
+    const host = notingHost();
+    (host.importAttachment as any).mockRejectedValue(new Error("disk full"));
+    const service = new NotingService(deps(host) as any);
+    await service.run();
+    await service.apply({ kind: "replace", key: "OLD" }).catch(() => {});
+    expect(host.erased).toEqual([]);
+    expect(service.view()!.phase).toBe("failed");
+    expect(service.view()!.error).toContain("disk full");
+  });
+
+  it("generation failure surfaces as failed, never touches the host", async () => {
+    const host = notingHost();
+    const service = new NotingService(deps(host, vi.fn(async () => { throw new Error("超时"); })) as any);
+    await service.run();
+    expect(service.view()!.phase).toBe("failed");
+    expect(host.stageNote).not.toHaveBeenCalled();
   });
 });

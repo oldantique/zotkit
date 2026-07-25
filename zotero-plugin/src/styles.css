@@ -421,7 +421,8 @@
 .zc-review-card,
 .zc-approval-card,
 .zc-checkpoint-card,
-.zc-consent-card { overflow: hidden; border: 1px solid var(--zc-border); border-radius: 10px; background: var(--zc-bg-subtle); }
+.zc-consent-card,
+.zc-noting-card { overflow: hidden; border: 1px solid var(--zc-border); border-radius: 10px; background: var(--zc-bg-subtle); }
 .zc-plan-card details > summary,
 .zc-review-card details > summary {
   display: flex;
@@ -498,6 +499,28 @@
 .zc-checkpoint-list > div > span { display: grid; min-width: 0; }
 .zc-checkpoint-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9.5px; }
 .zc-checkpoint-list small { color: var(--zc-muted); font-size: 8px; }
+
+.zc-noting-card { padding: 10px; background: color-mix(in srgb, var(--zc-accent) 4%, var(--zc-bg-raised)); }
+.zc-noting-card.is-confirm-mismatch { border-color: color-mix(in srgb, var(--zc-warning) 38%, var(--zc-border)); background: color-mix(in srgb, var(--zc-warning) 7%, var(--zc-bg-raised)); }
+.zc-noting-card.is-failed { border-color: color-mix(in srgb, var(--zc-danger) 40%, var(--zc-border)); background: color-mix(in srgb, var(--zc-danger) 6%, var(--zc-bg-raised)); }
+.zc-noting-card.is-done { border-color: color-mix(in srgb, var(--zc-success) 34%, var(--zc-border)); }
+.zc-noting-card .zc-approval-heading > span { color: var(--zc-accent); background: color-mix(in srgb, var(--zc-accent) 11%, transparent); }
+.zc-noting-card > p { margin: 7px 0 0; color: var(--zc-muted); font-size: 10.5px; }
+.zc-noting-error { color: var(--zc-danger); }
+.zc-noting-stats { color: var(--zc-text); font-weight: 550; }
+.zc-noting-spinner { display: flex; align-items: center; gap: 7px; }
+.zc-noting-spinner::before { content: ""; width: 12px; height: 12px; flex: none; border: 2px solid color-mix(in srgb, var(--zc-accent) 30%, transparent); border-top-color: var(--zc-accent); border-radius: 50%; animation: zc-spin .8s linear infinite; }
+.zc-noting-preview { max-height: 50vh; margin-top: 8px; padding: 9px 10px; overflow: auto; border: 1px solid var(--zc-border); border-radius: 8px; background: var(--zc-bg-raised); }
+.zc-noting-preview :first-child { margin-top: 0; }
+.zc-noting-preview :last-child { margin-bottom: 0; }
+.zc-noting-versions { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; }
+.zc-noting-version-option { display: flex; align-items: center; gap: 6px; padding: 4px 5px; border-radius: 6px; color: var(--zc-text); font-size: 10.5px; cursor: pointer; }
+.zc-noting-version-option:hover { background: color-mix(in srgb, var(--zc-accent) 6%, transparent); }
+.zc-noting-version-option input { accent-color: var(--zc-accent); }
+.zc-noting-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 9px; }
+.zc-noting-actions button { min-height: 27px; padding: 0 9px; border: 1px solid var(--zc-border); border-radius: 7px; color: var(--zc-text); background: var(--zc-bg-raised); font: inherit; font-size: 9.5px; cursor: pointer; }
+.zc-noting-actions button.is-primary,
+.zc-noting-actions button.zc-noting-apply { border-color: transparent; color: #fff; background: var(--zc-accent); }
 
 .zc-composer-wrap { grid-row: 6; position: sticky; bottom: 0; z-index: 6; min-width: 0; padding: 8px 9px 9px; background: linear-gradient(to bottom, transparent, var(--zc-bg) 15%); }
 .zc-composer { position: relative; border: 1px solid var(--zc-border); border-radius: 14px; background: var(--zc-bg-raised); box-shadow: var(--zc-shadow); transition: border-color .15s, box-shadow .15s; }

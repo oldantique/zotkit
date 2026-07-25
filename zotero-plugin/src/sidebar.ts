@@ -8,6 +8,7 @@ import {
   processEntries,
   type Exchange,
 } from "./exchanges";
+import type { NotingPhase, NotingView } from "./noting";
 
 export type SidebarPhase = "connecting" | "signed-out" | "ready" | "unavailable" | "error";
 
@@ -140,6 +141,7 @@ export interface SidebarState {
   turnDurations: Record<string, number>;
   paperTrailConsent: { question: string; pageNumber?: number } | null;
   anchors: QuestionListItem[];
+  noting: NotingView | null;
 }
 
 export interface SidebarCallbacks {
@@ -163,9 +165,13 @@ export interface SidebarCallbacks {
   onPaperTrailConsent?(decision: "accept" | "decline"): void;
   onAnchorJump?(anchorId: string): void;
   onAnchorResolve?(anchorId: string): void;
+  onNotingStart?(): void;
+  onNotingDecision?(decision: "continue" | "cancel"): void;
+  onNotingApply?(mode: { kind: "new" } | { kind: "replace"; key: string }): void;
+  onNotingCancel?(): void;
 }
 
-export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close" | "copy";
+export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close" | "copy" | "note";
 
 export class SidebarView {
   private readonly doc: Document;
@@ -233,6 +239,7 @@ export class SidebarView {
       turnDurations: {},
       paperTrailConsent: null,
       anchors: [],
+      noting: null,
     };
     this.build();
     this.render();
@@ -285,6 +292,7 @@ export class SidebarView {
 
     const actions = this.doc.createElement("div");
     actions.className = "zc-top-actions";
+    const noteButton = this.iconButton("note", "生成阅读笔记", () => this.callbacks.onNotingStart?.());
     const historyButton = this.iconButton("history", "对话历史", () => this.toggleHistoryMenu());
     const newButton = this.iconButton("new", "新对话", () => this.callbacks.onNewThread());
     const terminalButton = this.iconButton(
@@ -295,7 +303,7 @@ export class SidebarView {
     );
     terminalButton.classList.add("zc-terminal-button");
     this.accountButton = this.iconButton("more", "账户", () => this.toggleAccountMenu());
-    actions.append(historyButton, newButton, terminalButton, this.accountButton);
+    actions.append(noteButton, historyButton, newButton, terminalButton, this.accountButton);
     topbar.append(identity, actions);
 
     this.threadTabs = this.doc.createElement("nav");
@@ -861,7 +869,8 @@ export class SidebarView {
       this.state.plan
       || this.state.reviews.length
       || this.state.pendingApproval
-      || this.state.checkpoints.length,
+      || this.state.checkpoints.length
+      || this.state.noting,
     );
     if (!this.state.entries.length && !hasWorkbenchCards && this.state.phase === "ready") {
       this.emptyState ||= this.createEmptyState();
@@ -966,6 +975,17 @@ export class SidebarView {
         fingerprint,
         () => this.renderCheckpointCard(this.state.checkpoints),
       ));
+    }
+
+    if (this.state.noting) {
+      const noting = this.state.noting;
+      const id = "noting";
+      // The preview body render is the expensive part; truncating markdown
+      // in the fingerprint only detects a *change*, it doesn't need to be
+      // unique for arbitrarily large notes.
+      const fingerprint = JSON.stringify({ ...noting, markdown: (noting.markdown ?? "").slice(0, 200) });
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderNotingCard(noting)));
     }
     if (activityGroup) desired.push(this.renderActivityLine(activityGroup));
     for (const id of this.entryNodes.keys()) {
@@ -1310,6 +1330,125 @@ export class SidebarView {
     return article;
   }
 
+  private renderNotingCard(noting: NotingView): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = `zc-entry zc-noting-card is-${noting.phase}`;
+    article.dataset.entryId = "noting";
+
+    const heading = this.doc.createElement("div");
+    heading.className = "zc-approval-heading";
+    const badge = this.doc.createElement("span");
+    badge.textContent = "阅读笔记";
+    const title = this.doc.createElement("strong");
+    title.textContent = NOTING_PHASE_TITLES[noting.phase];
+    heading.append(badge, title);
+    article.appendChild(heading);
+
+    const closeButton = (label: string) => {
+      const button = this.doc.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => this.callbacks.onNotingCancel?.());
+      return button;
+    };
+
+    if (noting.phase === "confirm-mismatch") {
+      const warning = this.doc.createElement("p");
+      warning.textContent = "论文文件已变化，旧锚点基于上一版本。";
+      const actions = this.doc.createElement("div");
+      actions.className = "zc-noting-actions";
+      const cancel = this.doc.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "取消";
+      cancel.addEventListener("click", () => this.callbacks.onNotingDecision?.("cancel"));
+      const proceed = this.doc.createElement("button");
+      proceed.type = "button";
+      proceed.className = "is-primary";
+      proceed.textContent = "继续生成";
+      proceed.addEventListener("click", () => this.callbacks.onNotingDecision?.("continue"));
+      actions.append(cancel, proceed);
+      article.append(warning, actions);
+      return article;
+    }
+
+    if (noting.phase === "generating" || noting.phase === "applying") {
+      const spinner = this.doc.createElement("p");
+      spinner.className = "zc-noting-spinner";
+      spinner.textContent = noting.phase === "generating" ? "正在综合……" : "正在写入附件……";
+      article.appendChild(spinner);
+      return article;
+    }
+
+    if (noting.phase === "failed") {
+      const error = this.doc.createElement("p");
+      error.className = "zc-noting-error";
+      error.textContent = noting.error || "生成失败";
+      const actions = this.doc.createElement("div");
+      actions.className = "zc-noting-actions";
+      actions.appendChild(closeButton("关闭"));
+      article.append(error, actions);
+      return article;
+    }
+
+    if (noting.phase === "done") {
+      const done = this.doc.createElement("p");
+      done.textContent = "已写入 ✓";
+      const actions = this.doc.createElement("div");
+      actions.className = "zc-noting-actions";
+      actions.appendChild(closeButton("关闭"));
+      article.append(done, actions);
+      return article;
+    }
+
+    // preview
+    const stats = this.doc.createElement("p");
+    stats.className = "zc-noting-stats";
+    stats.textContent = `${noting.anchorCount} 个锚点 · ${noting.openCount} 个未解决 · ${noting.mathErrors} 个公式待核对`;
+
+    const preview = this.doc.createElement("div");
+    preview.className = "zc-noting-preview";
+    preview.appendChild(renderMarkdown(this.doc, noting.markdown ?? ""));
+
+    let selectedMode: { kind: "new" } | { kind: "replace"; key: string } = { kind: "new" };
+    const versionGroup = this.doc.createElement("div");
+    versionGroup.className = "zc-noting-versions";
+    const versionName = `zc-noting-version-${Math.random().toString(36).slice(2)}`;
+    const addOption = (value: string, label: string, checked: boolean, onPick: () => void) => {
+      const option = this.doc.createElement("label");
+      option.className = "zc-noting-version-option";
+      const input = this.doc.createElement("input");
+      input.type = "radio";
+      input.name = versionName;
+      input.value = value;
+      input.checked = checked;
+      input.addEventListener("change", onPick);
+      const text = this.doc.createElement("span");
+      text.textContent = label;
+      option.append(input, text);
+      versionGroup.appendChild(option);
+    };
+    addOption("new", "新建版本", true, () => { selectedMode = { kind: "new" }; });
+    for (const version of noting.versions) {
+      addOption(version.key, `替换：${version.title}`, false, () => { selectedMode = { kind: "replace", key: version.key }; });
+    }
+
+    const actions = this.doc.createElement("div");
+    actions.className = "zc-noting-actions";
+    const cancel = this.doc.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", () => this.callbacks.onNotingCancel?.());
+    const apply = this.doc.createElement("button");
+    apply.type = "button";
+    apply.className = "zc-noting-apply is-primary";
+    apply.textContent = "Apply 写入附件";
+    apply.addEventListener("click", () => this.callbacks.onNotingApply?.(selectedMode));
+    actions.append(cancel, apply);
+
+    article.append(stats, preview, versionGroup, actions);
+    return article;
+  }
+
   private renderEntry(entry: ChatEntry): HTMLElement {
     const article = this.doc.createElement("article");
     article.className = `zc-entry zc-entry-${entry.kind}`;
@@ -1535,6 +1674,7 @@ const SIDEBAR_ICON_PATHS: Record<SidebarIcon, string[]> = {
   context: ["M12 5v14", "M5 12h14", "M4 4h16v16H4z"],
   close: ["m7 7 10 10", "m17 7-10 10"],
   copy: ["M9 9h10v12H9z", "M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"],
+  note: ["M6 3h8l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z", "M14 3v5h5", "M8.5 13h7", "M8.5 16.5h5"],
 };
 
 export function createSidebarIcon(doc: Document, icon: SidebarIcon): SVGElement {
@@ -1554,6 +1694,15 @@ export function createSidebarIcon(doc: Document, icon: SidebarIcon): SVGElement 
   }
   return svg;
 }
+
+const NOTING_PHASE_TITLES: Record<NotingPhase, string> = {
+  "confirm-mismatch": "PDF 已变化",
+  generating: "正在综合……",
+  preview: "阅读笔记预览",
+  applying: "正在写入附件……",
+  done: "已写入 ✓",
+  failed: "生成失败",
+};
 
 const FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
   { reasoningEffort: "minimal" },

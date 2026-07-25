@@ -16,6 +16,7 @@ import {
 import {
   SidebarView,
   type CheckpointOption,
+  type ChatEntry,
   type DiffReview,
   type PendingApproval,
   type ResearchContextChip,
@@ -36,9 +37,19 @@ import {
   PaperTrailService,
   createZoteroAnchorHost,
   ANCHOR_TAG,
+  type AnchorHost,
   type AnchorRecord,
   type PaperTrailConsent,
 } from "./paper-trail";
+import {
+  NotingService,
+  createZoteroNotingHost,
+  countMathErrors,
+  type NotingAnchorInput,
+  type NotingSnapshot,
+} from "./noting";
+import { buildQaFromEntries } from "./exchanges";
+import { sha256File } from "./hashing";
 import {
   debug,
   logError,
@@ -73,6 +84,8 @@ export class ZoteroChatPlugin {
   private codex!: CodexService;
   private mutations!: ZoteroMutationService;
   private paperTrail!: PaperTrailService;
+  private noting!: NotingService;
+  private anchorHost!: AnchorHost;
   private views = new Set<HTMLElement>();
   private chatViews = new Map<HTMLElement, SidebarView>();
   private floatPanels = new Map<
@@ -161,8 +174,9 @@ export class ZoteroChatPlugin {
         invokeTool: (name, argumentsValue) => this.mutations.invokeTool(name, argumentsValue),
       },
     );
+    this.anchorHost = createZoteroAnchorHost(Zotero);
     this.paperTrail = new PaperTrailService(
-      createZoteroAnchorHost(Zotero),
+      this.anchorHost,
       {
         onState: () => this.scheduleChatRender(),
         summarize: async (question, answer) => {
@@ -182,6 +196,14 @@ export class ZoteroChatPlugin {
         setConsent: (value) => setPrefString("paperTrail", value),
       },
     );
+    this.noting = new NotingService({
+      host: createZoteroNotingHost(Zotero, IOUtils, PathUtils),
+      generate: (prompt) => this.codex.runUtilityTurn(prompt, { timeoutMs: 300_000, model: this.selectedModel }),
+      buildSnapshot: () => this.buildNotingSnapshot(),
+      countMath: (markdown) => this.countNotingMathErrors(markdown),
+      onState: () => this.scheduleChatRender(),
+      model: () => this.selectedModel,
+    });
 
     for (const win of Zotero.getMainWindows()) await this.onMainWindowLoad(win);
     this.registerSection();
@@ -681,6 +703,10 @@ export class ZoteroChatPlugin {
         if (!context) return;
         void this.paperTrail.resolveAnchor(context, anchorId);
       },
+      onNotingStart: () => { void this.noting.run(); },
+      onNotingDecision: (decision) => { void this.noting.decide(decision); },
+      onNotingApply: (mode) => { void this.noting.apply(mode).catch(() => { /* failure is already visible via view() */ }); },
+      onNotingCancel: () => { this.noting.cancel(); },
     });
     this.chatViews.set(body, view);
     this.renderChatViews();
@@ -1113,6 +1139,7 @@ export class ZoteroChatPlugin {
           .slice()
           .sort((a, b) => (a.pageNumber ?? Number.MAX_SAFE_INTEGER) - (b.pageNumber ?? Number.MAX_SAFE_INTEGER))
           .map((a) => ({ anchorId: a.anchorId, pageNumber: a.pageNumber, question: a.question, status: a.status })),
+        noting: this.noting?.view() ?? null,
       });
     }
     this.renderFloatPanels();
@@ -1132,6 +1159,107 @@ export class ZoteroChatPlugin {
     const context = this.context;
     if (!context) return null;
     return this.codex.getAnchors(context).find((anchor) => anchor.anchorId === anchorId) ?? null;
+  }
+
+  /**
+   * Assembles the data NotingService.run() needs to draft a reading note:
+   * every anchor's Q/A history (read per-turn, closed-range sliced by the
+   * anchor's `turnRange`), the user's own annotations (with the ones
+   * paper-trail itself wrote -- identified by `annotationKey` -- excluded,
+   * since those are already covered by the anchor Q/A), and whether the PDF
+   * on disk still matches the hash any anchor was created against.
+   */
+  private async buildNotingSnapshot(): Promise<NotingSnapshot> {
+    const context = this.context;
+    if (!context) throw new Error("没有可用的论文上下文");
+
+    const anchors = this.codex.getAnchors(context);
+    const threadIds = [...new Set(anchors.map((anchor) => anchor.threadId))];
+    const turnsByThread = new Map<string, ChatEntry[][]>();
+    for (const threadId of threadIds) {
+      try {
+        turnsByThread.set(threadId, await this.codex.readThreadTurns(threadId));
+      }
+      catch {
+        turnsByThread.set(threadId, []);
+      }
+    }
+    const notingAnchors: NotingAnchorInput[] = anchors.map((anchor) => {
+      const turns = turnsByThread.get(anchor.threadId) ?? [];
+      const [start, end] = anchor.turnRange;
+      const qa = turns.slice(start, end + 1)
+        .flatMap((turnEntries) => buildQaFromEntries(turnEntries, undefined));
+      return {
+        anchorId: anchor.anchorId,
+        pageNumber: anchor.pageNumber,
+        status: anchor.status,
+        question: anchor.question,
+        answerSummary: anchor.answerSummary,
+        qa,
+      };
+    });
+
+    const annotatedByAnchor = new Set(
+      anchors.map((anchor) => anchor.annotationKey).filter((key): key is string => Boolean(key)),
+    );
+    let userAnnotations: NotingSnapshot["userAnnotations"] = [];
+    try {
+      const { annotations } = await this.readerContext.listAnnotations();
+      userAnnotations = annotations
+        .filter((annotation) => !annotatedByAnchor.has(annotation.key))
+        .map((annotation) => ({
+          pageNumber: annotation.pageNumber,
+          type: annotation.type,
+          text: annotation.text,
+          comment: annotation.comment,
+        }));
+    }
+    catch {
+      userAnnotations = [];
+    }
+
+    const pdfSha256Now = await this.notingPdfSha256Now(context);
+    const hashMismatch = anchors.some((anchor) => anchor.pdfSha256 !== null && anchor.pdfSha256 !== pdfSha256Now);
+
+    return {
+      paperTitle: paperTitle(context),
+      itemKey: context.parent?.key ?? null,
+      attachmentKey: context.attachment.key,
+      libraryID: context.attachment.libraryID ?? "0",
+      pdfSha256Now,
+      hashMismatch,
+      anchors: notingAnchors,
+      userAnnotations,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  private async notingPdfSha256Now(context: ReaderContext): Promise<string | null> {
+    try {
+      const file = await this.anchorHost.attachmentFile(context.attachment.libraryID ?? "0", context.attachment.key);
+      if (!file) return null;
+      return sha256File(file.path, file.size);
+    }
+    catch {
+      return null;
+    }
+  }
+
+  /** Any already-mounted chat pane's document -- KaTeX rendering needs a real Document to build DOM into. */
+  private mainDocument(): Document | null {
+    const mounted = this.chatViews.keys().next().value;
+    return mounted ? mounted.ownerDocument : (Zotero.getMainWindow()?.document ?? null);
+  }
+
+  private countNotingMathErrors(markdown: string): number {
+    const doc = this.mainDocument();
+    if (!doc) return 0;
+    try {
+      return countMathErrors(doc, markdown);
+    }
+    catch {
+      return 0;
+    }
   }
 
   /** Opens the Reader at the anchor's annotation (or raw position, when the highlight write never landed). */

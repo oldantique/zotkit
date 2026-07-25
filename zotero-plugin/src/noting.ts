@@ -215,3 +215,255 @@ export function notingFileName(paperTitle: string, date: Date): string {
   const day = String(date.getUTCDate()).padStart(2, "0");
   return `${base}-reading-notes-${year}${month}${day}.md`;
 }
+
+/**
+ * The only surface through which NotingService touches real Zotero/profile
+ * state: staging the generated markdown to disk, importing it as a child
+ * attachment, erasing a superseded version, and listing existing note
+ * attachments for the version chooser. Every method is independently
+ * fakeable, mirroring `AnchorHost` in paper-trail.ts.
+ */
+export interface NotingHost {
+  /** Writes `content` into profile staging under `fileName`; returns the absolute path. */
+  stageNote(fileName: string, content: string): Promise<string>;
+  /** Imports the staged file as a child attachment of the target item; returns the new attachment's key. */
+  importAttachment(target: {
+    libraryID: number | string;
+    parentItemKey: string;
+    stagedPath: string;
+    title: string;
+  }): Promise<string>;
+  eraseAttachment(libraryID: number | string, attachmentKey: string): Promise<void>;
+  /** Existing reading-notes attachments under the parent item, for the "replace an existing version" chooser. */
+  listNoteAttachments(libraryID: number | string, parentItemKey: string): Promise<{ key: string; title: string }[]>;
+}
+
+export function createZoteroNotingHost(zotero: any, ioUtils: any, pathUtils: any): NotingHost {
+  const stagingDir = () => pathUtils.join(zotero.Profile?.dir ?? "", "zotkit", "noting");
+  return {
+    async stageNote(fileName, content) {
+      const directory = stagingDir();
+      await ioUtils.makeDirectory(directory, { createAncestors: true, ignoreExisting: true, permissions: 0o700 });
+      const path = pathUtils.join(directory, fileName);
+      await ioUtils.writeUTF8(path, content, { tmpPath: path + ".tmp" });
+      return path;
+    },
+    async importAttachment(target) {
+      const parent = await zotero.Items?.getByLibraryAndKeyAsync?.(target.libraryID, target.parentItemKey)
+        ?? zotero.Items?.getByLibraryAndKey?.(target.libraryID, target.parentItemKey);
+      if (!parent?.id) throw new Error("找不到目标条目");
+      const attachment = await zotero.Attachments?.importFromFile?.({
+        file: target.stagedPath, parentItemID: parent.id, title: target.title, contentType: "text/markdown",
+      });
+      if (!attachment?.key) throw new Error("Zotero 导入附件失败");
+      return attachment.key as string;
+    },
+    async eraseAttachment(libraryID, attachmentKey) {
+      const item = await zotero.Items?.getByLibraryAndKeyAsync?.(libraryID, attachmentKey)
+        ?? zotero.Items?.getByLibraryAndKey?.(libraryID, attachmentKey);
+      await item?.eraseTx?.();
+    },
+    async listNoteAttachments(libraryID, parentItemKey) {
+      const parent = await zotero.Items?.getByLibraryAndKeyAsync?.(libraryID, parentItemKey)
+        ?? zotero.Items?.getByLibraryAndKey?.(libraryID, parentItemKey);
+      const ids: number[] = parent?.getAttachments?.() ?? [];
+      const out: { key: string; title: string }[] = [];
+      for (const id of ids) {
+        const item = zotero.Items?.get?.(id);
+        const title = String(item?.getField?.("title") ?? "");
+        if (item?.key && /-reading-notes-\d{8}/.test(`${title} ${item?.attachmentFilename ?? ""}`)) {
+          out.push({ key: item.key, title });
+        }
+      }
+      return out;
+    },
+  };
+}
+
+export type NotingPhase = "confirm-mismatch" | "generating" | "preview" | "applying" | "done" | "failed";
+
+/** Everything the sidebar's noting card needs to render, for any phase. */
+export interface NotingView {
+  phase: NotingPhase;
+  markdown: string | null;
+  mathErrors: number;
+  anchorCount: number;
+  openCount: number;
+  hashMismatch: boolean;
+  versions: { key: string; title: string }[];
+  error: string | null;
+}
+
+/**
+ * Constructor dependencies for `NotingService`, all injected so the state
+ * machine is unit-testable with plain fakes (no Zotero runtime). `model` is
+ * not part of the brief's minimal DI shape but is needed to fill in
+ * `buildFrontMatter`'s `model` field; it is optional (defaults to
+ * "unknown") purely so existing fake-only test setups keep compiling.
+ */
+export interface NotingDeps {
+  host: NotingHost;
+  generate(prompt: string): Promise<string>;
+  buildSnapshot(): Promise<NotingSnapshot>;
+  countMath(markdown: string): number;
+  onState(): void;
+  /** Model id to record in the note's front matter; read once generation succeeds. */
+  model?(): string;
+  now?(): Date;
+}
+
+const EMPTY_NOTING_VIEW: NotingView = {
+  phase: "generating",
+  markdown: null,
+  mathErrors: 0,
+  anchorCount: 0,
+  openCount: 0,
+  hashMismatch: false,
+  versions: [],
+  error: null,
+};
+
+function notingStats(snapshot: NotingSnapshot): Pick<NotingView, "anchorCount" | "openCount" | "hashMismatch"> {
+  return {
+    anchorCount: snapshot.anchors.length,
+    openCount: snapshot.anchors.filter((anchor) => anchor.status === "open").length,
+    hashMismatch: snapshot.hashMismatch,
+  };
+}
+
+/**
+ * Drives the Note-synthesis flow: run() takes a snapshot and either parks at
+ * confirm-mismatch (stale PDF hash) or generates straight through to a
+ * preview; apply() writes the generated markdown to a versioned .md
+ * attachment, replacing an older version only after the new one has
+ * successfully imported. Every phase transition calls `onState()` so a host
+ * (e.g. the plugin) can re-render from `view()`.
+ */
+export class NotingService {
+  private current: NotingView | null = null;
+  private snapshot: NotingSnapshot | null = null;
+  private markdown: string | null = null;
+  private modelUsed = "unknown";
+  private readonly now: () => Date;
+
+  constructor(private readonly deps: NotingDeps) {
+    this.now = deps.now ?? (() => new Date());
+  }
+
+  view(): NotingView | null {
+    return this.current;
+  }
+
+  async run(): Promise<void> {
+    this.snapshot = null;
+    this.markdown = null;
+    this.setView({ ...EMPTY_NOTING_VIEW, phase: "generating" });
+    let snapshot: NotingSnapshot;
+    try {
+      snapshot = await this.deps.buildSnapshot();
+    }
+    catch (error) {
+      this.fail(error);
+      return;
+    }
+    this.snapshot = snapshot;
+    if (snapshot.hashMismatch) {
+      this.setView({ ...EMPTY_NOTING_VIEW, ...notingStats(snapshot), phase: "confirm-mismatch" });
+      return;
+    }
+    await this.generateAndPreview();
+  }
+
+  async decide(decision: "continue" | "cancel"): Promise<void> {
+    if (decision === "cancel") {
+      this.cancel();
+      return;
+    }
+    await this.generateAndPreview();
+  }
+
+  /** Discards any in-flight snapshot/markdown and clears the card. */
+  cancel(): void {
+    this.snapshot = null;
+    this.markdown = null;
+    this.current = null;
+    this.deps.onState();
+  }
+
+  /**
+   * Writes the previewed markdown to a new versioned attachment. In replace
+   * mode, the old attachment is only erased *after* the new one has
+   * successfully imported -- a failed import must never cost the user their
+   * existing notes. Any failure is surfaced as `failed` and rethrown for the
+   * UI layer to swallow (the failure is already visible via `view()`).
+   */
+  async apply(mode: { kind: "new" } | { kind: "replace"; key: string }): Promise<void> {
+    const snapshot = this.snapshot;
+    const markdown = this.markdown;
+    if (!snapshot || markdown === null) return;
+    const base = this.current ?? { ...EMPTY_NOTING_VIEW, ...notingStats(snapshot) };
+    this.setView({ ...base, phase: "applying", error: null });
+    try {
+      const content = `${buildFrontMatter(snapshot, this.modelUsed, base.mathErrors)}\n${markdown}`;
+      const fileName = notingFileName(snapshot.paperTitle, this.now());
+      const stagedPath = await this.deps.host.stageNote(fileName, content);
+      await this.deps.host.importAttachment({
+        libraryID: snapshot.libraryID,
+        parentItemKey: snapshot.itemKey ?? "",
+        stagedPath,
+        title: fileName.replace(/\.md$/, ""),
+      });
+      if (mode.kind === "replace") {
+        await this.deps.host.eraseAttachment(snapshot.libraryID, mode.key);
+      }
+      this.setView({ ...base, phase: "done", error: null });
+    }
+    catch (error) {
+      this.fail(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Runs the model turn and, on success, moves to preview. Failures here are
+   * swallowed (never rethrown) and never touch `host` -- callers (run() and
+   * decide("continue")) simply see a `failed` view afterwards.
+   */
+  private async generateAndPreview(): Promise<void> {
+    const snapshot = this.snapshot;
+    if (!snapshot) return;
+    const stats = notingStats(snapshot);
+    this.setView({ ...EMPTY_NOTING_VIEW, ...stats, phase: "generating" });
+    let markdown: string;
+    try {
+      markdown = await this.deps.generate(buildNotingPrompt(snapshot));
+    }
+    catch (error) {
+      this.fail(error);
+      return;
+    }
+    this.markdown = markdown;
+    this.modelUsed = this.deps.model?.() ?? "unknown";
+    const mathErrors = this.deps.countMath(markdown);
+    let versions: { key: string; title: string }[] = [];
+    try {
+      versions = await this.deps.host.listNoteAttachments(snapshot.libraryID, snapshot.itemKey ?? "");
+    }
+    catch {
+      versions = [];
+    }
+    this.setView({ ...stats, phase: "preview", markdown, mathErrors, versions, error: null });
+  }
+
+  private fail(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const stats = this.snapshot ? notingStats(this.snapshot) : { anchorCount: 0, openCount: 0, hashMismatch: false };
+    const base = this.current ?? { ...EMPTY_NOTING_VIEW, ...stats };
+    this.setView({ ...base, phase: "failed", markdown: this.markdown, error: message });
+  }
+
+  private setView(view: NotingView): void {
+    this.current = view;
+    this.deps.onState();
+  }
+}

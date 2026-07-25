@@ -507,6 +507,34 @@ describe("SidebarView", () => {
     view.setState({ ...baseState(), anchors: [] } as any);
     expect(body.querySelector(".zc-question-list")).toBeNull();
   });
+
+  it("renders the noting preview card with stats and apply", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onNotingApply: vi.fn(), onNotingCancel: vi.fn() };
+    const view = new SidebarView(body, handlers as any);
+    view.setState({ ...baseState(), noting: {
+      phase: "preview", markdown: "# Citation\n\n内容", mathErrors: 2,
+      anchorCount: 5, openCount: 1, hashMismatch: false,
+      versions: [{ key: "OLD", title: "old-notes" }], error: null,
+    } } as any);
+    const card = body.querySelector(".zc-noting-card")!;
+    expect(card.textContent).toContain("5 个锚点");
+    expect(card.textContent).toContain("2 个公式待核对");
+    (card.querySelector(".zc-noting-apply") as HTMLButtonElement).click();
+    expect(handlers.onNotingApply).toHaveBeenCalledWith({ kind: "new" });
+  });
+
+  it("shows a Note button in the topbar", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onNotingStart: vi.fn() };
+    const view = new SidebarView(body, handlers as any);
+    view.setState(baseState() as any);
+    const button = body.querySelector('[title="生成阅读笔记"]') as HTMLButtonElement;
+    button.click();
+    expect(handlers.onNotingStart).toHaveBeenCalled();
+  });
 });
 
 describe("SidebarView activity line", () => {
