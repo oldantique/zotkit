@@ -181,6 +181,12 @@ export class CodexService {
   private readonly pendingApprovalResolvers = new Map<string, PendingApprovalResolver>();
   private readonly latestTurnDiffs = new Map<string, string>();
   private interactionContext: Record<string, CodexInteractionContextEntry> = {};
+  /** Hidden utility threads awaiting turn/completed (or turn/failed), keyed by threadId. */
+  private readonly utilityWaiters = new Map<string, {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
 
   constructor(
     private readonly bridge: NativeBridge,
@@ -586,6 +592,62 @@ export class CodexService {
     }
   }
 
+  /**
+   * Runs one turn on a freshly started, hidden thread and resolves with the
+   * last assistant message text. Never touches `state.activeThreadId` /
+   * `state.running` — this is a side-channel utility turn (e.g. summarize),
+   * not the visible paper conversation.
+   */
+  async runUtilityTurn(prompt: string, options: { timeoutMs: number; model?: string }): Promise<string> {
+    const client = this.requireClient();
+    const started = await client.threadStart({});
+    const threadId = started.thread.id;
+    let waiterTimer: ReturnType<typeof setTimeout>;
+    const completed = new Promise<void>((resolve, reject) => {
+      waiterTimer = setTimeout(() => {
+        this.utilityWaiters.delete(threadId);
+        reject(new Error("工具轮生成超时"));
+      }, options.timeoutMs);
+      this.utilityWaiters.set(threadId, { resolve, reject, timer: waiterTimer });
+    });
+    try {
+      await client.turnStart({
+        threadId,
+        input: [{ type: "text" as const, text: prompt, text_elements: [] }],
+        model: options.model || null,
+        effort: "low",
+      });
+    }
+    catch (error) {
+      clearTimeout(waiterTimer!);
+      this.utilityWaiters.delete(threadId);
+      throw error;
+    }
+    await completed;
+    const thread = this.store.getThread(threadId);
+    for (let t = (thread?.turns.length ?? 0) - 1; t >= 0; t -= 1) {
+      const items = thread!.turns[t]?.items ?? [];
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        const item = items[i] as Record<string, unknown>;
+        if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) return item.text;
+      }
+    }
+    throw new Error("工具轮没有产生文本输出");
+  }
+
+  /** Reads any thread's turns as per-turn chat entries; failures fall back to []. */
+  async readThreadTurns(threadId: string): Promise<ChatEntry[][]> {
+    try {
+      await this.requireClient().threadRead(threadId, true);
+    }
+    catch {
+      // Offline or stale thread: fall back to whatever the store already has.
+    }
+    const thread = this.store.getThread(threadId);
+    if (!thread) return [];
+    return thread.turns.map((turn) => this.entriesForTurn(turn));
+  }
+
   interrupt(): Promise<void> {
     return this.enqueuePaperTransition(async () => {
       await this.interruptActiveTurn();
@@ -617,18 +679,23 @@ export class CodexService {
     const thread = this.getActiveThread();
     if (!thread) return [];
     const entries: ChatEntry[] = [];
-    for (const turn of thread.turns) {
-      for (const item of turn.items) {
-        const entry = itemToEntry(item, turn);
-        if (entry) entries.push(entry);
-      }
-      if (turn.error) {
-        entries.push({
-          id: `${turn.id}:error`,
-          kind: "error",
-          text: errorText(turn.error)
-        });
-      }
+    for (const turn of thread.turns) entries.push(...this.entriesForTurn(turn));
+    return entries;
+  }
+
+  /** Shared item→entry expansion for a single turn, used by getChatEntries and readThreadTurns. */
+  private entriesForTurn(turn: StoredTurn): ChatEntry[] {
+    const entries: ChatEntry[] = [];
+    for (const item of turn.items) {
+      const entry = itemToEntry(item, turn);
+      if (entry) entries.push(entry);
+    }
+    if (turn.error) {
+      entries.push({
+        id: `${turn.id}:error`,
+        kind: "error",
+        text: errorText(turn.error)
+      });
     }
     return entries;
   }
@@ -777,6 +844,14 @@ export class CodexService {
       ? params.threadId
       : typeof turn?.threadId === "string" ? turn.threadId : null;
     const belongsToActiveThread = !eventThreadId || eventThreadId === this.state.activeThreadId;
+    if (notification.method === "turn/completed" || notification.method === "turn/failed") {
+      const waiter = eventThreadId ? this.utilityWaiters.get(eventThreadId) : undefined;
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        this.utilityWaiters.delete(eventThreadId!);
+        waiter.resolve();
+      }
+    }
     if (notification.method === "turn/started") {
       if (belongsToActiveThread) {
         if (typeof turn?.id === "string") this.state.activeTurnId = turn.id;

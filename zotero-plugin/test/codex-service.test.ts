@@ -623,3 +623,80 @@ describe("CodexService anchors", () => {
     expect(service.activeThreadTurnCount()).toBe(3);
   });
 });
+
+describe("CodexService utility turns", () => {
+  it("runs a turn on a hidden thread and resolves with the assistant text", async () => {
+    const store = new Map<string, any>();
+    store.set("util-1", { turns: [{ id: "t1", status: "completed", items: [
+      { id: "i1", type: "agentMessage", text: "两句要点。" },
+    ] }] });
+    const client = {
+      threadStart: vi.fn(async () => ({ thread: { id: "util-1" } })),
+      turnStart: vi.fn(async () => ({ turn: { id: "t1" } })),
+    };
+    const { service } = serviceWithClient(client);
+    (service as any).store = { getThread: (id: string) => store.get(id) };
+    const pending = service.runUtilityTurn("总结一下", { timeoutMs: 5000 });
+    await Promise.resolve();
+    // handleNotification's real eventThreadId extraction reads params.threadId
+    // (or params.turn.threadId) — not params.thread.id — so the notification
+    // below is shaped to match src/codex-service.ts:776-778, not the brief's
+    // literal `{ thread: { id } }` shape.
+    (service as any).handleNotification({
+      method: "turn/completed",
+      params: { threadId: "util-1", turn: { id: "t1" } },
+    });
+    await expect(pending).resolves.toBe("两句要点。");
+    expect(service.state.activeThreadId).toBe("thread-a"); // 活动线程未被切换
+  });
+
+  it("rejects on timeout", async () => {
+    const client = {
+      threadStart: vi.fn(async () => ({ thread: { id: "util-2" } })),
+      turnStart: vi.fn(async () => ({ turn: { id: "t9" } })),
+    };
+    const { service } = serviceWithClient(client);
+    vi.useFakeTimers();
+    const pending = service.runUtilityTurn("x", { timeoutMs: 50 });
+    const guarded = pending.catch((error) => error);
+    await vi.advanceTimersByTimeAsync(60);
+    expect(String(await guarded)).toContain("超时");
+    vi.useRealTimers();
+  });
+
+  it("cleans up the waiter if turnStart throws", async () => {
+    const client = {
+      threadStart: vi.fn(async () => ({ thread: { id: "util-3" } })),
+      turnStart: vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    };
+    const { service } = serviceWithClient(client);
+    await expect(service.runUtilityTurn("x", { timeoutMs: 5000 })).rejects.toThrow("network down");
+    expect((service as any).utilityWaiters.size).toBe(0);
+    expect(service.state.activeThreadId).toBe("thread-a");
+    expect(service.state.running).toBe(false);
+  });
+
+  it("reads another thread's turns without touching active state", async () => {
+    const client = { threadRead: vi.fn(async () => ({ thread: { id: "old" } })) };
+    const { service } = serviceWithClient(client);
+    (service as any).store = { getThread: (id: string) => (id === "old" ? { turns: [
+      { id: "t1", status: "completed", items: [
+        { id: "u1", type: "userMessage", content: [{ type: "text", text: "问" }] },
+        { id: "a1", type: "agentMessage", text: "答" },
+      ] },
+    ] } : undefined) };
+    const turns = await service.readThreadTurns("old");
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
+    expect(service.state.activeThreadId).toBe("thread-a");
+  });
+
+  it("returns [] when threadRead fails and the store has nothing for the thread", async () => {
+    const client = { threadRead: vi.fn(async () => { throw new Error("offline"); }) };
+    const { service } = serviceWithClient(client);
+    (service as any).store = { getThread: () => undefined };
+    await expect(service.readThreadTurns("missing")).resolves.toEqual([]);
+  });
+});
