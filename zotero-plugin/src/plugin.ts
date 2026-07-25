@@ -832,6 +832,23 @@ export class ZoteroChatPlugin {
       this.hideFloatPanel(win);
       return;
     }
+    await this.openFloatPanel(win);
+  }
+
+  /**
+   * Ensure-open semantics for callers (like resumeAnchorChat) that must
+   * never close an already-visible panel -- unlike toggleFloatPanel (⌘K),
+   * which is meant to toggle. No-ops when the panel is already visible;
+   * otherwise opens it via the same path toggleFloatPanel uses.
+   */
+  private async ensureFloatPanelOpen(): Promise<void> {
+    const win = Zotero.getMainWindow();
+    if (!win) return;
+    if (this.floatPanels.get(win)?.view.isVisible()) return;
+    await this.openFloatPanel(win);
+  }
+
+  private async openFloatPanel(win: Window): Promise<void> {
     const entry = this.mountFloatPanel(win);
     const active = win.document.activeElement;
     entry.focusReturn = active && active !== win.document.body
@@ -1133,7 +1150,10 @@ export class ZoteroChatPlugin {
    * "继续对话" from a batch-written annotation: switches to the anchor's
    * thread (via the same codex.switchThread() path onSelectThread uses) when
    * it isn't already active, then opens the float panel. When no anchor
-   * matches the annotation, just opens the panel as-is.
+   * matches the annotation, just opens the panel as-is. Uses
+   * ensureFloatPanelOpen() rather than toggleFloatPanel() -- this action
+   * always means "open" (per the plan's "打开浮窗"), so it must never close
+   * a panel the user already has open.
    */
   private async resumeAnchorChat(annotationKey: string): Promise<void> {
     const context = this.context;
@@ -1143,7 +1163,7 @@ export class ZoteroChatPlugin {
     if (anchor && anchor.threadId !== this.codex.state.activeThreadId) {
       await this.codex.switchThread(anchor.threadId);
     }
-    await this.toggleFloatPanel();
+    await this.ensureFloatPanelOpen();
   }
 
   private handleCodexState(): void {

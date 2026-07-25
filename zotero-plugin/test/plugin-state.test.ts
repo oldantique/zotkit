@@ -946,6 +946,60 @@ describe("paper-trail wiring", () => {
     expect(open).toHaveBeenCalledWith(42, { annotationID: "ANN1" }, { allowDuplicate: false });
     (globalThis as any).Zotero = previousZotero;
   });
+
+  it("resumeAnchorChat switches to the anchor's thread and opens the panel when it wasn't already open", async () => {
+    const previousZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { getMainWindow: () => window };
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.context = { attachment: { key: "A", libraryID: 1 } };
+    plugin.codex = {
+      state: { connected: false, activeThreadId: "th-old" },
+      getAnchors: () => [{ anchorId: "a1", annotationKey: "ANN1", threadId: "th-new" }],
+      switchThread: vi.fn(async () => {}),
+    };
+    plugin.ensureChatSession = vi.fn(async () => {});
+    plugin.renderChatViews = vi.fn();
+
+    await plugin.resumeAnchorChat("ANN1");
+
+    expect(plugin.codex.switchThread).toHaveBeenCalledWith("th-new");
+    const root = document.querySelector<HTMLElement>(".zc-float")!;
+    expect(root.hidden).toBe(false);
+
+    plugin.floatPanels.get(window)?.view.destroy();
+    plugin.floatPanels.get(window)?.host.remove();
+    (globalThis as any).Zotero = previousZotero;
+  });
+
+  it("resumeAnchorChat keeps an already-open panel open (does not toggle it closed), and no-ops the thread switch when the annotation has no matching anchor", async () => {
+    const previousZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { getMainWindow: () => window };
+    const plugin = new ZoteroChatPlugin() as any;
+    plugin.context = { attachment: { key: "A", libraryID: 1 } };
+    plugin.codex = {
+      state: { connected: false, activeThreadId: "th1" },
+      getAnchors: () => [],
+      switchThread: vi.fn(async () => {}),
+    };
+    plugin.ensureChatSession = vi.fn(async () => {});
+    plugin.renderChatViews = vi.fn();
+
+    // Simulate the user already having the panel open before "继续对话" is clicked.
+    await plugin.toggleFloatPanel();
+    const root = document.querySelector<HTMLElement>(".zc-float")!;
+    expect(root.hidden).toBe(false);
+
+    const hideSpy = vi.spyOn(plugin, "hideFloatPanel");
+    await plugin.resumeAnchorChat("ANN-missing");
+
+    expect(hideSpy).not.toHaveBeenCalled();
+    expect(root.hidden).toBe(false);
+    expect(plugin.codex.switchThread).not.toHaveBeenCalled();
+
+    plugin.floatPanels.get(window)?.view.destroy();
+    plugin.floatPanels.get(window)?.host.remove();
+    (globalThis as any).Zotero = previousZotero;
+  });
 });
 
 describe("clampFloatSize", () => {
