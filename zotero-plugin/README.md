@@ -37,6 +37,18 @@ Zotkit 在 Zotero 9 PDF Reader 的右侧 Item Pane 中提供结构化 Research C
 
 Reader 文字选择弹窗中的 **Ask in Zotkit** 会把选区加入当前 Research Chat。插件传递的是可提取的纯文本，并限制长度；它不会用选中文字自动批准操作。
 
+## 模型服务（内置引擎）
+
+Research Chat 默认由插件内置引擎驱动，直连你自己配置的模型服务，无需安装任何 CLI 或订阅：
+
+1. 侧栏模型菜单旁点 ⚙（或首次使用时的「添加模型服务」卡片）。
+2. 从预设选择 DeepSeek / Kimi（月之暗面开放平台）/ OpenRouter / Ollama / OpenAI / Anthropic，或填自定义 OpenAI/Anthropic 兼容端点。
+3. 粘贴 API key（保存在 Zotero 的密码管理器里，不写入配置文件）→ 测试连接 → 保存。
+
+注意：对话内容（含论文摘录、批注）会发送到你配置的端点；Kimi For Coding 订阅端点面向 coding agent 设计，使用前请确认 Moonshot 服务条款。
+
+已安装并登录 codex CLI 的用户可继续使用 Codex（订阅）后端：模型菜单里选择 Codex 分组即可；对话中途从 Codex 切到引擎可选择「携带对话历史继续」。留痕高亮与 Note 笔记在两个后端下行为一致。
+
 ## Ask 与 Agent
 
 ### Ask：默认、只读
