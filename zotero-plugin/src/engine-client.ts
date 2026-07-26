@@ -337,6 +337,12 @@ export class EngineClient implements AgentClient {
         });
         return;
       }
+      // Advance the turn counter even on failure so a retry mints a fresh
+      // turnId. Reusing the failed turnId would make ThreadStore's mergeTurn
+      // fold the retry into the failed turn (stale error, leftover items).
+      // History/persistence stay untouched — a failed turn never happened as
+      // far as the model's context is concerned.
+      thread.turnCount += 1;
       const message = error instanceof Error && error.message
         ? error.message
         : "模型服务调用失败，请重试";

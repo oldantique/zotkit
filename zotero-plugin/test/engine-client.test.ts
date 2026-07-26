@@ -149,6 +149,43 @@ describe("EngineClient", () => {
     expect(notifications.some((notification) => notification.method === "turn/completed")).toBe(false);
   });
 
+  it("mints a fresh turn id after a failed turn so a retry doesn't merge into it", async () => {
+    let call = 0;
+    const { client, store } = makeClient([[
+      { type: "textDelta", delta: "second answer" },
+      { type: "stop", reason: "end" },
+    ]], {
+      streamImpl: async (options) => {
+        call += 1;
+        if (call === 1) return { status: 401, ok: false, errorBody: null };
+        options.onChunk("scripted");
+        return { status: 200, ok: true, errorBody: null };
+      },
+    });
+    const thread = await client.threadStart({});
+    const first = await client.turnStart({
+      threadId: thread.thread.id,
+      input: [{ type: "text", text: "q1", text_elements: [] }],
+      model: null,
+      effort: "medium",
+    });
+    await settle();
+    const second = await client.turnStart({
+      threadId: thread.thread.id,
+      input: [{ type: "text", text: "q2", text_elements: [] }],
+      model: null,
+      effort: "medium",
+    });
+    await settle();
+    expect(second.turn.id).not.toBe(first.turn.id);
+    const stored = store.getThread(thread.thread.id)!;
+    expect(stored.turns.length).toBe(2);
+    const failedTurn = stored.turns.find((turn) => turn.id === first.turn.id)!;
+    expect(failedTurn.status).toBe("failed");
+    const secondTurn = stored.turns.find((turn) => turn.id === second.turn.id)!;
+    expect(secondTurn.items.find((item) => item.type === "agentMessage")?.text).toBe("second answer");
+  });
+
   it("caps the tool loop at 8 iterations", async () => {
     const dynamicToolCall = vi.fn().mockResolvedValue({
       success: true,
