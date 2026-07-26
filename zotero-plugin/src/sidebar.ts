@@ -1029,12 +1029,17 @@ export class SidebarView {
 
     if (this.state.checkpoints.length) {
       const id = "research-checkpoints";
-      const fingerprint = JSON.stringify(this.state.checkpoints);
+      // A review mid-Apply/Reject shares the same host-side serialized
+      // queue as checkpoint restore (see ZoteroMutationService#runExclusive):
+      // restoring while one is "resolving" would just queue behind it, but
+      // disabling Restore up front avoids a click that appears to hang.
+      const restoreDisabled = this.state.reviews.some((review) => review.state === "resolving");
+      const fingerprint = JSON.stringify({ checkpoints: this.state.checkpoints, restoreDisabled });
       activeIDs.add(id);
       desired.push(this.cachedEntryNode(
         id,
         fingerprint,
-        () => this.renderCheckpointCard(this.state.checkpoints),
+        () => this.renderCheckpointCard(this.state.checkpoints, restoreDisabled),
       ));
     }
 
@@ -1429,7 +1434,7 @@ export class SidebarView {
     return article;
   }
 
-  private renderCheckpointCard(checkpoints: CheckpointOption[]): HTMLElement {
+  private renderCheckpointCard(checkpoints: CheckpointOption[], restoreDisabled: boolean): HTMLElement {
     const article = this.doc.createElement("article");
     article.className = "zc-entry zc-checkpoint-card";
     article.dataset.entryId = "research-checkpoints";
@@ -1453,6 +1458,10 @@ export class SidebarView {
       const restore = this.doc.createElement("button");
       restore.type = "button";
       restore.textContent = "Restore";
+      // Disabled while any review is mid-Apply/Reject: restoring now would
+      // just queue behind it on the shared host-side serialization, so
+      // disabling up front avoids a click that appears to hang.
+      restore.disabled = restoreDisabled;
       restore.addEventListener("click", () => {
         this.callbacks.onRestoreCheckpoint?.(checkpoint.id);
       });

@@ -360,6 +360,66 @@ describe("ZoteroMutationService", () => {
     await acceptB;
     expect(order).toEqual(["start-A", "end-A", "start-B", "end-B"]);
   });
+
+  it("serializes checkpoint restore with review resolution so their host calls never interleave", async () => {
+    const { service, host } = harness();
+    await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: "Improved title" } }],
+    });
+
+    const order: string[] = [];
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+    const gateRestore = deferred<void>();
+    const gateApply = deferred<void>();
+
+    vi.mocked(host.restore).mockImplementation(async () => {
+      order.push("start-restore");
+      await gateRestore.promise;
+      order.push("end-restore");
+      return {
+        attachmentID: 7,
+        attachmentKey: "ATTACH",
+        attachmentLibraryID: 1,
+        attachmentContentChanged: false,
+        attachmentRelinked: false,
+        pdfReplaced: false,
+      };
+    });
+    vi.mocked(host.apply).mockImplementation(async () => {
+      order.push("start-apply");
+      await gateApply.promise;
+      order.push("end-apply");
+    });
+
+    const flush = async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    };
+
+    // Called in this order: a checkpoint Restore click immediately followed
+    // by an unrelated review's Apply click.
+    const restorePromise = service.restoreCheckpoint("checkpoint-2");
+    const acceptPromise = service.resolveReview("review-1", "accept");
+
+    await flush();
+    // The accept's host.apply must never start while the restore's
+    // host.restore is still in flight -- proving restore and review
+    // resolution share one serialized queue instead of running
+    // independently and letting their Zotero writes interleave.
+    expect(order).toEqual(["start-restore"]);
+
+    gateRestore.resolve();
+    await restorePromise;
+    await flush();
+    expect(order).toEqual(["start-restore", "end-restore", "start-apply"]);
+
+    gateApply.resolve();
+    await acceptPromise;
+    expect(order).toEqual(["start-restore", "end-restore", "start-apply", "end-apply"]);
+  });
 });
 
 describe("diff fidelity: review must show exactly what Apply will write", () => {

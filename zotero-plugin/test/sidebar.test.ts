@@ -258,6 +258,47 @@ describe("SidebarView", () => {
     expect(handlers.onRestoreCheckpoint).toHaveBeenCalledWith("checkpoint-1");
   });
 
+  it("disables every Restore button while a review is mid-resolution, and re-enables once it settles", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = callbacks();
+    handlers.onRestoreCheckpoint = vi.fn();
+    const view = new SidebarView(body, handlers);
+    view.setState({
+      phase: "ready",
+      reviews: [{
+        id: "review-1",
+        title: "Proposed change",
+        diff: "@@ x\n-old\n+new",
+        state: "resolving",
+      }],
+      checkpoints: [
+        { id: "checkpoint-1", label: "Before comparison", createdAt: "2026-07-22T10:30:00Z" },
+        { id: "checkpoint-2", label: "Earlier", createdAt: "2026-07-21T10:30:00Z" },
+      ],
+    });
+
+    const restoreButtons = [...body.querySelectorAll<HTMLButtonElement>("button")]
+      .filter((button) => button.textContent === "Restore");
+    expect(restoreButtons).toHaveLength(2);
+    for (const button of restoreButtons) expect(button.disabled).toBe(true);
+
+    // Settling the review (state moves off "resolving") must re-render the
+    // checkpoint card and re-enable Restore -- the cachedEntryNode fingerprint
+    // has to reflect review-resolving state, not just the checkpoint list, or
+    // this would keep showing the stale disabled buttons.
+    view.setState({
+      reviews: [{ id: "review-1", title: "Proposed change", diff: "@@ x\n-old\n+new", state: "accepted" }],
+    });
+
+    const restoreButtonsAfter = [...body.querySelectorAll<HTMLButtonElement>("button")]
+      .filter((button) => button.textContent === "Restore");
+    expect(restoreButtonsAfter).toHaveLength(2);
+    for (const button of restoreButtonsAfter) expect(button.disabled).toBe(false);
+    restoreButtonsAfter[0]!.click();
+    expect(handlers.onRestoreCheckpoint).toHaveBeenCalledWith("checkpoint-1");
+  });
+
   it("can reveal the composer when Zotero expands the custom section", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);

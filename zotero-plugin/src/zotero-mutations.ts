@@ -243,8 +243,9 @@ export class ZoteroMutationService {
    * original.pdf, permanently destroying the only usable rollback.
    *
    * Once past that guard, the actual work is threaded through
-   * `resolveQueue` so concurrent accepts on *different* reviews still run
-   * one at a time rather than interleaving their host calls.
+   * {@link runExclusive} so concurrent accepts on *different* reviews --
+   * and a concurrent checkpoint restore -- still run one at a time rather
+   * than interleaving their host calls.
    */
   async resolveReview(
     reviewId: string,
@@ -257,12 +258,24 @@ export class ZoteroMutationService {
     }
     pending.review.state = "resolving";
     this.callbacks.onState();
+    return this.runExclusive(() => this.runResolveReview(pending, decision));
+  }
 
-    const run = () => this.runResolveReview(pending, decision);
-    // Chain onto the shared queue so a rejected run doesn't wedge later
-    // reviews: the queue link swallows the error (`.catch(() => {})`) purely
-    // to keep the chain alive, while the promise returned to *this* caller
-    // is `result` itself, which still carries the real rejection.
+  /**
+   * Threads `run` through the shared `resolveQueue` so any two operations
+   * that touch Zotero/filesystem state through this service (accepting or
+   * rejecting a review, restoring a checkpoint) never execute their host
+   * calls concurrently -- interleaved writes to the same paper/attachment
+   * could corrupt it or clobber a checkpoint mid-write. Call it
+   * synchronously (no `await` before it) from every public entry point that
+   * needs this guarantee: queuing order follows call order only if nothing
+   * yields to the event loop first.
+   *
+   * A rejection from `run` still rejects the promise returned to *this*
+   * caller; only the internal chain link is swallowed (`.catch(() => {})`)
+   * so one failed run doesn't wedge every later call permanently.
+   */
+  private runExclusive<T>(run: () => Promise<T>): Promise<T> {
     const result = this.resolveQueue.catch(() => {}).then(run);
     this.resolveQueue = result;
     return result;
@@ -361,7 +374,17 @@ export class ZoteroMutationService {
     }
   }
 
+  /**
+   * Entry point calls {@link runExclusive} synchronously (no `await` before
+   * it) so a restore queued back-to-back with a `resolveReview` accept/reject
+   * (in either order) is serialized against it rather than racing to start
+   * first -- see `runExclusive`'s own doc comment.
+   */
   async restoreCheckpoint(checkpointID: string): Promise<MutationResolution> {
+    return this.runExclusive(() => this.runRestoreCheckpoint(checkpointID));
+  }
+
+  private async runRestoreCheckpoint(checkpointID: string): Promise<MutationResolution> {
     await this.ensureCheckpointsLoaded();
     const checkpoint = this.checkpoints.get(checkpointID);
     if (!checkpoint) throw new Error("Checkpoint not found");

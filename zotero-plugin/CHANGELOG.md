@@ -23,6 +23,9 @@
 - 新增 Note 按钮（侧栏顶部）：点击后冻结一份快照（全部锚点及其完整问答、用户自己的批注、当前 PDF 的 sha256），若快照中任一锚点创建时记录的 PDF 哈希与当前文件不一致会先警告"论文文件已变化"；随后用一个隐藏的只读 Codex 回合（5 分钟上限）把快照综合成结构化 Markdown + LaTeX 阅读笔记（Citation / One-sentence Takeaway / Method / Key Equations / Reading Q&A / Open Questions / My Understanding），本地做 KaTeX 逐式渲染校验后给出预览（含锚点数、未解决问题数、待核对公式数的统计条）与"新建版本 / 替换某个已有版本"单选（默认新建）。点击 Apply 才会把生成内容作为带 YAML front matter（条目/附件 key、PDF 哈希、模型、各项计数）的 `.md` 子附件导入 Zotero；选择替换时先导入新版本、成功后才删除旧版本，中途失败不影响旧附件；重复点击 Apply 受重入保护，不会产生重复导入。
 - 移除：每轮问答自动同步到 Zotero 笔记的旧路径（连同其 `extensions.zotkit.noteSync` 偏好）——上文标记删除线的那条记录所述功能尚未随任何版本发布，现由阅读留痕的高亮批注与 Note 按钮生成的 `.md` 附件取代。已存在的、打有 `zotkit-chat` 标签的旧笔记不受影响，插件不会读取、修改或删除它们。
 - 安全模型：无论 Ask 还是 Agent 模式，模型的工具列表中都不包含任何批注或附件写入工具（已用单测在工具注册表层面断言）；上述全部 Zotero 写入都只发生在用户点按（发问、撤销、已理解、Apply）触发的确定性插件代码路径中，PDF 与批注内容在提示词中均以不可信内容包裹。
+- 修复：上一条 Diff 转义遗漏了零宽字符（U+200B–U+200D）、BOM（U+FEFF）、word joiner（U+2060）、阿拉伯字母标记（U+061C）与 U+2028/U+2029 行/段分隔符；collection 标签直接拼接进单行 diff，标签内的原始换行能在不改变 `operations.length` 的前提下伪造出一行从未被提议过的 diff 记录。现在 `DANGEROUS_DIFF_CHARS` 覆盖上述全部码点，新增 `sanitizeInlineDiffText`（在 `sanitizeDiffText` 基础上把换行转成字面文本 \u000A、制表符转成字面文本 \u0009）用于渲染 collection 标签，渲染行数不再受标签内容影响。
+- 修复：relink 的 Apply 会重新校验目标路径，却未与评审时展示的 canonical 路径比对，评审通过到点击 Apply 之间再次换靶（TOCTOU）仍会静默生效；`replace_pdf` 则从未校验过写入目标（受管附件路径）本身，symlink 化的附件路径可以把写入重定向到任意位置。现在 relink 的 Apply 断言重新解析出的 canonical 路径必须与 `operation.newPath` 完全一致，不一致直接拒绝；`replace_pdf` 在提案阶段拒绝 symlink 叶子目标并把 `normalize()` 后的 canonical 路径（`destinationCanonicalPath`）随 staged binding 一并保存，Apply 前重新推导并断言相等，不等时不写入任何字节，写入统一改用 canonical 目标路径；缺失该字段的 binding 一律按不可信拒绝。
+- 修复：checkpoint Restore 与审批 Apply/Reject 此前各自独立执行，并发触发（例如刚点 Restore 又点了另一条审批的 Apply）时对 Zotero/文件系统的宿主调用可能交错执行。现在从 `resolveReview` 现有的串行队列中抽出 `runExclusive`，Restore 入口同样经它执行，与彼此以及其他并发的 accept/reject 严格串行；侧边栏在任一审批处于 `resolving` 状态时禁用全部 Restore 按钮，避免点击后排队等待却像是卡住。
 
 ## 0.3.0
 
