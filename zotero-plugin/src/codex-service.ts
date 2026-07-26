@@ -17,7 +17,7 @@ import {
   type ThreadStartParams,
   type TurnStartParams
 } from "./codex-app-server";
-import { CODEX_CAPABILITIES, ENGINE_CAPABILITIES, type AgentCapabilities, type AgentClient } from "./agent-client";
+import { CODEX_CAPABILITIES, type AgentCapabilities, type AgentClient } from "./agent-client";
 import { EngineClient, type EngineClientOptions } from "./engine-client";
 import { loadProviders, providerKeyRealm } from "./providers";
 import { readSecret } from "./secrets";
@@ -748,7 +748,20 @@ export class CodexService {
     }
     this.stop();
     setPrefString("backend", target);
-    await this.startInternal();
+    try {
+      await this.startInternal();
+    }
+    catch (error) {
+      const fallbackError = error instanceof Error ? error : new Error(String(error));
+      this.state.appServerAvailable = false;
+      this.state.fallbackReason = fallbackError.message;
+      this.callbacks.onState();
+      this.callbacks.onFallbackRequested?.(fallbackError);
+      throw fallbackError;
+    }
+    if (this.state.mode === "agent" && !this.state.capabilities.supportsAgentMode) {
+      this.state.mode = "ask";
+    }
     this.activeContext = context;
     this.activePaperKey = null;
     if (carried.length && context?.workspace && paperKey && this.client instanceof EngineClient) {

@@ -60,7 +60,7 @@ function fakeEngine() {
 }
 
 function makeService(engine: AgentClient) {
-  const callbacks = { onState: vi.fn(), onError: vi.fn() };
+  const callbacks = { onState: vi.fn(), onError: vi.fn(), onFallbackRequested: vi.fn() };
   const bridge = {
     start: vi.fn().mockRejectedValue(new Error("bridge must not start for engine backend")),
     spawnPipe: vi.fn(),
@@ -146,5 +146,49 @@ describe("switchBackend with history carry-over", () => {
     expect(service.state.backend).toBe("engine");
     expect(service.state.activeThreadId).toBe("eng-imported");
     expect(internal.sessions.papers["1-ATTACH"].backend).toBe("engine");
+  });
+});
+
+describe("switchBackend failure path", () => {
+  it("surfaces fallback state and rejects when the target backend fails to start", async () => {
+    setPrefString("backend", "codex");
+    const engine = fakeEngine();
+    (engine as any).connect = vi.fn().mockRejectedValue(new Error("engine boom"));
+    const { service, callbacks } = makeService(engine);
+    const internal = service as any;
+    internal.activeContext = paperContext();
+    internal.activePaperKey = "1-ATTACH";
+    internal.sessions = { version: 1, papers: {} };
+    service.state.backend = "codex";
+    service.state.connected = true;
+    internal.client = { close: vi.fn() };
+
+    await expect(service.switchBackend("engine", false)).rejects.toThrow("engine boom");
+
+    expect(service.state.appServerAvailable).toBe(false);
+    expect(service.state.fallbackReason).toBe("engine boom");
+    expect(callbacks.onFallbackRequested).toHaveBeenCalled();
+  });
+});
+
+describe("switchBackend mode reconciliation", () => {
+  it("resets agent mode when the target backend does not support it", async () => {
+    setPrefString("backend", "codex");
+    const engine = fakeEngine();
+    const { service } = makeService(engine);
+    const internal = service as any;
+    internal.activeContext = paperContext();
+    internal.activePaperKey = "1-ATTACH";
+    internal.sessions = { version: 1, papers: {} };
+    internal.saveSessions = vi.fn().mockResolvedValue(undefined);
+    service.state.backend = "codex";
+    service.state.connected = true;
+    service.state.mode = "agent";
+    internal.client = { close: vi.fn() };
+
+    await service.switchBackend("engine", false);
+
+    expect(service.state.backend).toBe("engine");
+    expect(service.state.mode).toBe("ask");
   });
 });
