@@ -1714,6 +1714,18 @@ export class SidebarView {
       terminal.addEventListener("click", () => this.callbacks.onOpenTerminal());
       card.appendChild(terminal);
     }
+    if (this.state.phase === "unavailable" || this.state.phase === "error" || this.state.phase === "signed-out") {
+      // A broken backend/connection must not lock the user out of the
+      // settings gear (it lives in the composer, hidden behind this
+      // full-pane overlay in every non-ready phase): offer the same
+      // escape hatch here.
+      const settings = this.doc.createElement("button");
+      settings.type = "button";
+      settings.className = "zc-login-secondary zc-error-settings";
+      settings.textContent = "打开模型服务设置";
+      settings.addEventListener("click", () => this.callbacks.onOpenProviderSettings?.());
+      card.appendChild(settings);
+    }
     this.loginLayer.appendChild(card);
   }
 

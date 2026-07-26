@@ -55,6 +55,24 @@ describe("SidebarView", () => {
     expect(handlers.onOpenTerminal).toHaveBeenCalledOnce();
   });
 
+  it.each(["unavailable", "error", "signed-out"] as const)(
+    "keeps settings reachable from the %s phase card (lockout fix)",
+    (phase) => {
+      const body = document.createElement("div");
+      document.body.appendChild(body);
+      const handlers = { ...callbacks(), onOpenProviderSettings: vi.fn() };
+      const view = new SidebarView(body, handlers);
+      view.setState({ phase, error: "app-server is unavailable" });
+
+      const settings = body.querySelector<HTMLButtonElement>(".zc-error-settings");
+      expect(settings).not.toBeNull();
+      expect(settings!.textContent).toBe("打开模型服务设置");
+      settings!.click();
+
+      expect(handlers.onOpenProviderSettings).toHaveBeenCalledOnce();
+    }
+  );
+
   it("renders the current paper, streamed answer, tools, and safe controls", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);
