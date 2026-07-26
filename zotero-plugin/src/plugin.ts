@@ -29,7 +29,7 @@ import { TerminalPanel, type TerminalPaperOptions } from "./terminal-panel";
 import { loadSettings, type ZoteroChatSettings } from "./settings";
 import { ProviderSettingsView } from "./provider-settings";
 import { defaultSelectableModel, modelBackend } from "./model-menu";
-import { shouldAutoOpenFloat } from "./plugin-helpers";
+import { resolveSettingsHost, shouldAutoOpenFloat } from "./plugin-helpers";
 import {
   loadProviders,
   saveProviders,
@@ -699,7 +699,7 @@ export class ZoteroChatPlugin {
       onRefreshContext: () => void this.retryResearchChat(body).catch((error) => this.reportError(error)),
       onInsertSelection: () => void this.attachSelection(false),
       onModelChange: (model) => { void this.handleModelSelection(model); },
-      onOpenProviderSettings: () => this.openProviderSettings(),
+      onOpenProviderSettings: () => this.openProviderSettings(body),
       onChooseCodexBackend: () => {
         void this.codex.switchBackend("codex", false)
           .then(() => {
@@ -1843,9 +1843,13 @@ export class ZoteroChatPlugin {
     }
   }
 
-  private openProviderSettings(): void {
-    const body = this.activeSidebarBody();
-    if (!body) return;
+  private openProviderSettings(preferredBody?: HTMLElement): void {
+    const fallback = [...this.chatViews.keys()].find((candidate) => candidate.isConnected) ?? null;
+    const body = resolveSettingsHost(preferredBody ?? null, this.activeSidebarBody(), fallback);
+    if (!body) {
+      this.reportError(new Error("请先展开 Zotkit 侧栏"));
+      return;
+    }
     if (this.providerSettingsHost && !this.providerSettingsHost.isConnected) {
       this.closeProviderSettings();
     }
@@ -1881,7 +1885,8 @@ export class ZoteroChatPlugin {
         },
       });
     }
-    void this.refreshProviderSettings(null);
+    void this.refreshProviderSettings(null)
+      .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
   }
 
   private closeProviderSettings(): void {

@@ -66,6 +66,7 @@
 }
 
 .zc-pane-host {
+  position: relative;
   container-name: zotkit-pane;
   container-type: inline-size;
   width: 100%;

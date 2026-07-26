@@ -38,3 +38,26 @@ export function shouldAutoOpenFloat(state: AutoOpenFloatState): boolean {
   if (state.activeTurnId !== null && state.activeTurnId === state.dismissedTurnId) return false;
   return true;
 }
+
+/**
+ * Gear-click bug fix: `openProviderSettings()` used to ignore which sidebar
+ * view was actually clicked and independently re-derive "the active sidebar
+ * body" via tab-id matching against `this.views`. When that heuristic came
+ * up empty (e.g. the gear was clicked in a reader tab whose body didn't
+ * match the plugin's idea of the "selected" tab), the click did nothing --
+ * no error, no log, no feedback.
+ *
+ * Precedence: the clicked view's own body wins whenever it's still attached
+ * to the DOM (covers the normal case directly, no heuristics needed);
+ * otherwise fall back to the plugin's "active" sidebar body, then to any
+ * still-connected mounted view, then give up (null -- caller must surface
+ * an error instead of silently doing nothing).
+ */
+export function resolveSettingsHost<T extends { isConnected: boolean }>(
+  preferred: T | null,
+  active: T | null,
+  fallback: T | null,
+): T | null {
+  if (preferred && preferred.isConnected) return preferred;
+  return active ?? fallback ?? null;
+}

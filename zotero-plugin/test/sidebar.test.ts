@@ -94,6 +94,25 @@ describe("SidebarView", () => {
     }
   });
 
+  it("wires the composer's ⚙ gear button to onOpenProviderSettings (gear-click no-op bug)", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onOpenProviderSettings: vi.fn() };
+    const view = new SidebarView(body, handlers);
+    view.setState({
+      phase: "ready",
+      models: [{ id: "gpt-5", label: "GPT-5" }],
+      selectedModel: "gpt-5",
+    });
+
+    const gear = body.querySelector<HTMLButtonElement>(".zc-model-settings")!;
+    expect(gear).not.toBeNull();
+    expect(gear.textContent).toBe("⚙");
+    gear.click();
+
+    expect(handlers.onOpenProviderSettings).toHaveBeenCalledOnce();
+  });
+
   it("provides Cursor-style thread tabs, modes, context chips, and an @ context menu", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);
@@ -973,6 +992,12 @@ describe("Reader pane layout CSS", () => {
     expect(styles).toContain("@container zotkit-pane (max-width: 340px)");
     expect(styles).toContain("grid-template-columns: auto minmax(0, 1fr)");
     expect(styles).not.toContain("@media (max-width: 420px)");
+  });
+
+  it("gives .zc-pane-host a containing block so the absolutely-positioned provider overlay resolves against it, not an unrelated ancestor (gear-click bug)", () => {
+    const styles = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
+    expect(styles).toContain(".zc-pane-host {\n  position: relative;");
+    expect(styles).toContain(".zc-provider-overlay {\n  position: absolute;\n  inset: 0;");
   });
 });
 
