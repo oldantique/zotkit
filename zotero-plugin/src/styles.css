@@ -668,6 +668,11 @@
 .zc-history-menu button:hover, .zc-history-menu button.is-active { background: var(--zc-bg-hover); }
 .zc-history-menu button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zc-history-menu button small { color: var(--zc-muted); font-size: 9px; }
+.zc-history-menu-item { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.zc-history-menu-item > button:not(.zc-thread-delete) { flex: 1 1 auto; min-width: 0; }
+.zc-history-menu .zc-thread-delete { display: none; grid-template-columns: none; width: 16px; height: 16px; padding: 0; }
+.zc-history-menu-item:hover .zc-thread-delete,
+.zc-history-menu-item:focus-within .zc-thread-delete { display: flex; }
 
 .zc-terminal-sidebar {
   position: relative;

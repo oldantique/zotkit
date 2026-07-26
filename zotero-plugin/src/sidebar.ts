@@ -1755,6 +1755,8 @@ export class SidebarView {
       menu.appendChild(empty);
     }
     for (const thread of this.state.threads) {
+      const item = this.doc.createElement("div");
+      item.className = "zc-history-menu-item";
       const button = this.doc.createElement("button");
       button.type = "button";
       button.className = thread.active ? "is-active" : "";
@@ -1768,7 +1770,25 @@ export class SidebarView {
         menu.remove();
         this.callbacks.onSelectThread(thread.id);
       });
-      menu.appendChild(button);
+      item.appendChild(button);
+      // Full picker, not just the 12-item tab strip -- every row here needs
+      // its own delete affordance too (bug-triage #3 reviewer follow-up).
+      // stopPropagation keeps this from also selecting the thread; closing
+      // the whole menu (same as a select click already does) makes the
+      // deleted row disappear immediately instead of leaving it stale.
+      const remove = this.doc.createElement("button");
+      remove.type = "button";
+      remove.className = "zc-thread-delete";
+      remove.title = "删除对话";
+      remove.setAttribute("aria-label", "删除对话");
+      remove.textContent = "×";
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        menu.remove();
+        this.callbacks.onDeleteThread?.(thread.id);
+      });
+      item.appendChild(remove);
+      menu.appendChild(item);
     }
     this.root.appendChild(menu);
   }

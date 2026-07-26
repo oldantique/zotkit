@@ -681,12 +681,30 @@ export class CodexService {
   }
 
   private async deleteThreadInternal(threadId: string): Promise<void> {
+    // enqueuePaperTransition is a FIFO queue: if the user switched papers
+    // (or threads) right after clicking delete, a queued setPaper()/
+    // switchThread() call can run first and move activePaperKey on before
+    // this executes. There's nothing destructive to do in that case --
+    // re-render so the UI reflects wherever the queue actually landed
+    // instead of leaving whatever was on screen at click time, then no-op
+    // silently (no error to surface; the user's intent was already
+    // superseded by their own subsequent action).
     const paperKey = this.activePaperKey;
-    if (!paperKey) return;
+    if (!paperKey) {
+      this.callbacks.onState();
+      return;
+    }
     const wasCurrentRecord = this.sessions.papers[paperKey]?.threadId === threadId;
     const history = this.sessions.history?.[paperKey] || [];
     const wasInHistory = history.some((record) => record.threadId === threadId);
-    if (!wasCurrentRecord && !wasInHistory) return;
+    if (!wasCurrentRecord && !wasInHistory) {
+      // Same FIFO-queue race: by now `paperKey` may no longer be the paper
+      // the user was viewing when they clicked delete, so `threadId` just
+      // isn't part of THIS paper's records. Re-render for the same reason
+      // as above, then no-op.
+      this.callbacks.onState();
+      return;
+    }
     const wasActive = threadId === this.state.activeThreadId;
     if (wasCurrentRecord) delete this.sessions.papers[paperKey];
     if (this.sessions.history) {
@@ -701,17 +719,28 @@ export class CodexService {
       // paper (history is kept most-recent-first, mirroring
       // switchThreadInternal's own bookkeeping), or leave no active thread
       // when none remain -- the next send() starts a fresh one via
-      // sendToActiveTurn's `!activeThreadId` branch.
-      const remaining = (this.sessions.history?.[paperKey] || [])
+      // sendToActiveTurn's `!activeThreadId` branch. The backend filter
+      // here is ONLY for picking which record to resume (never send a
+      // codex-backed threadId to an engine threadResume or vice versa) --
+      // it must never be used to decide what gets WRITTEN BACK to
+      // sessions.history, or every other-backend record for this paper
+      // would be silently discarded (reviewer-caught regression: a paper
+      // with codex history + an active engine thread lost its codex
+      // history entirely on delete).
+      const sameBackendHistory = (this.sessions.history?.[paperKey] || [])
         .filter((record) => (record.backend ?? "codex") === this.state.backend);
-      const next = remaining[0];
+      const next = sameBackendHistory[0];
       if (next && this.activeContext?.workspace) {
         try {
           const response = await this.requireClient().threadResume({
             threadId: next.threadId,
             ...this.threadModeSettings(this.activeContext),
           });
-          this.sessions.history![paperKey] = remaining.slice(1);
+          // Remove only `next` (now promoted into sessions.papers) from the
+          // FULL, backend-unfiltered history -- every other-backend record
+          // must survive untouched.
+          this.sessions.history![paperKey] = (this.sessions.history![paperKey] || [])
+            .filter((record) => record.threadId !== next.threadId);
           this.sessions.papers[paperKey] = { ...next, updatedAt: new Date().toISOString() };
           this.state.activeThreadId = response.thread.id;
           this.state.activeTurnId = null;

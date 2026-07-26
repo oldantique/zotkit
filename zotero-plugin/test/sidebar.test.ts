@@ -181,6 +181,34 @@ describe("SidebarView", () => {
     expect(handlers.onSelectThread).not.toHaveBeenCalled();
   });
 
+  it("gives every row in the 对话历史 dropdown a delete button too, not just the 12-item tab strip (reviewer Important #2)", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = callbacks();
+    handlers.onDeleteThread = vi.fn();
+    const view = new SidebarView(body, handlers);
+    view.setState({
+      phase: "ready",
+      threads: [
+        { id: "thread-a", title: "Main theorem", updatedAt: "2026-07-22", active: true },
+        { id: "thread-b", title: "Methods", updatedAt: "2026-07-21", active: false },
+      ],
+    });
+
+    body.querySelector<HTMLButtonElement>('button[title="对话历史"]')!.click();
+    const menu = body.querySelector<HTMLElement>(".zc-history-menu")!;
+    expect(menu).not.toBeNull();
+    const deleteButtons = menu.querySelectorAll<HTMLButtonElement>(".zc-thread-delete");
+    expect(deleteButtons).toHaveLength(2);
+
+    deleteButtons[1]!.click();
+    expect(handlers.onDeleteThread).toHaveBeenCalledWith("thread-b");
+    expect(handlers.onDeleteThread).toHaveBeenCalledOnce();
+    expect(handlers.onSelectThread).not.toHaveBeenCalled();
+    // The menu closes immediately -- the deleted row doesn't linger stale.
+    expect(body.querySelector(".zc-history-menu")).toBeNull();
+  });
+
   it("renders plan, diff review, pending approval, and restorable checkpoints", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);

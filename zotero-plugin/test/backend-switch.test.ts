@@ -399,7 +399,42 @@ describe("deleteThread (bug-triage #3)", () => {
     expect((engine as any).threadResume).not.toHaveBeenCalled();
   });
 
-  it("no-ops for a thread id that isn't the paper's current record or in its history", async () => {
+  it("no-ops for a thread id that isn't the paper's current record or in its history, but still re-renders (reviewer Important #3: FIFO-queue race feedback)", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    const { service, callbacks } = makeService(engine);
+    await service.start();
+    const internal = service as any;
+    internal.saveSessions = vi.fn().mockResolvedValue(undefined);
+    await service.setPaper(paperContext());
+    const activeId = service.state.activeThreadId!;
+    internal.saveSessions.mockClear();
+    callbacks.onState.mockClear();
+
+    await service.deleteThread("nonexistent-thread");
+
+    expect(service.state.activeThreadId).toBe(activeId);
+    expect(internal.saveSessions).not.toHaveBeenCalled();
+    // No destructive write happened, but the UI still needs to re-render
+    // against reality (e.g. a queued setPaper()/switchThread() moved the
+    // active paper on before this ran) instead of showing stale state.
+    expect(callbacks.onState).toHaveBeenCalled();
+  });
+
+  it("no-ops with a re-render when there is no active paper at all", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    const { service, callbacks } = makeService(engine);
+    await service.start();
+    callbacks.onState.mockClear();
+
+    await service.deleteThread("thread-x");
+
+    expect((service as any).activePaperKey).toBeNull();
+    expect(callbacks.onState).toHaveBeenCalled();
+  });
+
+  it("deleting an active engine thread does not wipe unrelated-backend (codex) history records (reviewer Critical: cross-backend history wipe)", async () => {
     setPrefString("backend", "engine");
     const engine = fakeEngine();
     const { service } = makeService(engine);
@@ -408,11 +443,25 @@ describe("deleteThread (bug-triage #3)", () => {
     internal.saveSessions = vi.fn().mockResolvedValue(undefined);
     await service.setPaper(paperContext());
     const activeId = service.state.activeThreadId!;
-    internal.saveSessions.mockClear();
+    // Full history mixes backends: one other engine record (the fallback
+    // candidate) plus two codex records that must survive the delete
+    // untouched.
+    internal.sessions.history = {
+      "1-ATTACH": [
+        { threadId: "engine-old", title: "较新的 engine 会话", workspace: "/w", updatedAt: "t3", backend: "engine" },
+        { threadId: "codex-old-1", title: "Codex 会话 1", workspace: "/w", updatedAt: "t2", backend: "codex" },
+        { threadId: "codex-old-2", title: "Codex 会话 2", workspace: "/w", updatedAt: "t1", backend: "codex" },
+      ],
+    };
 
-    await service.deleteThread("nonexistent-thread");
+    await service.deleteThread(activeId);
 
-    expect(service.state.activeThreadId).toBe(activeId);
-    expect(internal.saveSessions).not.toHaveBeenCalled();
+    expect((engine as any).threadResume).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "engine-old" }),
+    );
+    expect(service.state.activeThreadId).toBe("engine-old");
+    expect(internal.sessions.papers["1-ATTACH"].threadId).toBe("engine-old");
+    const remainingIds = internal.sessions.history["1-ATTACH"].map((record: { threadId: string }) => record.threadId);
+    expect(remainingIds).toEqual(["codex-old-1", "codex-old-2"]);
   });
 });
