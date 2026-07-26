@@ -1163,6 +1163,9 @@ export class ZoteroChatPlugin {
       if (!body.isConnected) {
         view.destroy();
         this.chatViews.delete(body);
+        if (this.providerSettingsHost && body.contains(this.providerSettingsHost)) {
+          this.closeProviderSettings();
+        }
         continue;
       }
       view.setState({
@@ -1721,14 +1724,26 @@ export class ZoteroChatPlugin {
   private openProviderSettings(): void {
     const body = this.activeSidebarBody();
     if (!body) return;
+    if (this.providerSettingsHost && !this.providerSettingsHost.isConnected) {
+      this.closeProviderSettings();
+    }
     if (!this.providerSettingsHost) {
       this.providerSettingsHost = body.ownerDocument.createElement("div");
       this.providerSettingsHost.className = "zc-provider-overlay";
       body.appendChild(this.providerSettingsHost);
       this.providerSettingsView = new ProviderSettingsView(this.providerSettingsHost, {
-        onSave: (profile, apiKey) => { void this.saveProvider(profile, apiKey); },
-        onDelete: (providerId) => { void this.deleteProvider(providerId); },
-        onTest: (profile, apiKey) => { void this.testProviderConnection(profile, apiKey); },
+        onSave: (profile, apiKey) => {
+          void this.saveProvider(profile, apiKey)
+            .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
+        },
+        onDelete: (providerId) => {
+          void this.deleteProvider(providerId)
+            .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
+        },
+        onTest: (profile, apiKey) => {
+          void this.testProviderConnection(profile, apiKey)
+            .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
+        },
         onClose: () => this.closeProviderSettings(),
       });
     }
