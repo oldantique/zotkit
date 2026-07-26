@@ -27,6 +27,16 @@ import {
 import { FloatPanelView, latestExchange } from "./float-panel";
 import { TerminalPanel, type TerminalPaperOptions } from "./terminal-panel";
 import { loadSettings, type ZoteroChatSettings } from "./settings";
+import { ProviderSettingsView } from "./provider-settings";
+import { modelBackend } from "./model-menu";
+import {
+  loadProviders,
+  saveProviders,
+  testProvider,
+  providerKeyRealm,
+  type ProviderProfile,
+} from "./providers";
+import { saveSecret, readSecret, deleteSecret, maskSecret } from "./secrets";
 import {
   ZoteroMutationApplyError,
   ZoteroMutationService,
@@ -57,6 +67,7 @@ import {
   PLUGIN_ID,
   prefString,
   profilePath,
+  randomID,
   setPrefString,
 } from "./platform";
 
@@ -113,6 +124,9 @@ export class ZoteroChatPlugin {
   private destroyed = false;
   private readonly turnStartedAt = new Map<string, number>();
   private readonly turnMeta = new Map<string, Map<string, TurnMeta>>();
+  private pendingBackendSwitch: { targetModel: string; targetLabel: string } | null = null;
+  private providerSettingsHost: HTMLElement | null = null;
+  private providerSettingsView: ProviderSettingsView | null = null;
 
   async startup(data: PluginStartupData): Promise<void> {
     this.settings = await loadSettings();
@@ -665,11 +679,14 @@ export class ZoteroChatPlugin {
       onOpenTerminal: () => void this.openTerminal().then(() => this.terminal.focus()).catch((error) => this.reportError(error)),
       onRefreshContext: () => void this.retryResearchChat(body).catch((error) => this.reportError(error)),
       onInsertSelection: () => void this.attachSelection(false),
-      onModelChange: (model) => {
-        this.selectedModel = model;
-        setPrefString("defaultModel", model);
-        this.renderChatViews();
+      onModelChange: (model) => { void this.handleModelSelection(model); },
+      onOpenProviderSettings: () => this.openProviderSettings(),
+      onChooseCodexBackend: () => {
+        void this.codex.switchBackend("codex", false)
+          .then(() => this.renderChatViews())
+          .catch((error) => this.reportError(error));
       },
+      onBackendSwitchDecision: (decision) => { void this.resolveBackendSwitch(decision); },
       onEffortChange: (effort) => {
         this.selectedEffort = effort;
         setPrefString("reasoningEffort", effort);
@@ -776,7 +793,11 @@ export class ZoteroChatPlugin {
 
   private async sendChat(text: string): Promise<void> {
     if (!this.codex.state.connected) await this.ensureChatSession();
-    if (!this.codex.isSignedIn()) throw new Error("请先使用 ChatGPT 登录 Codex");
+    if (!this.codex.isSignedIn()) {
+      throw new Error(this.codex.state.backend === "engine"
+        ? "请先在设置中添加模型服务"
+        : "请先使用 ChatGPT 登录 Codex");
+    }
     this.chatPhase = "ready";
     const context = this.context;
     await this.codex.send(text, this.selectedModel, this.selectedEffort);
@@ -788,7 +809,11 @@ export class ZoteroChatPlugin {
 
   private async newChat(): Promise<void> {
     await this.openResearchChat(undefined, false);
-    if (!this.codex.isSignedIn()) throw new Error("请先使用 ChatGPT 登录 Codex");
+    if (!this.codex.isSignedIn()) {
+      throw new Error(this.codex.state.backend === "engine"
+        ? "请先在设置中添加模型服务"
+        : "请先使用 ChatGPT 登录 Codex");
+    }
     await this.codex.newThread();
     this.activeChatView()?.focusComposer();
   }
@@ -797,6 +822,42 @@ export class ZoteroChatPlugin {
     await this.openResearchChat(undefined, false);
     if (newThread && this.codex.isSignedIn() && this.context) await this.codex.newThread();
     this.attachSelection(true);
+  }
+
+  private async handleModelSelection(model: string): Promise<void> {
+    const target = modelBackend(model);
+    if (this.codex.state.connected && target !== this.codex.state.backend) {
+      this.pendingBackendSwitch = {
+        targetModel: model,
+        targetLabel: target === "engine" ? "内置引擎" : "Codex（订阅）",
+      };
+      this.renderChatViews();
+      return;
+    }
+    this.selectedModel = model;
+    setPrefString("defaultModel", model);
+    this.renderChatViews();
+  }
+
+  private async resolveBackendSwitch(decision: "carry" | "fresh" | "cancel"): Promise<void> {
+    const pending = this.pendingBackendSwitch;
+    this.pendingBackendSwitch = null;
+    if (!pending || decision === "cancel") {
+      this.renderChatViews();
+      return;
+    }
+    const target = modelBackend(pending.targetModel);
+    try {
+      await this.codex.switchBackend(target, decision === "carry");
+      this.selectedModel = pending.targetModel;
+      setPrefString("defaultModel", pending.targetModel);
+    }
+    catch (error) {
+      this.reportError(error instanceof Error ? error : new Error(String(error)));
+    }
+    finally {
+      this.renderChatViews();
+    }
   }
 
   private mountFloatPanel(
@@ -813,11 +874,7 @@ export class ZoteroChatPlugin {
       onClose: () => this.hideFloatPanel(win),
       onRemoveSelection: () => this.removeInteractionContext("current-selection"),
       onLogin: () => void this.codex.login().catch((error) => this.reportError(error)),
-      onModelChange: (model) => {
-        this.selectedModel = model;
-        setPrefString("defaultModel", model);
-        this.renderChatViews();
-      },
+      onModelChange: (model) => { void this.handleModelSelection(model); },
       onOpacityChange: (value) => {
         this.floatOpacity = value;
         setPrefString("floatOpacity", String(value));
@@ -938,6 +995,10 @@ export class ZoteroChatPlugin {
         paperTitle: context ? paperTitle(context) : "论文助手",
         models: this.codex.state.models,
         selectedModel: this.selectedModel,
+        capabilities: {
+          supportsAgentMode: this.codex.state.capabilities.supportsAgentMode,
+          supportsLogin: this.codex.state.capabilities.supportsLogin,
+        },
         selection: this.addedContextIDs.has("current-selection") && context?.selection?.text
           ? {
             text: context.selection.text,
@@ -1106,8 +1167,19 @@ export class ZoteroChatPlugin {
       }
       view.setState({
         phase: this.chatPhase,
-        accountLabel: this.codex.isSignedIn() ? this.codex.accountLabel() : undefined,
+        accountLabel: this.codex.state.connected ? this.codex.accountLabel() : undefined,
         error: this.chatError || this.codex.state.fallbackReason || undefined,
+        backend: this.codex.state.backend,
+        capabilities: {
+          supportsAgentMode: this.codex.state.capabilities.supportsAgentMode,
+          supportsLogin: this.codex.state.capabilities.supportsLogin,
+        },
+        onboarding: this.codex.state.backend === "engine"
+          && this.codex.state.connected
+          && loadProviders().length === 0,
+        backendSwitch: this.pendingBackendSwitch
+          ? { targetLabel: this.pendingBackendSwitch.targetLabel }
+          : null,
         context: context ? {
           key: `${context.attachment.libraryID ?? "0"}-${context.attachment.key}`,
           title: paperTitle(context),
@@ -1643,6 +1715,82 @@ export class ZoteroChatPlugin {
       this.chatError = value.message;
       if (this.chatPhase === "connecting") this.chatPhase = "error";
       this.renderChatViews();
+    }
+  }
+
+  private openProviderSettings(): void {
+    const body = this.activeSidebarBody();
+    if (!body) return;
+    if (!this.providerSettingsHost) {
+      this.providerSettingsHost = body.ownerDocument.createElement("div");
+      this.providerSettingsHost.className = "zc-provider-overlay";
+      body.appendChild(this.providerSettingsHost);
+      this.providerSettingsView = new ProviderSettingsView(this.providerSettingsHost, {
+        onSave: (profile, apiKey) => { void this.saveProvider(profile, apiKey); },
+        onDelete: (providerId) => { void this.deleteProvider(providerId); },
+        onTest: (profile, apiKey) => { void this.testProviderConnection(profile, apiKey); },
+        onClose: () => this.closeProviderSettings(),
+      });
+    }
+    void this.refreshProviderSettings(null);
+  }
+
+  private closeProviderSettings(): void {
+    this.providerSettingsView?.destroy();
+    this.providerSettingsView = null;
+    this.providerSettingsHost?.remove();
+    this.providerSettingsHost = null;
+  }
+
+  private async refreshProviderSettings(statusText: string | null, busy = false): Promise<void> {
+    if (!this.providerSettingsView) return;
+    const providers = loadProviders();
+    const keyMask: Record<string, string> = {};
+    for (const provider of providers) {
+      const key = await readSecret(providerKeyRealm(provider.id), provider.id);
+      if (key) keyMask[provider.id] = maskSecret(key);
+    }
+    this.providerSettingsView.setState({ providers, keyMask, statusText, busy });
+  }
+
+  private async saveProvider(profile: ProviderProfile, apiKey: string | null): Promise<void> {
+    if (!profile.name || !profile.models.length) {
+      await this.refreshProviderSettings("请至少填写名称和一个模型");
+      return;
+    }
+    const id = profile.id || randomID("prov").slice(0, 24);
+    const next = { ...profile, id };
+    const rest = loadProviders().filter((candidate) => candidate.id !== id);
+    saveProviders([...rest, next]);
+    if (apiKey) await saveSecret(providerKeyRealm(id), id, apiKey);
+    if (this.codex.state.backend === "engine" && this.codex.state.connected) {
+      await this.codex.refreshModels().catch(() => { /* surfaced on next send */ });
+    }
+    await this.refreshProviderSettings(`已保存 ${next.name}`);
+    this.renderChatViews();
+  }
+
+  private async deleteProvider(providerId: string): Promise<void> {
+    saveProviders(loadProviders().filter((candidate) => candidate.id !== providerId));
+    await deleteSecret(providerKeyRealm(providerId), providerId);
+    if (this.codex.state.backend === "engine" && this.codex.state.connected) {
+      await this.codex.refreshModels().catch(() => { /* ignore */ });
+    }
+    await this.refreshProviderSettings("已删除");
+    this.renderChatViews();
+  }
+
+  private async testProviderConnection(profile: ProviderProfile, apiKey: string | null): Promise<void> {
+    await this.refreshProviderSettings("正在测试…", true);
+    try {
+      const key = apiKey
+        ?? (profile.id ? await readSecret(providerKeyRealm(profile.id), profile.id) : null);
+      if (!key) throw new Error("请先填写 API key");
+      const result = await testProvider(profile, key);
+      await this.refreshProviderSettings(result);
+    }
+    catch (error) {
+      await this.refreshProviderSettings(error instanceof Error ? error.message : String(error));
     }
   }
 

@@ -143,6 +143,7 @@ describe("Zotkit Reader terminal state", () => {
         running: true,
         fallbackReason: null,
         models: [{ id: "gpt-5", label: "GPT-5" }, { id: "gpt-5-codex", label: "GPT-5 Codex" }],
+        capabilities: { supportsAgentMode: true, supportsLogin: true },
       },
       getChatEntries: () => [
         { id: "u1", kind: "user", text: "old question" },
