@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown";
+import { renderModelOptions } from "./model-menu";
 import { copyToClipboard } from "./platform";
 import {
   activityLabel,
@@ -142,6 +143,14 @@ export interface SidebarState {
   paperTrailConsent: { question: string; pageNumber?: number } | null;
   anchors: QuestionListItem[];
   noting: NotingView | null;
+  /** Which chat backend is currently active. Defaults to `"codex"`. */
+  backend?: "codex" | "engine";
+  /** Feature flags for the active backend; an absent flag defaults to `true`. */
+  capabilities?: { supportsAgentMode: boolean; supportsLogin: boolean };
+  /** Shows the `zc-engine-onboarding` card ("no model service configured yet"). Defaults to `false`. */
+  onboarding?: boolean;
+  /** Non-null shows the `zc-backend-switch` confirmation card. */
+  backendSwitch?: { targetLabel: string } | null;
 }
 
 export interface SidebarCallbacks {
@@ -169,6 +178,9 @@ export interface SidebarCallbacks {
   onNotingDecision?(decision: "continue" | "cancel"): void;
   onNotingApply?(mode: { kind: "new" } | { kind: "replace"; key: string }): void;
   onNotingCancel?(): void;
+  onOpenProviderSettings?(): void;
+  onChooseCodexBackend?(): void;
+  onBackendSwitchDecision?(decision: "carry" | "fresh" | "cancel"): void;
 }
 
 export type SidebarIcon = "history" | "new" | "terminal" | "more" | "refresh" | "send" | "stop" | "context" | "close" | "copy" | "note";
@@ -182,8 +194,10 @@ export class SidebarView {
   private sendButton!: HTMLButtonElement;
   private stopButton!: HTMLButtonElement;
   private modelSelect!: HTMLSelectElement;
+  private modelSettingsButton!: HTMLButtonElement;
   private effortSelect!: HTMLSelectElement;
   private modeSelect!: HTMLSelectElement;
+  private composerControls!: HTMLElement;
   private safetyChip!: HTMLElement;
   private contextTitle!: HTMLElement;
   private contextMeta!: HTMLElement;
@@ -402,6 +416,7 @@ export class SidebarView {
     composerFooter.className = "zc-composer-footer";
     const controls = this.doc.createElement("div");
     controls.className = "zc-composer-controls";
+    this.composerControls = controls;
     this.modeSelect = this.doc.createElement("select");
     this.modeSelect.className = "zc-compact-select zc-mode-picker";
     this.modeSelect.title = "研究模式";
@@ -421,13 +436,20 @@ export class SidebarView {
       this.renderEfforts(this.modelSelect.value, true);
       this.callbacks.onModelChange(this.modelSelect.value);
     });
+    this.modelSettingsButton = this.doc.createElement("button");
+    this.modelSettingsButton.type = "button";
+    this.modelSettingsButton.className = "zc-model-settings";
+    this.modelSettingsButton.title = "模型服务设置";
+    this.modelSettingsButton.setAttribute("aria-label", this.modelSettingsButton.title);
+    this.modelSettingsButton.textContent = "⚙";
+    this.modelSettingsButton.addEventListener("click", () => this.callbacks.onOpenProviderSettings?.());
     this.effortSelect = this.doc.createElement("select");
     this.effortSelect.className = "zc-compact-select";
     this.effortSelect.title = "思考强度";
     this.effortSelect.addEventListener("change", () => this.callbacks.onEffortChange(this.effortSelect.value));
     this.safetyChip = this.doc.createElement("span");
     this.safetyChip.className = "zc-safety-chip";
-    controls.append(this.modeSelect, this.modelSelect, this.effortSelect, this.safetyChip);
+    controls.append(this.modeSelect, this.modelSelect, this.modelSettingsButton, this.effortSelect, this.safetyChip);
     this.sendButton = this.doc.createElement("button");
     this.sendButton.type = "button";
     this.sendButton.className = "zc-send-button";
@@ -465,6 +487,14 @@ export class SidebarView {
     this.threadTitle.textContent = this.state.threadTitle || "论文助手";
     this.modeSelect.value = this.state.mode;
     this.root.dataset.mode = this.state.mode;
+    if (this.state.capabilities?.supportsAgentMode !== false) {
+      if (!this.modeSelect.isConnected) {
+        this.composerControls.insertBefore(this.modeSelect, this.composerControls.firstChild);
+      }
+    }
+    else if (this.modeSelect.isConnected) {
+      this.modeSelect.remove();
+    }
     this.safetyChip.textContent = this.state.mode === "ask" ? "只读" : "需审批";
     this.safetyChip.title = this.state.mode === "ask"
       ? "Ask 模式只读取论文与文库上下文"
@@ -828,17 +858,10 @@ export class SidebarView {
 
   private renderModels(): void {
     const previous = this.modelSelect.value;
-    this.modelSelect.replaceChildren();
     const models = this.state.models.length
       ? this.state.models
       : [{ id: "", label: "默认模型" }];
-    for (const model of models) {
-      const option = this.doc.createElement("option");
-      option.value = model.id;
-      option.textContent = model.label;
-      this.modelSelect.appendChild(option);
-    }
-    this.modelSelect.value = this.state.selectedModel || previous || models[0]?.id || "";
+    renderModelOptions(this.modelSelect, models, this.state.selectedModel || previous || models[0]?.id || "");
   }
 
   private renderEfforts(modelId = this.modelSelect.value, preferModelDefault = false): void {
@@ -865,12 +888,31 @@ export class SidebarView {
   private renderTranscript(): void {
     const desired: HTMLElement[] = [];
     const activeIDs = new Set<string>();
+
+    // Onboarding / backend-switch cards are pinned above everything else in
+    // the message list, same reconciliation path (cachedEntryNode) and DOM
+    // style as the paper-trail consent card below.
+    if (this.state.onboarding) {
+      const id = "engine-onboarding";
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(id, "onboarding", () => this.renderEngineOnboardingCard()));
+    }
+    if (this.state.backendSwitch) {
+      const backendSwitch = this.state.backendSwitch;
+      const id = "backend-switch";
+      const fingerprint = JSON.stringify(backendSwitch);
+      activeIDs.add(id);
+      desired.push(this.cachedEntryNode(id, fingerprint, () => this.renderBackendSwitchCard(backendSwitch)));
+    }
+
     const hasWorkbenchCards = Boolean(
       this.state.plan
       || this.state.reviews.length
       || this.state.pendingApproval
       || this.state.checkpoints.length
-      || this.state.noting,
+      || this.state.noting
+      || this.state.onboarding
+      || this.state.backendSwitch,
     );
     if (!this.state.entries.length && !hasWorkbenchCards && this.state.phase === "ready") {
       this.emptyState ||= this.createEmptyState();
@@ -1260,6 +1302,75 @@ export class SidebarView {
     return article;
   }
 
+  private renderEngineOnboardingCard(): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = "zc-entry zc-engine-onboarding";
+    article.dataset.entryId = "engine-onboarding";
+    const heading = this.doc.createElement("div");
+    heading.className = "zc-approval-heading";
+    const badge = this.doc.createElement("span");
+    badge.textContent = "模型服务";
+    const title = this.doc.createElement("strong");
+    title.textContent = "选一个后端开始";
+    heading.append(badge, title);
+    article.appendChild(heading);
+    const description = this.doc.createElement("p");
+    description.textContent = "还没有配置模型服务。添加一个 API 服务（如 DeepSeek / Kimi），或继续使用 Codex 订阅。";
+    article.appendChild(description);
+    const actions = this.doc.createElement("div");
+    actions.className = "zc-approval-actions";
+    const add = this.doc.createElement("button");
+    add.type = "button";
+    add.className = "zc-onboarding-add is-primary";
+    add.textContent = "添加模型服务";
+    add.addEventListener("click", () => this.callbacks.onOpenProviderSettings?.());
+    const codex = this.doc.createElement("button");
+    codex.type = "button";
+    codex.className = "zc-onboarding-codex";
+    codex.textContent = "继续用 Codex（订阅）";
+    codex.addEventListener("click", () => this.callbacks.onChooseCodexBackend?.());
+    actions.append(add, codex);
+    article.appendChild(actions);
+    return article;
+  }
+
+  private renderBackendSwitchCard(backendSwitch: { targetLabel: string }): HTMLElement {
+    const article = this.doc.createElement("article");
+    article.className = "zc-entry zc-backend-switch";
+    article.dataset.entryId = "backend-switch";
+    const heading = this.doc.createElement("div");
+    heading.className = "zc-approval-heading";
+    const badge = this.doc.createElement("span");
+    badge.textContent = "切换后端";
+    const title = this.doc.createElement("strong");
+    title.textContent = `切换到 ${backendSwitch.targetLabel}`;
+    heading.append(badge, title);
+    article.appendChild(heading);
+    const description = this.doc.createElement("p");
+    description.textContent = `切换到 ${backendSwitch.targetLabel}。当前对话的历史要带过去吗？`;
+    article.appendChild(description);
+    const actions = this.doc.createElement("div");
+    actions.className = "zc-approval-actions";
+    const carry = this.doc.createElement("button");
+    carry.type = "button";
+    carry.className = "zc-switch-carry is-primary";
+    carry.textContent = "携带对话历史继续（推荐）";
+    carry.addEventListener("click", () => this.callbacks.onBackendSwitchDecision?.("carry"));
+    const fresh = this.doc.createElement("button");
+    fresh.type = "button";
+    fresh.className = "zc-switch-fresh";
+    fresh.textContent = "开新会话";
+    fresh.addEventListener("click", () => this.callbacks.onBackendSwitchDecision?.("fresh"));
+    const cancel = this.doc.createElement("button");
+    cancel.type = "button";
+    cancel.className = "zc-switch-cancel";
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", () => this.callbacks.onBackendSwitchDecision?.("cancel"));
+    actions.append(carry, fresh, cancel);
+    article.appendChild(actions);
+    return article;
+  }
+
   private renderConsentCard(consent: { question: string; pageNumber?: number }): HTMLElement {
     const article = this.doc.createElement("article");
     article.className = "zc-entry zc-consent-card";
@@ -1535,7 +1646,7 @@ export class SidebarView {
     icon.alt = "";
     const title = this.doc.createElement("h2");
     const detail = this.doc.createElement("p");
-    const button = this.doc.createElement("button");
+    let button: HTMLButtonElement | null = this.doc.createElement("button");
     button.type = "button";
     button.className = "zc-login-button";
     if (this.state.phase === "connecting") {
@@ -1546,8 +1657,16 @@ export class SidebarView {
     else if (this.state.phase === "signed-out") {
       title.textContent = "在 Zotero 中使用 Codex";
       detail.textContent = "使用 ChatGPT 登录。登录状态由本机 Codex CLI 管理；插件不会读取或保存令牌。";
-      button.textContent = "使用 ChatGPT 登录";
-      button.addEventListener("click", () => this.callbacks.onLogin());
+      if (this.state.capabilities?.supportsLogin !== false) {
+        button.textContent = "使用 ChatGPT 登录";
+        button.addEventListener("click", () => this.callbacks.onLogin());
+      }
+      else {
+        // No Codex-login affordance at all for a backend that doesn't
+        // support it (e.g. the built-in engine): omit the button entirely,
+        // not merely hide it, so it can't be found or focused.
+        button = null;
+      }
     }
     else {
       title.textContent = this.state.phase === "unavailable" ? "未找到 Codex CLI" : "Codex 暂时不可用";
@@ -1555,7 +1674,7 @@ export class SidebarView {
       button.textContent = "重试";
       button.addEventListener("click", () => this.callbacks.onRefreshContext());
     }
-    card.append(icon, title, detail, button);
+    card.append(icon, title, detail, ...(button ? [button] : []));
     if (this.state.phase === "unavailable" || this.state.phase === "error") {
       const terminal = this.doc.createElement("button");
       terminal.type = "button";
@@ -1581,14 +1700,17 @@ export class SidebarView {
     readonly.textContent = this.state.mode === "ask"
       ? "Ask：文库只读"
       : "Agent：变更需审批并生成 Checkpoint";
-    const logout = this.doc.createElement("button");
-    logout.type = "button";
-    logout.textContent = "退出 Codex 登录";
-    logout.addEventListener("click", () => {
-      menu.remove();
-      this.callbacks.onLogout();
-    });
-    menu.append(label, readonly, logout);
+    menu.append(label, readonly);
+    if (this.state.capabilities?.supportsLogin !== false) {
+      const logout = this.doc.createElement("button");
+      logout.type = "button";
+      logout.textContent = "退出 Codex 登录";
+      logout.addEventListener("click", () => {
+        menu.remove();
+        this.callbacks.onLogout();
+      });
+      menu.appendChild(logout);
+    }
     this.root.appendChild(menu);
   }
 

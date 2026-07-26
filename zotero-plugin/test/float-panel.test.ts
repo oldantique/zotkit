@@ -125,6 +125,13 @@ describe("FloatPanelView shell", () => {
     expect(host.querySelector<HTMLElement>(".zc-float-note")!.hidden).toBe(true);
   });
 
+  it("hides the ChatGPT login button when capabilities.supportsLogin is false", () => {
+    const { host, view } = mount();
+    view.setState({ phase: "signed-out", capabilities: { supportsAgentMode: true, supportsLogin: false } });
+    expect(host.querySelector(".zc-float-login")).toBeNull();
+    expect(host.textContent).toContain("使用 ChatGPT 登录后即可提问。");
+  });
+
   it("renders the paper title in the drag bar and removes everything on destroy", () => {
     const { host, view } = mount();
     view.setState({ paperTitle: "Attention Is All You Need" });

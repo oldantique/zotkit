@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown";
+import { renderModelOptions } from "./model-menu";
 import { copyToClipboard } from "./platform";
 import {
   createSidebarIcon,
@@ -35,6 +36,8 @@ export interface FloatPanelState {
   anchorConfirmation: { anchorId: string; pageNumber?: number } | null;
   canResolveAnchor: boolean;
   paperTrailConsent: { question: string; pageNumber?: number } | null;
+  /** Feature flags for the active backend; an absent flag defaults to `true`. */
+  capabilities?: { supportsAgentMode: boolean; supportsLogin: boolean };
 }
 
 export interface FloatPanelCallbacks {
@@ -492,14 +495,7 @@ export class FloatPanelView {
       return;
     }
     const previous = this.modelSelect.value;
-    this.modelSelect.replaceChildren();
-    for (const model of models) {
-      const option = this.doc.createElement("option");
-      option.value = model.id;
-      option.textContent = model.label;
-      this.modelSelect.appendChild(option);
-    }
-    this.modelSelect.value = this.state.selectedModel || previous || models[0]!.id;
+    renderModelOptions(this.modelSelect, models, this.state.selectedModel || previous || models[0]!.id);
   }
 
   private renderChip(): void {
@@ -542,12 +538,15 @@ export class FloatPanelView {
     if (this.state.phase === "signed-out") {
       const text = this.doc.createElement("span");
       text.textContent = "使用 ChatGPT 登录后即可提问。";
-      const login = this.doc.createElement("button");
-      login.type = "button";
-      login.className = "zc-float-login";
-      login.textContent = "使用 ChatGPT 登录";
-      login.addEventListener("click", () => this.callbacks.onLogin());
-      this.note.append(text, login);
+      this.note.appendChild(text);
+      if (this.state.capabilities?.supportsLogin !== false) {
+        const login = this.doc.createElement("button");
+        login.type = "button";
+        login.className = "zc-float-login";
+        login.textContent = "使用 ChatGPT 登录";
+        login.addEventListener("click", () => this.callbacks.onLogin());
+        this.note.appendChild(login);
+      }
       return;
     }
     if (this.state.error) {

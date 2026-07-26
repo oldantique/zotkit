@@ -422,6 +422,8 @@
 .zc-approval-card,
 .zc-checkpoint-card,
 .zc-consent-card,
+.zc-engine-onboarding,
+.zc-backend-switch,
 .zc-noting-card { overflow: hidden; border: 1px solid var(--zc-border); border-radius: 10px; background: var(--zc-bg-subtle); }
 .zc-plan-card details > summary,
 .zc-review-card details > summary {
@@ -489,6 +491,13 @@
 .zc-consent-card { padding: 10px; border-color: color-mix(in srgb, var(--zc-accent) 30%, var(--zc-border)); background: color-mix(in srgb, var(--zc-accent) 6%, var(--zc-bg-raised)); }
 .zc-consent-card > p { margin: 7px 0 0; color: var(--zc-muted); font-size: 10.5px; }
 .zc-consent-card .zc-approval-heading > span { color: var(--zc-accent); background: color-mix(in srgb, var(--zc-accent) 11%, transparent); }
+
+.zc-engine-onboarding,
+.zc-backend-switch { padding: 10px; border-color: color-mix(in srgb, var(--zc-accent) 30%, var(--zc-border)); background: color-mix(in srgb, var(--zc-accent) 6%, var(--zc-bg-raised)); }
+.zc-engine-onboarding > p,
+.zc-backend-switch > p { margin: 7px 0 0; color: var(--zc-muted); font-size: 10.5px; }
+.zc-engine-onboarding .zc-approval-heading > span,
+.zc-backend-switch .zc-approval-heading > span { color: var(--zc-accent); background: color-mix(in srgb, var(--zc-accent) 11%, transparent); }
 
 .zc-provider-overlay {
   position: absolute;
@@ -594,6 +603,8 @@
 .zc-compact-select:hover { background: var(--zc-bg-hover); }
 .zc-mode-picker { max-width: 66px; flex: 0 1 66px; color: var(--zc-text); font-weight: 620; }
 .zc-sidebar[data-mode="agent"] .zc-mode-picker { color: var(--zc-accent); background: var(--zc-accent-soft); }
+.zc-model-settings { display: grid; place-items: center; width: 22px; min-width: 22px; height: 22px; flex: none; padding: 0; border: 0; border-radius: 999px; color: var(--zc-muted); background: var(--zc-bg-subtle); font-size: 11px; cursor: pointer; }
+.zc-model-settings:hover { color: var(--zc-accent); background: var(--zc-bg-hover); }
 .zc-safety-chip { padding: 3px 5px; border-radius: 5px; color: #33814b; background: color-mix(in srgb, #4ca366 12%, transparent); font-size: 9px; }
 .zc-sidebar[data-mode="agent"] .zc-safety-chip { color: var(--zc-warning); background: color-mix(in srgb, var(--zc-warning) 11%, transparent); }
 .zc-send-button { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border: 0; border-radius: 50%; color: #fff; background: var(--zc-accent); font: inherit; cursor: pointer; }

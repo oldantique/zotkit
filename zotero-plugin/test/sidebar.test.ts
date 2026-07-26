@@ -482,6 +482,56 @@ describe("SidebarView", () => {
     expect(handlers.onPaperTrailConsent).toHaveBeenCalledWith("accept");
   });
 
+  it("renders the engine onboarding card with both paths", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onOpenProviderSettings: vi.fn(), onChooseCodexBackend: vi.fn() };
+    const view = new SidebarView(body, handlers as any);
+    view.setState({ ...baseState(), onboarding: true } as any);
+    const card = body.querySelector(".zc-engine-onboarding")!;
+    expect(card.textContent).toContain("添加模型服务");
+    card.querySelector<HTMLButtonElement>(".zc-onboarding-add")!.click();
+    expect(handlers.onOpenProviderSettings).toHaveBeenCalled();
+    card.querySelector<HTMLButtonElement>(".zc-onboarding-codex")!.click();
+    expect(handlers.onChooseCodexBackend).toHaveBeenCalled();
+  });
+
+  it("renders the backend switch card and reports each decision", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onBackendSwitchDecision: vi.fn() };
+    const view = new SidebarView(body, handlers as any);
+    view.setState({ ...baseState(), backendSwitch: { targetLabel: "内置引擎" } } as any);
+    const card = body.querySelector(".zc-backend-switch")!;
+    expect(card.textContent).toContain("内置引擎");
+    card.querySelector<HTMLButtonElement>(".zc-switch-carry")!.click();
+    expect(handlers.onBackendSwitchDecision).toHaveBeenCalledWith("carry");
+  });
+
+  it("hides the Agent/Ask mode toggle when supportsAgentMode is false", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const view = new SidebarView(body, callbacks());
+    view.setState({
+      ...baseState(),
+      capabilities: { supportsAgentMode: false, supportsLogin: false },
+    } as any);
+    // The real class name for the Agent/Ask toggle is `.zc-mode-picker`
+    // (the brief's placeholder was `.zc-mode-toggle`).
+    expect(body.querySelector(".zc-mode-picker")).toBeNull();
+  });
+
+  it("hides the ChatGPT login button when supportsLogin is false", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const view = new SidebarView(body, callbacks());
+    view.setState({
+      phase: "signed-out",
+      capabilities: { supportsAgentMode: true, supportsLogin: false },
+    } as any);
+    expect(body.querySelector(".zc-login-button")).toBeNull();
+  });
+
   it("renders the question list ordered as given, with status marks and jump", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);
