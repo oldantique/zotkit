@@ -856,10 +856,10 @@ async function buildMutationDiff(
       const labels = await host.describeCollections(snapshot.paper.libraryID, allKeys);
       lines.push("@@ collections @@");
       for (const key of snapshot.paper.collectionKeys.filter((key) => !operation.collectionKeys.includes(key))) {
-        lines.push(`- ${sanitizeDiffText(labels.get(key) || key)} (${key})`);
+        lines.push(`- ${sanitizeInlineDiffText(labels.get(key) || key)} (${key})`);
       }
       for (const key of operation.collectionKeys.filter((key) => !snapshot.paper.collectionKeys.includes(key))) {
-        lines.push(`+ ${sanitizeDiffText(labels.get(key) || key)} (${key})`);
+        lines.push(`+ ${sanitizeInlineDiffText(labels.get(key) || key)} (${key})`);
       }
       if (snapshot.paper.collectionKeys.join("\0") === operation.collectionKeys.join("\0")) lines.push("  (no membership change)");
     }
@@ -971,11 +971,15 @@ function snapshotFingerprint(snapshot: PaperMutationSnapshot): string {
 }
 
 // C0 controls (except the \t/\n we render verbatim), C1 controls, DEL (U+007F),
-// and the Unicode bidi-override/embedding/isolate characters that can visually
-// reorder or hide text in a terminal or HTML view. A prompt-injected
-// proposal could otherwise use these to make the reviewed diff *display*
-// something other than the bytes Apply actually writes.
-const DANGEROUS_DIFF_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F\u0080-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+// the Unicode bidi-override/embedding/isolate/mark characters that can
+// visually reorder or hide text in a terminal or HTML view, and the
+// zero-width/format characters (ZWSP/ZWNJ/ZWJ, BOM, word joiner, ALM, the
+// U+2028/U+2029 line/paragraph separators) that render invisibly but can
+// hide text or forge what looks like an extra line inside a rendered diff.
+// A prompt-injected proposal could otherwise use these to make the
+// reviewed diff *display* something other than the bytes Apply actually
+// writes.
+const DANGEROUS_DIFF_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F\u0080-\u009F\u061C\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
 
 /**
  * Replaces control characters and bidi-override characters with a visible
@@ -988,6 +992,24 @@ export function sanitizeDiffText(value: string): string {
   return value.replace(DANGEROUS_DIFF_CHARS, (char) => (
     `\\u${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`
   ));
+}
+
+/**
+ * Like {@link sanitizeDiffText}, but for values that must render on a single
+ * diff line (e.g. a collection label spliced inline after a `-`/`+` sign).
+ * `sanitizeDiffText` deliberately lets `\n`/`\t` through so multi-line field
+ * values keep real line breaks via {@link diffValueLines}'s own splitting --
+ * but a label is spliced directly into one pushed line, so a raw `\n` inside
+ * it would silently add an extra line to the rendered diff without changing
+ * `operations.length`, forging what looks like a reviewed diff entry that
+ * was never actually part of the proposal. This escapes `\n`/`\t` into their
+ * visible 6-character `\uXXXX` literal form so the line count of the
+ * rendered diff can never depend on untrusted label text.
+ */
+export function sanitizeInlineDiffText(value: string): string {
+  return sanitizeDiffText(value)
+    .replace(/\n/g, "\\u000A")
+    .replace(/\t/g, "\\u0009");
 }
 
 /**

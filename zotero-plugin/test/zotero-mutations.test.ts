@@ -465,7 +465,62 @@ describe("diff fidelity: review must show exactly what Apply will write", () => 
 
     const diffText = String(result.diff);
     expect(diffText).toContain("\\u007F");
-    expect(diffText).not.toMatch(//);
+    expect(diffText).not.toMatch(/\x7f/);
+  });
+
+  it("escapes zero-width joiners, BOM, word joiner, ALM, and line/paragraph separators into visible literal escapes", async () => {
+    const { service } = harness();
+    // Every codepoint DANGEROUS_DIFF_CHARS gained in round 3: these can hide
+    // text, fake whitespace, or (U+2028/U+2029) inject what looks like a
+    // fresh line into a rendered diff -- all invisible in most UIs.
+    const attack =
+      "A\u200Bb\u200Cc\u200Dd\uFEFFe\u2060f\u061Cg\u2028h\u2029i";
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: attack } }],
+    });
+
+    const diffText = String(result.diff);
+    for (const code of ["200B", "200C", "200D", "FEFF", "2060", "061C", "2028", "2029"]) {
+      expect(diffText).toContain(`\\u${code}`);
+    }
+    expect(diffText).not.toMatch(/[\u200B\u200C\u200D\uFEFF\u2060\u061C\u2028\u2029]/);
+  });
+
+  it("inline-escapes a newline embedded in a collection label instead of letting it fake an extra diff line", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.describeCollections).mockResolvedValueOnce(new Map([
+      ["ABCDEFGH", "Old collection"],
+      ["IJKLMNOP", "Evil\nLabel"],
+    ]));
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_collections", collectionKeys: ["IJKLMNOP"] }],
+    });
+
+    const diffText = String(result.diff);
+    // header(2) + "@@ collections @@"(1) + removed ABCDEFGH(1) + added IJKLMNOP(1).
+    // A raw '\n' inside the label would silently add a 6th line here, forging
+    // what looks like an extra reviewed diff entry.
+    expect(diffText.split("\n")).toHaveLength(5);
+    expect(diffText).toContain("Evil\\u000ALabel");
+    expect(diffText).not.toMatch(/Evil\nLabel/);
+  });
+
+  it("inline-escapes a tab embedded in a collection label the same way", async () => {
+    const { service, host } = harness();
+    vi.mocked(host.describeCollections).mockResolvedValueOnce(new Map([
+      ["ABCDEFGH", "Old collection"],
+      ["IJKLMNOP", "Evil\tLabel"],
+    ]));
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_collections", collectionKeys: ["IJKLMNOP"] }],
+    });
+
+    const diffText = String(result.diff);
+    expect(diffText).toContain("Evil\\u0009Label");
+    expect(diffText).not.toMatch(/Evil\tLabel/);
   });
 });
 
