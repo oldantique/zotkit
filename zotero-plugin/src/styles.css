@@ -525,6 +525,20 @@
 .zc-provider-status { color: var(--zc-muted); font-size: 10px; padding: 6px 8px; background: var(--zc-bg-subtle); border-radius: 6px; }
 .zc-provider-egress { margin: 6px 0 0; padding: 8px 9px; border-radius: 6px; color: var(--zc-muted); background: color-mix(in srgb, var(--zc-accent) 6%, var(--zc-bg-raised)); font-size: 10.5px; line-height: 1.4; }
 
+.zc-ssh-section { display: grid; gap: 6px; padding-top: 8px; margin-top: 4px; border-top: 1px solid var(--zc-border); }
+.zc-ssh-heading { font-size: 11px; font-weight: 650; }
+.zc-ssh-targets { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px 0; }
+.zc-ssh-target-option { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--zc-text); cursor: pointer; }
+.zc-ssh-list { display: grid; gap: 6px; }
+.zc-ssh-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 34px; padding: 7px 9px; border: 1px solid var(--zc-border); border-radius: 7px; background: var(--zc-bg-raised); }
+.zc-ssh-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+.zc-ssh-edit, .zc-ssh-delete { min-height: 27px; padding: 0 9px; border: 1px solid var(--zc-border); border-radius: 7px; color: var(--zc-text); background: var(--zc-bg-raised); font: inherit; font-size: 9.5px; cursor: pointer; flex: none; }
+.zc-ssh-form { display: grid; gap: 6px; padding: 8px 0; }
+.zc-ssh-form select, .zc-ssh-form input { font: inherit; font-size: 10.5px; padding: 4px 6px; border: 1px solid var(--zc-border); border-radius: 6px; background: var(--zc-bg-raised); color: var(--zc-text); }
+.zc-ssh-form select:focus, .zc-ssh-form input:focus { outline: none; border-color: var(--zc-accent); }
+.zc-ssh-save { min-height: 27px; padding: 0 9px; border: 1px solid transparent; border-radius: 7px; color: #fff; background: var(--zc-accent); font: inherit; font-size: 9.5px; cursor: pointer; }
+.zc-ssh-hint { margin: 2px 0 0; padding: 8px 9px; border-radius: 6px; color: var(--zc-muted); background: var(--zc-bg-subtle); font-size: 10px; line-height: 1.4; }
+
 .zc-checkpoint-card { padding: 8px; background: color-mix(in srgb, var(--zc-accent) 4%, var(--zc-bg-subtle)); }
 .zc-checkpoint-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px 6px; }
 .zc-checkpoint-heading strong { font-size: 10.5px; }

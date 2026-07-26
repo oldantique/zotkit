@@ -25,6 +25,9 @@ function mount() {
     onDelete: vi.fn(),
     onTest: vi.fn(),
     onClose: vi.fn(),
+    onSaveSsh: vi.fn(),
+    onDeleteSsh: vi.fn(),
+    onSelectCodexTarget: vi.fn(),
   };
   const view = new ProviderSettingsView(host, callbacks);
   return { host, view, callbacks };
@@ -52,6 +55,8 @@ describe("ProviderSettingsView", () => {
       keyMask: { p1: "····1234" },
       statusText: null,
       busy: false,
+      sshProfiles: [],
+      codexTarget: "local",
     });
     expect(host.textContent).toContain("DeepSeek");
     expect(host.textContent).toContain("····1234");
@@ -60,7 +65,14 @@ describe("ProviderSettingsView", () => {
 
   it("fills the form from a preset and submits a new profile", () => {
     const { host, view, callbacks } = mount();
-    view.setState({ providers: [], keyMask: {}, statusText: null, busy: false });
+    view.setState({
+      providers: [],
+      keyMask: {},
+      statusText: null,
+      busy: false,
+      sshProfiles: [],
+      codexTarget: "local",
+    });
     const presetSelect = host.querySelector<HTMLSelectElement>(".zc-provider-preset")!;
     presetSelect.value = "DeepSeek";
     presetSelect.dispatchEvent(new Event("change", { bubbles: true }));
@@ -84,6 +96,8 @@ describe("ProviderSettingsView", () => {
       keyMask: { p1: "····1234" },
       statusText: null,
       busy: false,
+      sshProfiles: [],
+      codexTarget: "local",
     });
     host.querySelector<HTMLButtonElement>(".zc-provider-edit")!.click();
     host.querySelector<HTMLButtonElement>(".zc-provider-save")!.click();
@@ -99,6 +113,8 @@ describe("ProviderSettingsView", () => {
       keyMask: { p1: "····1234" },
       statusText: null,
       busy: false,
+      sshProfiles: [],
+      codexTarget: "local",
     });
     // Click edit to fill form with provider data
     host.querySelector<HTMLButtonElement>(".zc-provider-edit")!.click();
@@ -113,6 +129,8 @@ describe("ProviderSettingsView", () => {
       keyMask: { p1: "····1234" },
       statusText: null,
       busy: true,
+      sshProfiles: [],
+      codexTarget: "local",
     });
     // Assert the typed values are still there after re-render
     expect(host.querySelector<HTMLInputElement>(".zc-provider-name")!.value).toBe("Modified Name");
@@ -123,11 +141,52 @@ describe("ProviderSettingsView", () => {
       keyMask: { p1: "····1234" },
       statusText: null,
       busy: false,
+      sshProfiles: [],
+      codexTarget: "local",
     });
     // Assert saving submits the typed values (not null for key)
     host.querySelector<HTMLButtonElement>(".zc-provider-save")!.click();
     const [saved, apiKey] = callbacks.onSave.mock.calls[0]!;
     expect(saved.name).toBe("Modified Name");
     expect(apiKey).toBe("sk-new-key");
+  });
+
+  it("renders the SSH section and submits a password-auth profile", () => {
+    const { host, view, callbacks } = mount();
+    view.setState({
+      providers: [],
+      keyMask: {},
+      statusText: null,
+      busy: false,
+      sshProfiles: [],
+      codexTarget: "local",
+    });
+    expect(host.textContent).toContain("远程 Codex");
+    host.querySelector<HTMLInputElement>(".zc-ssh-host")!.value = "lab.example.edu";
+    host.querySelector<HTMLInputElement>(".zc-ssh-user")!.value = "eric";
+    host.querySelector<HTMLSelectElement>(".zc-ssh-auth")!.value = "password";
+    host.querySelector<HTMLInputElement>(".zc-ssh-password")!.value = "hunter2";
+    host.querySelector<HTMLButtonElement>(".zc-ssh-save")!.click();
+    const [profile, password] = callbacks.onSaveSsh.mock.calls[0]!;
+    expect(profile.host).toBe("lab.example.edu");
+    expect(profile.auth).toBe("password");
+    expect(password).toBe("hunter2");
+    expect(host.textContent).not.toContain("hunter2");
+  });
+
+  it("reports codex target selection", () => {
+    const { host, view, callbacks } = mount();
+    view.setState({
+      providers: [], keyMask: {}, statusText: null, busy: false,
+      sshProfiles: [{
+        id: "s1", name: "lab", host: "h", port: 22, user: "u",
+        auth: "key", remoteCodexPath: "codex",
+      }],
+      codexTarget: "local",
+    });
+    const radios = host.querySelectorAll<HTMLInputElement>(".zc-ssh-target");
+    expect(radios.length).toBe(2); // 本机 + s1
+    radios[1]!.click();
+    expect(callbacks.onSelectCodexTarget).toHaveBeenCalledWith("s1");
   });
 });

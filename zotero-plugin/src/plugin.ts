@@ -38,6 +38,12 @@ import {
 } from "./providers";
 import { saveSecret, readSecret, deleteSecret, maskSecret } from "./secrets";
 import {
+  loadSshProfiles,
+  saveSshProfiles,
+  sshSecretRealm,
+  type SshCodexProfile,
+} from "./ssh-codex";
+import {
   ZoteroMutationApplyError,
   ZoteroMutationService,
   createZoteroMutationHost,
@@ -1745,6 +1751,18 @@ export class ZoteroChatPlugin {
             .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
         },
         onClose: () => this.closeProviderSettings(),
+        onSaveSsh: (profile, password) => {
+          void this.saveSshProfile(profile, password)
+            .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
+        },
+        onDeleteSsh: (profileId) => {
+          void this.deleteSshProfile(profileId)
+            .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
+        },
+        onSelectCodexTarget: (target) => {
+          void this.selectCodexTarget(target)
+            .catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
+        },
       });
     }
     void this.refreshProviderSettings(null);
@@ -1765,7 +1783,9 @@ export class ZoteroChatPlugin {
       const key = await readSecret(providerKeyRealm(provider.id), provider.id);
       if (key) keyMask[provider.id] = maskSecret(key);
     }
-    this.providerSettingsView.setState({ providers, keyMask, statusText, busy });
+    const sshProfiles = loadSshProfiles();
+    const codexTarget = prefString("codexTarget", "local");
+    this.providerSettingsView.setState({ providers, keyMask, statusText, busy, sshProfiles, codexTarget });
   }
 
   private async saveProvider(profile: ProviderProfile, apiKey: string | null): Promise<void> {
@@ -1807,6 +1827,34 @@ export class ZoteroChatPlugin {
     catch (error) {
       await this.refreshProviderSettings(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private async saveSshProfile(profile: SshCodexProfile, password: string | null): Promise<void> {
+    const id = profile.id || randomID("ssh").slice(0, 24);
+    const next = { ...profile, id };
+    const rest = loadSshProfiles().filter((candidate) => candidate.id !== id);
+    saveSshProfiles([...rest, next]);
+    if (password) await saveSecret(sshSecretRealm(id), id, password);
+    await this.refreshProviderSettings(`已保存 ${next.name || next.host}`);
+  }
+
+  private async deleteSshProfile(profileId: string): Promise<void> {
+    saveSshProfiles(loadSshProfiles().filter((candidate) => candidate.id !== profileId));
+    await deleteSecret(sshSecretRealm(profileId), profileId);
+    if (prefString("codexTarget", "local") === profileId) {
+      setPrefString("codexTarget", "local");
+    }
+    await this.refreshProviderSettings("已删除");
+  }
+
+  private async selectCodexTarget(target: string): Promise<void> {
+    setPrefString("codexTarget", target);
+    if (this.codex.state.backend === "codex" && this.codex.state.connected) {
+      this.codex.stop();
+      await this.codex.start();
+    }
+    await this.refreshProviderSettings(null);
+    this.renderChatViews();
   }
 
   private injectWindowAssets(win: Window): void {

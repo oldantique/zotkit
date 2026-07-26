@@ -49,6 +49,16 @@ Research Chat 默认由插件内置引擎驱动，直连你自己配置的模型
 
 已安装并登录 codex CLI 的用户可继续使用 Codex（订阅）后端：模型菜单里选择 Codex 分组即可；对话中途从 Codex 切到引擎可选择「携带对话历史继续」。留痕高亮与 Note 笔记在两个后端下行为一致。
 
+### 远程 Codex（SSH）
+
+如果你的 codex CLI 登录在一台远程 Linux 机器上，可以让 Zotero 直接借用它：
+
+1. 先在终端 `ssh user@host` 成功登录一次（确认主机指纹进入 known_hosts）。
+2. 设置面板 → 远程 Codex（SSH）→ 填 host / 用户名 / 认证方式（推荐密钥；密码存 Zotero 密码管理器）/ 远端 codex 路径（建议绝对路径，如 `~/.local/bin/codex`）。
+3. 在「Codex 运行位置」里选中该远程配置。模型、账户、额度全部来自远端已登录的 codex。
+
+限制：远程模式仅支持 Ask（只读）；Agent 模式、检查点在远程下不可用；SSH 断开后重新发送会自动重连。
+
 ## Ask 与 Agent
 
 ### Ask：默认、只读
