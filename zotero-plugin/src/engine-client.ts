@@ -317,11 +317,19 @@ export class EngineClient implements AgentClient {
     }
     catch (error) {
       if ((error as Error)?.name === "AbortError") {
-        thread.history = [
-          ...thread.history,
-          { role: "user", text: userText },
-          { role: "assistant", text: finalText },
-        ];
+        // Interrupted before any text streamed: the turn produced nothing.
+        // Appending an empty-text user/assistant pair would poison history
+        // with a message the model never actually said (and could leave two
+        // assistant turns adjacent once the next turn appends). The store/UI
+        // keeps whatever items already streamed; only the model-facing
+        // history and turnCount are affected here.
+        if (finalText) {
+          thread.history = [
+            ...thread.history,
+            { role: "user", text: userText },
+            { role: "assistant", text: finalText },
+          ];
+        }
         thread.turnCount += 1;
         await this.persist(thread);
         if (lastItemId) {

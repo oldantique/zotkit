@@ -130,7 +130,7 @@ export class ZoteroChatPlugin {
   private destroyed = false;
   private readonly turnStartedAt = new Map<string, number>();
   private readonly turnMeta = new Map<string, Map<string, TurnMeta>>();
-  private pendingBackendSwitch: { targetModel: string; targetLabel: string } | null = null;
+  private pendingBackendSwitch: { targetModel: string; targetLabel: string; carryAvailable: boolean } | null = null;
   private providerSettingsHost: HTMLElement | null = null;
   private providerSettingsView: ProviderSettingsView | null = null;
 
@@ -776,9 +776,21 @@ export class ZoteroChatPlugin {
         this.chatPhase = "ready";
         if (this.context) await this.codex.setPaper(this.context);
       }
-      const defaultModel = this.codex.state.models.find((model) => model.isDefault)
-        || this.codex.state.models[0];
-      if (!this.selectedModel && defaultModel) this.selectedModel = defaultModel.id;
+      const models = this.codex.state.models;
+      const defaultModel = models.find((model) => model.isDefault) || models[0];
+      if (!this.selectedModel && defaultModel) {
+        this.selectedModel = defaultModel.id;
+      }
+      else if (this.selectedModel
+          && (modelBackend(this.selectedModel) !== this.codex.state.backend
+              || !models.some((model) => model.id === this.selectedModel))) {
+        // Stale selection from a prior backend (or a stale `defaultModel`
+        // pref pointing at a model this backend no longer serves) — fall
+        // back to this backend's default rather than sending to a model
+        // that doesn't belong to the active client.
+        this.selectedModel = defaultModel?.id || "";
+        setPrefString("defaultModel", this.selectedModel);
+      }
       await this.refreshMutationCheckpoints();
     }
     catch (error) {
@@ -836,6 +848,10 @@ export class ZoteroChatPlugin {
       this.pendingBackendSwitch = {
         targetModel: model,
         targetLabel: target === "engine" ? "内置引擎" : "Codex（订阅）",
+        // Spec §六: switching FROM engine TO codex can't carry history (the
+        // reverse direction can, via importThread), so only offer "carry"
+        // when the switch target is the engine.
+        carryAvailable: target === "engine",
       };
       this.renderChatViews();
       return;
@@ -855,8 +871,12 @@ export class ZoteroChatPlugin {
     const target = modelBackend(pending.targetModel);
     try {
       await this.codex.switchBackend(target, decision === "carry");
-      this.selectedModel = pending.targetModel;
-      setPrefString("defaultModel", pending.targetModel);
+      const models = this.codex.state.models;
+      const resolved = models.some((model) => model.id === pending.targetModel)
+        ? pending.targetModel
+        : (models.find((model) => model.isDefault) || models[0])?.id || "";
+      this.selectedModel = resolved;
+      setPrefString("defaultModel", resolved);
     }
     catch (error) {
       this.reportError(error instanceof Error ? error : new Error(String(error)));
@@ -1187,7 +1207,10 @@ export class ZoteroChatPlugin {
           && this.codex.state.connected
           && loadProviders().length === 0,
         backendSwitch: this.pendingBackendSwitch
-          ? { targetLabel: this.pendingBackendSwitch.targetLabel }
+          ? {
+            targetLabel: this.pendingBackendSwitch.targetLabel,
+            carryAvailable: this.pendingBackendSwitch.carryAvailable,
+          }
           : null,
         context: context ? {
           key: `${context.attachment.libraryID ?? "0"}-${context.attachment.key}`,

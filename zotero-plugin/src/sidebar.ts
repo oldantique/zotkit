@@ -150,7 +150,7 @@ export interface SidebarState {
   /** Shows the `zc-engine-onboarding` card ("no model service configured yet"). Defaults to `false`. */
   onboarding?: boolean;
   /** Non-null shows the `zc-backend-switch` confirmation card. */
-  backendSwitch?: { targetLabel: string } | null;
+  backendSwitch?: { targetLabel: string; carryAvailable?: boolean } | null;
 }
 
 export interface SidebarCallbacks {
@@ -1334,7 +1334,7 @@ export class SidebarView {
     return article;
   }
 
-  private renderBackendSwitchCard(backendSwitch: { targetLabel: string }): HTMLElement {
+  private renderBackendSwitchCard(backendSwitch: { targetLabel: string; carryAvailable?: boolean }): HTMLElement {
     const article = this.doc.createElement("article");
     article.className = "zc-entry zc-backend-switch";
     article.dataset.entryId = "backend-switch";
@@ -1351,11 +1351,14 @@ export class SidebarView {
     article.appendChild(description);
     const actions = this.doc.createElement("div");
     actions.className = "zc-approval-actions";
-    const carry = this.doc.createElement("button");
-    carry.type = "button";
-    carry.className = "zc-switch-carry is-primary";
-    carry.textContent = "携带对话历史继续（推荐）";
-    carry.addEventListener("click", () => this.callbacks.onBackendSwitchDecision?.("carry"));
+    if (backendSwitch.carryAvailable !== false) {
+      const carry = this.doc.createElement("button");
+      carry.type = "button";
+      carry.className = "zc-switch-carry is-primary";
+      carry.textContent = "携带对话历史继续（推荐）";
+      carry.addEventListener("click", () => this.callbacks.onBackendSwitchDecision?.("carry"));
+      actions.appendChild(carry);
+    }
     const fresh = this.doc.createElement("button");
     fresh.type = "button";
     fresh.className = "zc-switch-fresh";
@@ -1366,7 +1369,7 @@ export class SidebarView {
     cancel.className = "zc-switch-cancel";
     cancel.textContent = "取消";
     cancel.addEventListener("click", () => this.callbacks.onBackendSwitchDecision?.("cancel"));
-    actions.append(carry, fresh, cancel);
+    actions.append(fresh, cancel);
     article.appendChild(actions);
     return article;
   }

@@ -508,6 +508,23 @@ describe("SidebarView", () => {
     expect(handlers.onBackendSwitchDecision).toHaveBeenCalledWith("carry");
   });
 
+  it("omits the carry-over button when the switch card marks it unavailable (spec §六)", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = { ...callbacks(), onBackendSwitchDecision: vi.fn() };
+    const view = new SidebarView(body, handlers as any);
+    view.setState({
+      ...baseState(),
+      backendSwitch: { targetLabel: "Codex（订阅）", carryAvailable: false },
+    } as any);
+    const card = body.querySelector(".zc-backend-switch")!;
+    expect(card.querySelector(".zc-switch-carry")).toBeNull();
+    expect(card.querySelector(".zc-switch-fresh")).not.toBeNull();
+    expect(card.querySelector(".zc-switch-cancel")).not.toBeNull();
+    card.querySelector<HTMLButtonElement>(".zc-switch-fresh")!.click();
+    expect(handlers.onBackendSwitchDecision).toHaveBeenCalledWith("fresh");
+  });
+
   it("hides the Agent/Ask mode toggle when supportsAgentMode is false", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);

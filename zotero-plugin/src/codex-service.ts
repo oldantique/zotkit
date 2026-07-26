@@ -21,7 +21,7 @@ import { CODEX_CAPABILITIES, type AgentCapabilities, type AgentClient } from "./
 import { EngineClient, type EngineClientOptions } from "./engine-client";
 import { loadProviders, providerKeyRealm } from "./providers";
 import { readSecret } from "./secrets";
-import type { EngineHistoryMessage } from "./engine-messages";
+import { engineModelId, type EngineHistoryMessage } from "./engine-messages";
 import type { NativeBridge } from "./native-bridge";
 import { NativeSessionSocket } from "./native-session-socket";
 import type { ReaderContext, ReaderContextService, ReaderToolName } from "./reader-context";
@@ -267,6 +267,13 @@ export class CodexService {
     this.unsubscribeStore = this.store.subscribe(() => this.callbacks.onState());
     this.state.account = await client.accountRead({ refreshToken: false });
     await this.refreshModels();
+    // A target/backend restart can land on a client that doesn't support
+    // Agent mode (e.g. remote codex, or an engine provider without it) while
+    // state.mode is still "agent" from before the restart — fall back to Ask
+    // rather than leaving the UI in an agent mode the backend will reject.
+    if (this.state.mode === "agent" && !this.state.capabilities.supportsAgentMode) {
+      this.state.mode = "ask";
+    }
     this.callbacks.onState();
   }
 
@@ -362,6 +369,12 @@ export class CodexService {
       this.unsubscribeStore = this.store.subscribe(() => this.callbacks.onState());
       this.state.account = await client.accountRead({ refreshToken: false });
       if (this.isSignedIn()) await this.refreshModels();
+      // See startEngineInternal: a restart (e.g. local -> remote codexTarget)
+      // can land on capabilities that don't support Agent mode while
+      // state.mode is still "agent" from before the restart.
+      if (this.state.mode === "agent" && !this.state.capabilities.supportsAgentMode) {
+        this.state.mode = "ask";
+      }
       this.callbacks.onState();
     }
     catch (error) {
@@ -449,6 +462,29 @@ export class CodexService {
   async refreshModels(): Promise<ModelOption[]> {
     const response = await this.requireClient().modelList({ includeHidden: false, limit: 100 });
     this.state.models = normalizeModels(response);
+    // The model menu must let a user switch backends from the same dropdown
+    // (spec §六): always mix in a representation of the OTHER backend so its
+    // entries appear in the menu even though they can't be sent to directly.
+    if (this.state.backend === "codex") {
+      for (const provider of loadProviders()) {
+        for (const model of provider.models) {
+          this.state.models.push({
+            id: engineModelId(provider.id, model.id),
+            label: `${provider.name} · ${model.label}`,
+            supportedReasoningEfforts: model.supportsReasoningEffort
+              ? [{ reasoningEffort: "low" }, { reasoningEffort: "medium" }, { reasoningEffort: "high" }]
+              : []
+          });
+        }
+      }
+    }
+    else {
+      this.state.models.push({
+        id: "codex",
+        label: "Codex（订阅）",
+        supportedReasoningEfforts: []
+      });
+    }
     this.callbacks.onState();
     return this.state.models;
   }
@@ -516,6 +552,15 @@ export class CodexService {
           return;
         }
         catch {
+          // Resume failure is routine when switching codex targets
+          // (local<->remote) — archive the stale pointer instead of losing
+          // it outright, mirroring rememberActiveThread's dedupe/cap.
+          this.sessions.history ||= {};
+          const history = this.sessions.history[paperKey] ||= [];
+          if (!history.some((record) => record.threadId === existing.threadId)) {
+            history.unshift(existing);
+          }
+          this.sessions.history[paperKey] = history.slice(0, 30);
           delete this.sessions.papers[paperKey];
         }
       }
@@ -813,13 +858,17 @@ export class CodexService {
       this.callbacks.onFallbackRequested?.(fallbackError);
       throw fallbackError;
     }
-    if (this.state.mode === "agent" && !this.state.capabilities.supportsAgentMode) {
-      this.state.mode = "ask";
-    }
+    // Mode reconciliation now lives in startCodexInternal/startEngineInternal
+    // (called via startInternal above), which covers this path plus the
+    // local<->remote codexTarget restart path that never goes through here.
     this.activeContext = context;
     this.activePaperKey = null;
     if (carried.length && context?.workspace && paperKey && this.client instanceof EngineClient) {
       const threadId = await this.client.importThread(title, carried);
+      // importThread only seeds history — re-apply the mode's dynamicTools
+      // and developerInstructions the same way a normal thread start would,
+      // otherwise a migrated engine thread has no tools/system prompt.
+      await this.client.threadResume({ threadId, ...this.threadModeSettings(context) });
       this.activePaperKey = paperKey;
       this.rememberActiveThread(paperKey, {
         threadId,
@@ -1090,6 +1139,14 @@ export class CodexService {
     }
     else if (notification.method === "turn/completed") {
       if (belongsToActiveThread && (!this.state.activeTurnId || turn?.id === this.state.activeTurnId)) {
+        this.state.running = false;
+        this.state.activeTurnId = null;
+      }
+    }
+    else if (notification.method === "turn/failed") {
+      if (belongsToActiveThread && (!this.state.activeTurnId
+          || params.turnId === this.state.activeTurnId
+          || turn?.id === this.state.activeTurnId)) {
         this.state.running = false;
         this.state.activeTurnId = null;
       }

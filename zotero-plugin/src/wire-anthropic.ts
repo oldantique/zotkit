@@ -37,7 +37,12 @@ export class AnthropicWire implements WireAdapter {
       }));
     }
     const budget = params.effort ? THINKING_BUDGETS[params.effort] : undefined;
-    if (budget) body.thinking = { type: "enabled", budget_tokens: budget };
+    if (budget) {
+      body.thinking = { type: "enabled", budget_tokens: budget };
+      // Anthropic requires max_tokens > budget_tokens; add the output reserve
+      // on top of the thinking budget instead of the flat default above.
+      body.max_tokens = budget + 8192;
+    }
     return {
       url,
       headers: {
@@ -85,6 +90,10 @@ function toAnthropicMessages(messages: WireMessage[]): Array<Record<string, unkn
       output.push({ role: "assistant", content });
       continue;
     }
+    // An interrupted-before-first-token turn can leave a synthesized empty
+    // assistant message in history (see engine-client.ts's abort handling);
+    // Anthropic rejects an assistant text block with no content, so drop it.
+    if (message.role === "assistant" && !message.text) continue;
     output.push({ role: message.role, content: [{ type: "text", text: message.text }] });
   }
   return output;

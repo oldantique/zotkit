@@ -468,6 +468,9 @@ function keyValue(form: HTMLElement): string | null {
 }
 
 function sshPasswordValue(form: HTMLElement): string | null {
-  const value = form.querySelector<HTMLInputElement>(".zc-ssh-password")!.value.trim();
-  return value ? value : null;
+  // Unlike API keys, an SSH password's leading/trailing whitespace may be
+  // meaningful to the remote account — don't trim, only treat the exact
+  // empty string as "no password entered".
+  const value = form.querySelector<HTMLInputElement>(".zc-ssh-password")!.value;
+  return value === "" ? null : value;
 }

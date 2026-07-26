@@ -165,12 +165,14 @@ describe("ProviderSettingsView", () => {
     host.querySelector<HTMLInputElement>(".zc-ssh-host")!.value = "lab.example.edu";
     host.querySelector<HTMLInputElement>(".zc-ssh-user")!.value = "eric";
     host.querySelector<HTMLSelectElement>(".zc-ssh-auth")!.value = "password";
-    host.querySelector<HTMLInputElement>(".zc-ssh-password")!.value = "hunter2";
+    // Trailing whitespace can be a meaningful part of an SSH password — it
+    // must reach onSaveSsh intact, unlike API keys which are trimmed.
+    host.querySelector<HTMLInputElement>(".zc-ssh-password")!.value = "hunter2 ";
     host.querySelector<HTMLButtonElement>(".zc-ssh-save")!.click();
     const [profile, password] = callbacks.onSaveSsh.mock.calls[0]!;
     expect(profile.host).toBe("lab.example.edu");
     expect(profile.auth).toBe("password");
-    expect(password).toBe("hunter2");
+    expect(password).toBe("hunter2 ");
     expect(host.textContent).not.toContain("hunter2");
   });
 

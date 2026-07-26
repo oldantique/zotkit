@@ -232,6 +232,51 @@ describe("EngineClient", () => {
     expect(stored.turns[0]!.items.find((item) => item.type === "agentMessage")?.text).toBe("answer");
   });
 
+  it("does not poison history when a turn is interrupted before any token streams", async () => {
+    let call = 0;
+    const { client, notifications, storage } = makeClient([[
+      { type: "textDelta", delta: "答案一" },
+      { type: "stop", reason: "end" },
+    ]], {
+      streamImpl: async (options) => {
+        call += 1;
+        if (call === 1) {
+          options.onChunk("scripted");
+          return { status: 200, ok: true, errorBody: null };
+        }
+        const abortError = new Error("The operation was aborted");
+        abortError.name = "AbortError";
+        throw abortError;
+      },
+    });
+    const thread = await client.threadStart({});
+    await client.turnStart({
+      threadId: thread.thread.id,
+      input: [{ type: "text", text: "q1", text_elements: [] }],
+      model: null,
+      effort: "medium",
+    });
+    await settle();
+    const afterFirstTurn = storage.files.get(thread.thread.id);
+    const second = await client.turnStart({
+      threadId: thread.thread.id,
+      input: [{ type: "text", text: "q2", text_elements: [] }],
+      model: null,
+      effort: "medium",
+    });
+    await settle();
+    // The interrupted turn streamed nothing, so it must not append a
+    // user/assistant pair to history — persisted storage stays exactly
+    // what it was after the first, successful turn.
+    expect(storage.files.get(thread.thread.id)).toBe(afterFirstTurn);
+    const messageLines = (storage.files.get(thread.thread.id) || "")
+      .split("\n")
+      .filter((line) => line.includes("\"kind\":\"message\""));
+    expect(messageLines.length).toBe(2);
+    const completed = notifications.filter((notification) => notification.method === "turn/completed");
+    expect(completed.some((notification) => (notification.params as { turn?: { id?: string } })?.turn?.id === second.turn.id)).toBe(true);
+  });
+
   it("imports migrated history as completed turns", async () => {
     const { client, store } = makeClient([[]]);
     const threadId = await client.importThread("迁移标题", [

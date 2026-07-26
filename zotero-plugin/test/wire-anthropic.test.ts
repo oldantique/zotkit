@@ -43,11 +43,29 @@ describe("AnthropicWire.buildRequest", () => {
     });
   });
 
-  it("maps effort onto a thinking budget", () => {
+  it("maps effort onto a thinking budget and raises max_tokens above it", () => {
     const request = wire.buildRequest("https://api.kimi.example/anthropic", "k", [
       { role: "user", text: "q" },
     ], [], { model: "kimi-k2", effort: "high" });
-    expect(JSON.parse(request.body).thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+    const body = JSON.parse(request.body);
+    // Anthropic requires max_tokens > budget_tokens; the thinking budget
+    // itself stays exactly the effort-mapped value (16384 for high) while
+    // max_tokens becomes that budget plus the flat output reserve (8192).
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+    expect(body.max_tokens).toBe(24576);
+  });
+
+  it("skips an empty-text plain assistant message instead of emitting an empty text block", () => {
+    const request = wire.buildRequest("https://api.anthropic.com", "sk-ant", [
+      { role: "user", text: "问" },
+      { role: "assistant", text: "" },
+      { role: "user", text: "问二" },
+    ], [], { model: "claude-sonnet-5", effort: null });
+    const body = JSON.parse(request.body);
+    expect(body.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "问" }] },
+      { role: "user", content: [{ type: "text", text: "问二" }] },
+    ]);
   });
 });
 

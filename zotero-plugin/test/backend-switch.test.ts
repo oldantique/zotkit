@@ -8,9 +8,10 @@ installGeckoStubs();
 import type { NativeBridge } from "../src/native-bridge";
 import type { ReaderContext, ReaderContextService } from "../src/reader-context";
 import type { AgentClient } from "../src/agent-client";
-import { ENGINE_CAPABILITIES } from "../src/agent-client";
+import { CODEX_CAPABILITIES, ENGINE_CAPABILITIES } from "../src/agent-client";
 import { EngineClient } from "../src/engine-client";
 import { ThreadStore } from "../src/codex-app-server";
+import { saveProviders, type ProviderProfile } from "../src/providers";
 
 function paperContext(): ReaderContext {
   return {
@@ -146,6 +147,14 @@ describe("switchBackend with history carry-over", () => {
     expect(service.state.backend).toBe("engine");
     expect(service.state.activeThreadId).toBe("eng-imported");
     expect(internal.sessions.papers["1-ATTACH"].backend).toBe("engine");
+    // I1: a migrated thread must get the same dynamicTools/developerInstructions
+    // a normal thread start would — importThread alone only seeds history.
+    expect((engine as any).threadResume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "eng-imported",
+        developerInstructions: expect.stringContaining("Ask mode"),
+      }),
+    );
   });
 });
 
@@ -190,5 +199,126 @@ describe("switchBackend mode reconciliation", () => {
 
     expect(service.state.backend).toBe("engine");
     expect(service.state.mode).toBe("ask");
+  });
+});
+
+describe("turn/failed notification (C1)", () => {
+  it("resets running/activeTurnId the same way turn/completed does", () => {
+    const engine = fakeEngine();
+    const { service } = makeService(engine);
+    service.state.activeThreadId = "thread-a";
+    service.state.running = true;
+    service.state.activeTurnId = "turn-1";
+    (service as any).handleNotification({
+      method: "turn/failed",
+      params: {
+        threadId: "thread-a",
+        turnId: "turn-1",
+        turn: { id: "turn-1", threadId: "thread-a" },
+        error: { message: "boom" },
+      },
+    });
+    expect(service.state.running).toBe(false);
+    expect(service.state.activeTurnId).toBeNull();
+  });
+});
+
+describe("mixed-backend model menu (C2 / spec §六)", () => {
+  it("engine backend: refreshModels appends a codex placeholder alongside engine entries", async () => {
+    setPrefString("backend", "engine");
+    const provider: ProviderProfile = {
+      id: "p1",
+      name: "DeepSeek",
+      wire: "openai",
+      baseUrl: "https://api.deepseek.com",
+      models: [{ id: "deepseek-chat", label: "DeepSeek Chat" }],
+      defaultModel: "deepseek-chat",
+    };
+    saveProviders([provider]);
+    // Real EngineClient (the default engineClientFactory), not the fakeEngine
+    // stub — modelList() must actually derive engine entries from providers,
+    // which only the real client does.
+    const bridge = { start: vi.fn(), spawnPipe: vi.fn(), closeSession: vi.fn() } as unknown as NativeBridge;
+    const callbacks = { onState: vi.fn(), onError: vi.fn(), onFallbackRequested: vi.fn() };
+    const service = new CodexService(
+      bridge,
+      { tools: [] } as unknown as ReaderContextService,
+      "test",
+      callbacks,
+      null,
+    );
+    await service.start();
+    const ids = service.state.models.map((model) => model.id);
+    expect(ids).toContain("codex");
+    expect(ids).toContain("engine:p1:deepseek-chat");
+    const placeholder = service.state.models.find((model) => model.id === "codex");
+    expect(placeholder?.label).toBe("Codex（订阅）");
+    expect(placeholder?.supportedReasoningEfforts).toEqual([]);
+  });
+
+  it("codex backend: refreshModels appends engine entries derived from providers", async () => {
+    setPrefString("backend", "codex");
+    const provider: ProviderProfile = {
+      id: "p2",
+      name: "OpenAI",
+      wire: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      models: [{ id: "gpt-5-mini", label: "GPT-5 mini", supportsReasoningEffort: true }],
+      defaultModel: "gpt-5-mini",
+    };
+    saveProviders([provider]);
+    const { service } = makeService(fakeEngine());
+    const internal = service as any;
+    service.state.backend = "codex";
+    internal.client = {
+      agentCapabilities: CODEX_CAPABILITIES,
+      modelList: vi.fn().mockResolvedValue({ data: [{ id: "gpt-5", isDefault: true }] }),
+    };
+    const models = await service.refreshModels();
+    const ids = models.map((model) => model.id);
+    expect(ids).toContain("gpt-5");
+    expect(ids).toContain("engine:p2:gpt-5-mini");
+    const engineEntry = models.find((model) => model.id === "engine:p2:gpt-5-mini");
+    expect(engineEntry?.label).toBe("OpenAI · GPT-5 mini");
+    expect(engineEntry?.supportedReasoningEfforts?.length).toBe(3);
+  });
+});
+
+describe("stale agent mode reset on start (I2)", () => {
+  it("falls back to ask when starting lands on capabilities without agent mode support", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    const { service } = makeService(engine);
+    service.state.mode = "agent";
+    await service.start();
+    expect(service.state.capabilities.supportsAgentMode).toBe(false);
+    expect(service.state.mode).toBe("ask");
+  });
+});
+
+describe("resume-failure archives the stale session record (I5)", () => {
+  it("keeps the old thread pointer in sessions.history instead of dropping it", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    (engine as any).threadResume = vi.fn().mockRejectedValue(new Error("resume failed"));
+    const { service } = makeService(engine);
+    await service.start();
+    const internal = service as any;
+    const staleRecord = {
+      threadId: "eng-stale",
+      title: "旧会话",
+      workspace: "/w",
+      updatedAt: "2026-07-20T00:00:00.000Z",
+      backend: "engine",
+    };
+    internal.sessions.papers["1-ATTACH"] = staleRecord;
+    internal.saveSessions = vi.fn().mockResolvedValue(undefined);
+    await service.setPaper(paperContext());
+    // A fresh thread was started (via threadStart, since threadResume rejected).
+    expect(service.state.activeThreadId).not.toBe("eng-stale");
+    expect(internal.sessions.papers["1-ATTACH"].threadId).not.toBe("eng-stale");
+    // The old record is archived, not lost.
+    const history = internal.sessions.history?.["1-ATTACH"] ?? [];
+    expect(history.some((record: { threadId: string }) => record.threadId === "eng-stale")).toBe(true);
   });
 });
