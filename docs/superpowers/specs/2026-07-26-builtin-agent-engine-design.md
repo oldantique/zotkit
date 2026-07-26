@@ -25,6 +25,7 @@ API key,即可用任意 OpenAI/Anthropic 兼容模型服务(尤其 Kimi、DeepSe
 | 接入面 | **两套 wire**:OpenAI 兼容(Kimi 开放平台/DeepSeek/OpenRouter/Ollama/OpenAI/自定义端点)+ Anthropic 兼容(Anthropic key、Kimi For Coding 订阅端点) |
 | 跨后端迁移 | **codex → 引擎携带历史续聊进 v1**(转录导入);反方向只能开新会话(codex 不接受注入历史),明示不对称 |
 | 独立性验收 | **无 codex 的干净机器必须完整可用**:装 XPI + 填 key = 全部 Reader 功能;引擎后端下不探测 codex |
+| 远程 Codex | **支持 SSH 连接远端 Linux 上已登录的 codex CLI**(密钥或密码认证):同一 CodexAppServerClient,仅传输层换为 `ssh` 拉起远端进程;Ask-only,Agent 模式禁用 |
 | Agent 模式(shell/文件写/沙箱) | 不进引擎,仍为 codex/claude 专属——这不在对标的 ChatGPT 体验内 |
 
 方案甲(服务层平行双轨)被否:留痕/Noting/会话逻辑要么复制要么继续困在 codex-service。
@@ -40,6 +41,8 @@ session-service(codex-service.ts 泛化改名)
   会话状态机:entries、留痕 hook、Noting、sessions、工具注册表 —— 后端无关
         │  消费 AgentClient 接口
         ├── CodexAppServerClient(现状,实现 AgentClient,行为不变)
+        │     ├── 本地传输:helper spawnPipe → `codex app-server --stdio`
+        │     └── SSH 传输:helper spawnPipe → `ssh … <远端codex> app-server --stdio`
         └── EngineClient(新增,进程内)
                 ├── agent loop(消息组装 → 流式请求 → 工具调用循环 → 中断)
                 ├── OpenAIWire 适配器
@@ -203,6 +206,44 @@ interface ProviderProfile {
   迁移后在旧锚点「继续对话」,追问落在当前活跃引擎线程(带该锚点选区上下文);新锚点
   正常绑定引擎线程。
 
+## 六点五、远程 Codex(SSH 传输变体)
+
+目标:用户在远端 Linux 上已登录 codex(订阅可用),Mac 上的 Zotero 直接借用该登录态。
+
+- **机制**:协议与客户端零改动。helper `spawnPipe` 的 argv 换为
+  `ssh -T [-p <port>] [-i <keyPath>] [-o BatchMode=yes] <user>@<host> -- <remoteCodexPath> app-server --stdio`,
+  JSONL 走 SSH stdio 管道。helper 无命令白名单,无需改动(已核实)。
+- **认证两式**:
+  - 密钥(推荐):`-i` 指定私钥,私钥无口令或已加入 ssh-agent;`BatchMode=yes` 保证
+    绝不落入交互提示。
+  - 密码:macOS 12+ 自带 OpenSSH ≥ 8.6,用 `SSH_ASKPASS_REQUIRE=force` + 插件捆绑的
+    askpass 脚本;密码存 Login Manager(realm `zotkit-ssh:<profileId>`),经 spawnPipe
+    的 env 传给 askpass;此模式不设 BatchMode。
+  - **host key**:不做指纹确认 UI;要求 `known_hosts` 已含目标主机(用户先在终端手动
+    ssh 一次)。未知主机 → 连接失败,错误文案给出「先在终端 ssh 一次以确认主机指纹」
+    指引。禁用 `StrictHostKeyChecking=no` 之类的降级。
+- **SshCodexProfile**:`{ id, name, host, port(默认22), user, auth: "key"|"password",
+  keyPath?, remoteCodexPath(默认 "codex") }`,存 prefs(不含密码)。注意 ssh 远程命令
+  不加载 login shell 的完整 PATH,`codex` 可能解析失败——连接测试失败时提示改填绝对
+  路径(如 `~/.local/bin/codex`)。
+- **语义边界**(与本地 codex 的差异,UI 需体现):
+  - 账户/模型/推理:全部来自远端已登录的 codex——这正是目的。
+  - `zotero_*` 动态工具仍在**插件本地**执行,论文上下文与检索照常。
+  - codex 自身的文件/shell 操作发生在**远端文件系统**:远程模式下 cwd 固定为远端
+    `~`,不传本地 workspaceRoots;**Agent 模式禁用**(`capabilities.supportsAgentMode
+    = false`),Ask-only;附件项中略去本地 PDF 路径/目录(远端不可读),indexed 全文
+    (纯文本)照附。
+  - 高级 PTY 终端不随远程模式提供(范围外)。
+- **生命周期**:SSH 断开表现为会话关闭,复用现有 CodexDisconnectedError/重启路径;
+  重连 = 重新 spawn。远端 codex 版本需满足与本地相同的 app-server 协议兼容,
+  initialize 时校验。
+- **后端选择模型**:pref `extensions.zotkit.backend` 仍为 `"engine" | "codex"`;codex
+  后端内部有 `target: "local" | <sshProfileId>`。线程记录 backend + target,恢复回到
+  原处。模型菜单显示为 `Codex(本机)` / `Codex(远程 · <name>)` 两个分组。
+  codex(远程)→ 引擎的历史迁移与本地 codex 同机制(转录在协议层读取,与传输无关)。
+- **测试**:argv/env 构造(两种认证、端口、绝对路径)与密码脱敏单测;契约测试不区分
+  传输(mock socket 已覆盖);真机 smoke 增补「远程 Linux codex 全流程」。
+
 ## 七、安全模型
 
 - **确定性写入保证原样成立**(ADR-0002):引擎与 codex 共用同一个只读工具注册表与
@@ -235,6 +276,9 @@ interface ProviderProfile {
 3. 无 provider、无 codex:不报错,显示引导卡。
 4. 断网/401/限流:轮次以可读错误失败,不吞成半截成功;留痕要点降级路径(答案首段
    截断)照常工作。
+5. 远程 codex 用户:配置 SSH profile(密钥或密码)→ 连接测试通过 → 模型菜单选
+   `Codex(远程)` → 提问、留痕、Noting 全流程走远端订阅;SSH 断开报可读错误,重连
+   恢复。
 
 ## 九、实施顺序
 
@@ -247,7 +291,10 @@ interface ProviderProfile {
 6. **M5**:引擎线程 JSONL 持久化 + 留痕/Noting 经 `runUtilityTurn` 接通 + codex → 引擎
    历史迁移。
 7. **M6**:AnthropicWire(Anthropic key / Kimi For Coding)。
-8. **M7**:macOS 真机 smoke:流式手感、Kimi/DeepSeek 实测、迁移旅程、错误路径。
+8. **M7**:远程 Codex(SSH 传输):SshCodexProfile + argv/env 构造 + askpass + 设置
+   面板 + 远程语义边界(Ask-only、远端 cwd)。仅依赖 M1,可与 M2–M6 并行。
+9. **M8**:macOS 真机 smoke:流式手感、Kimi/DeepSeek 实测、迁移旅程、错误路径、
+   远程 Linux codex 全流程。
 
 ## 范围外(明确不做)
 
