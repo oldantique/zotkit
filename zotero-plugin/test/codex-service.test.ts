@@ -804,3 +804,81 @@ describe("CodexService utility turns", () => {
     await expect(service.readThreadTurns("missing")).resolves.toEqual([]);
   });
 });
+
+describe("CodexService entriesForTurn duplicate-user defense (bug-triage #1)", () => {
+  it("collapses two userMessage items with different ids but identical text into a single user entry", () => {
+    const { service } = serviceWithClient({});
+    (service as any).store = {
+      getThread: () => ({
+        turns: [
+          {
+            id: "t1",
+            status: "completed",
+            items: [
+              // Index-fallback id from a turn/started snapshot ...
+              { id: "t1:item:0", type: "userMessage", content: [{ type: "text", text: "浮点数怎么表示?" }] },
+              // ... and the server's real id from a later item/completed notification.
+              { id: "real-item-9", type: "userMessage", content: [{ type: "text", text: "浮点数怎么表示?" }] },
+              { id: "a1", type: "agentMessage", text: "用 IEEE 754。" },
+            ],
+          },
+        ],
+      }),
+    };
+    const chatEntries = service.getChatEntries();
+    const userEntries = chatEntries.filter((entry) => entry.kind === "user");
+    expect(userEntries).toHaveLength(1);
+    expect(userEntries[0]!.text).toBe("浮点数怎么表示?");
+    expect(chatEntries.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
+  });
+
+  it("keeps both user entries when the texts genuinely differ (steering within the same turn)", () => {
+    const { service } = serviceWithClient({});
+    (service as any).store = {
+      getThread: () => ({
+        turns: [
+          {
+            id: "t1",
+            status: "completed",
+            items: [
+              { id: "u1", type: "userMessage", content: [{ type: "text", text: "先看第 2 节" }] },
+              { id: "u2", type: "userMessage", content: [{ type: "text", text: "不,先看摘要" }] },
+              { id: "a1", type: "agentMessage", text: "好的。" },
+            ],
+          },
+        ],
+      }),
+    };
+    const userEntries = service.getChatEntries().filter((entry) => entry.kind === "user");
+    expect(userEntries.map((entry) => entry.text)).toEqual(["先看第 2 节", "不,先看摘要"]);
+  });
+
+  it("does not dedup identical user text across two different turns", () => {
+    const { service } = serviceWithClient({});
+    (service as any).store = {
+      getThread: () => ({
+        turns: [
+          {
+            id: "t1",
+            status: "completed",
+            items: [
+              { id: "u1", type: "userMessage", content: [{ type: "text", text: "重复问题" }] },
+              { id: "a1", type: "agentMessage", text: "答一" },
+            ],
+          },
+          {
+            id: "t2",
+            status: "completed",
+            items: [
+              { id: "u2", type: "userMessage", content: [{ type: "text", text: "重复问题" }] },
+              { id: "a2", type: "agentMessage", text: "答二" },
+            ],
+          },
+        ],
+      }),
+    };
+    const userEntries = service.getChatEntries().filter((entry) => entry.kind === "user");
+    expect(userEntries).toHaveLength(2);
+    expect(userEntries.map((entry) => entry.text)).toEqual(["重复问题", "重复问题"]);
+  });
+});

@@ -28,7 +28,7 @@ import { FloatPanelView, latestExchange } from "./float-panel";
 import { TerminalPanel, type TerminalPaperOptions } from "./terminal-panel";
 import { loadSettings, type ZoteroChatSettings } from "./settings";
 import { ProviderSettingsView } from "./provider-settings";
-import { modelBackend } from "./model-menu";
+import { defaultSelectableModel, modelBackend } from "./model-menu";
 import {
   loadProviders,
   saveProviders,
@@ -689,7 +689,21 @@ export class ZoteroChatPlugin {
       onOpenProviderSettings: () => this.openProviderSettings(),
       onChooseCodexBackend: () => {
         void this.codex.switchBackend("codex", false)
-          .then(() => this.renderChatViews())
+          .then(() => {
+            // Onboarding's「继续用 Codex」path did no selection reconciliation
+            // (bug-triage final review): a stale selectedModel="codex"
+            // placeholder — or one left over from the engine backend — could
+            // be sent as a literal, unsendable codex model name. Reconcile
+            // the same way ensureChatSessionInternal does on every connect.
+            const models = this.codex.state.models;
+            if (!this.selectedModel
+                || modelBackend(this.selectedModel) !== this.codex.state.backend
+                || !models.some((model) => model.id === this.selectedModel)) {
+              this.selectedModel = defaultSelectableModel(models);
+              setPrefString("defaultModel", this.selectedModel);
+            }
+            this.renderChatViews();
+          })
           .catch((error) => this.reportError(error));
       },
       onBackendSwitchDecision: (decision) => { void this.resolveBackendSwitch(decision); },
@@ -777,9 +791,9 @@ export class ZoteroChatPlugin {
         if (this.context) await this.codex.setPaper(this.context);
       }
       const models = this.codex.state.models;
-      const defaultModel = models.find((model) => model.isDefault) || models[0];
-      if (!this.selectedModel && defaultModel) {
-        this.selectedModel = defaultModel.id;
+      const fallbackModel = defaultSelectableModel(models);
+      if (!this.selectedModel && fallbackModel) {
+        this.selectedModel = fallbackModel;
       }
       else if (this.selectedModel
           && (modelBackend(this.selectedModel) !== this.codex.state.backend
@@ -787,8 +801,10 @@ export class ZoteroChatPlugin {
         // Stale selection from a prior backend (or a stale `defaultModel`
         // pref pointing at a model this backend no longer serves) — fall
         // back to this backend's default rather than sending to a model
-        // that doesn't belong to the active client.
-        this.selectedModel = defaultModel?.id || "";
+        // that doesn't belong to the active client. defaultSelectableModel
+        // never returns the "codex" placeholder (bug-triage final review),
+        // so this can't send a literal, unsendable model id either.
+        this.selectedModel = fallbackModel;
         setPrefString("defaultModel", this.selectedModel);
       }
       await this.refreshMutationCheckpoints();
@@ -874,7 +890,7 @@ export class ZoteroChatPlugin {
       const models = this.codex.state.models;
       const resolved = models.some((model) => model.id === pending.targetModel)
         ? pending.targetModel
-        : (models.find((model) => model.isDefault) || models[0])?.id || "";
+        : defaultSelectableModel(models);
       this.selectedModel = resolved;
       setPrefString("defaultModel", resolved);
     }

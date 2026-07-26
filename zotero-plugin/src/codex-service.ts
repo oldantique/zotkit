@@ -916,12 +916,29 @@ export class CodexService {
     return entries;
   }
 
-  /** Shared item→entry expansion for a single turn, used by getChatEntries and readThreadTurns. */
+  /**
+   * Shared item→entry expansion for a single turn, used by getChatEntries and
+   * readThreadTurns. Defensively collapses duplicate `userMessage` entries
+   * within THIS turn that carry identical text (bug-triage #1): the codex
+   * app-server can materialize the same user message under two different
+   * item ids -- an index-fallback id from a `turn/started` snapshot plus the
+   * real id from a later `item/completed` notification -- and neither
+   * `mergeTurn` nor `upsertItem` de-dupes across ids, so both would render as
+   * separate bubbles otherwise. Only same-turn, identical-text `user` entries
+   * are collapsed; assistant/tool/command entries and genuine two-different-
+   * texts steering turns are left untouched.
+   */
   private entriesForTurn(turn: StoredTurn): ChatEntry[] {
     const entries: ChatEntry[] = [];
+    const seenUserText = new Set<string>();
     for (const item of turn.items) {
       const entry = itemToEntry(item, turn);
-      if (entry) entries.push(entry);
+      if (!entry) continue;
+      if (entry.kind === "user") {
+        if (seenUserText.has(entry.text)) continue;
+        seenUserText.add(entry.text);
+      }
+      entries.push(entry);
     }
     if (turn.error) {
       entries.push({

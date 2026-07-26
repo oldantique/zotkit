@@ -332,6 +332,33 @@ describe("PaperTrailService", () => {
     expect(callbacks.anchors[0].status).toBe("resolved");
   });
 
+  it("skips the comment rewrite (never blanks it) when the transcript read SUCCEEDS but yields no exchanges", async () => {
+    const host = makeHost();
+    const round0 = [{ id: "u1", kind: "user", text: "q" }, { id: "a1", kind: "assistant", text: "ans" }] as any;
+    const callbacks = makeCallbacks("on", { "thread-a": turnsAt(0, round0) });
+    const service = new PaperTrailService(host, callbacks);
+    const context = trailContext();
+
+    service.beginPendingAnchor(context, "q", "thread-a");
+    const anchor = await service.completeTurn(context, "thread-a", round0, 0);
+    expect(host.created[0].comment).toBe("Q: q\n\nA: ans");   // the good comment already written
+
+    // readThreadTurns resolves SUCCESSFULLY, but to [] -- e.g. the store
+    // hasn't populated this thread's turns yet. An empty successful read
+    // must never blank the existing comment with buildAnchorTranscriptComment([]) === "".
+    callbacks.readThreadTurns = vi.fn(async () => []);
+
+    const extended = await service.completeTurn(context, "thread-a", round0, 1);
+    expect(extended?.turnRange).toEqual([0, 1]);              // session-store patch still lands
+    expect(callbacks.anchors[0].turnRange).toEqual([0, 1]);
+    expect(host.updateAnnotationComment).not.toHaveBeenCalled();
+    expect(anchor!.annotationKey).toBe("ANN1");                // unchanged; comment on the Zotero side was never touched
+
+    // Queue stays alive: a later queued operation still runs and completes normally.
+    await service.resolveAnchor(context, anchor!.anchorId);
+    expect(callbacks.anchors[0].status).toBe("resolved");
+  });
+
   it("skips the comment rewrite (never blanks it) when the transcript read itself fails", async () => {
     const host = makeHost();
     const round0 = [{ id: "u1", kind: "user", text: "q" }, { id: "a1", kind: "assistant", text: "ans" }] as any;

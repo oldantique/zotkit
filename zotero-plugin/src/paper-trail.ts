@@ -649,13 +649,20 @@ export class PaperTrailService {
    */
   private async rewriteTranscript(anchor: AnchorRecord): Promise<void> {
     if (!anchor.annotationKey) return;
-    let comment: string;
+    let exchanges: TranscriptExchange[];
     try {
-      comment = await this.buildTranscriptComment(anchor);
+      exchanges = await this.transcriptExchangesFor(anchor.threadId, anchor.turnRange);
     }
     catch {
       return;
     }
+    // A successful read that resolves to NO exchanges (e.g. the turnRange's
+    // slice landed on turns the store hasn't populated yet) must never blank
+    // an existing, good comment -- buildAnchorTranscriptComment([]) is "",
+    // and writing that over a real transcript would read as "conversation
+    // deleted". Skip the write entirely; the next rewrite catches it up.
+    if (exchanges.length === 0) return;
+    const comment = buildAnchorTranscriptComment(exchanges);
     try {
       await this.host.updateAnnotationComment(anchor.libraryID, anchor.annotationKey, comment);
     }
