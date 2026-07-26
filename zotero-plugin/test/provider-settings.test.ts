@@ -91,4 +91,43 @@ describe("ProviderSettingsView", () => {
     expect(saved.id).toBe("p1");
     expect(apiKey).toBeNull();
   });
+
+  it("preserves form state across re-renders when busy state changes", () => {
+    const { host, view, callbacks } = mount();
+    view.setState({
+      providers: [profile],
+      keyMask: { p1: "····1234" },
+      statusText: null,
+      busy: false,
+    });
+    // Click edit to fill form with provider data
+    host.querySelector<HTMLButtonElement>(".zc-provider-edit")!.click();
+    // Type new values into the form
+    const nameInput = host.querySelector<HTMLInputElement>(".zc-provider-name")!;
+    const keyInput = host.querySelector<HTMLInputElement>(".zc-provider-key")!;
+    nameInput.value = "Modified Name";
+    keyInput.value = "sk-new-key";
+    // Call setState with busy: true (this triggers re-render)
+    view.setState({
+      providers: [profile],
+      keyMask: { p1: "····1234" },
+      statusText: null,
+      busy: true,
+    });
+    // Assert the typed values are still there after re-render
+    expect(host.querySelector<HTMLInputElement>(".zc-provider-name")!.value).toBe("Modified Name");
+    expect(host.querySelector<HTMLInputElement>(".zc-provider-key")!.value).toBe("sk-new-key");
+    // Restore busy to false so we can click save
+    view.setState({
+      providers: [profile],
+      keyMask: { p1: "····1234" },
+      statusText: null,
+      busy: false,
+    });
+    // Assert saving submits the typed values (not null for key)
+    host.querySelector<HTMLButtonElement>(".zc-provider-save")!.click();
+    const [saved, apiKey] = callbacks.onSave.mock.calls[0]!;
+    expect(saved.name).toBe("Modified Name");
+    expect(apiKey).toBe("sk-new-key");
+  });
 });

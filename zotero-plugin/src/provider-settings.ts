@@ -41,11 +41,21 @@ export function formatModelLines(models: ProviderModel[]): string {
 
 const EGRESS_NOTICE = "对话内容（含论文摘录、批注）将发送到你配置的这个端点。请仅使用你信任的服务。";
 
+interface FormSnapshot {
+  name: string;
+  wire: "openai" | "anthropic";
+  baseUrl: string;
+  models: string;
+  defaultModel: string;
+  key: string;
+}
+
 export class ProviderSettingsView {
   private readonly host: HTMLElement;
   private readonly callbacks: ProviderSettingsCallbacks;
   private state: ProviderSettingsState = { providers: [], keyMask: {}, statusText: null, busy: false };
   private editingId = "";
+  private formSnapshot: FormSnapshot | null = null;
 
   constructor(host: HTMLElement, callbacks: ProviderSettingsCallbacks) {
     this.host = host;
@@ -65,6 +75,20 @@ export class ProviderSettingsView {
 
   private render(): void {
     const doc = this.host.ownerDocument;
+
+    // Snapshot form state before clearing
+    const existingForm = this.host.querySelector<HTMLElement>(".zc-provider-form");
+    if (existingForm) {
+      this.formSnapshot = {
+        name: this.host.querySelector<HTMLInputElement>(".zc-provider-name")?.value || "",
+        wire: (this.host.querySelector<HTMLSelectElement>(".zc-provider-wire")?.value || "openai") as "openai" | "anthropic",
+        baseUrl: this.host.querySelector<HTMLInputElement>(".zc-provider-baseurl")?.value || "",
+        models: this.host.querySelector<HTMLTextAreaElement>(".zc-provider-models")?.value || "",
+        defaultModel: this.host.querySelector<HTMLInputElement>(".zc-provider-default")?.value || "",
+        key: this.host.querySelector<HTMLInputElement>(".zc-provider-key")?.value || "",
+      };
+    }
+
     this.host.replaceChildren();
 
     const header = doc.createElement("div");
@@ -104,7 +128,27 @@ export class ProviderSettingsView {
     }
     this.host.appendChild(list);
 
-    this.host.appendChild(this.buildForm(doc));
+    const form = this.buildForm(doc);
+    this.host.appendChild(form);
+
+    // Restore form state if it was snapshotted (but not if fillForm was just called)
+    if (this.formSnapshot) {
+      const query = <T extends HTMLElement>(selector: string) =>
+        form.querySelector<T>(selector);
+      const nameInput = query<HTMLInputElement>(".zc-provider-name");
+      const wireSelect = query<HTMLSelectElement>(".zc-provider-wire");
+      const baseUrlInput = query<HTMLInputElement>(".zc-provider-baseurl");
+      const modelsTextarea = query<HTMLTextAreaElement>(".zc-provider-models");
+      const defaultModelInput = query<HTMLInputElement>(".zc-provider-default");
+      const keyInput = query<HTMLInputElement>(".zc-provider-key");
+
+      if (nameInput) nameInput.value = this.formSnapshot.name;
+      if (wireSelect) wireSelect.value = this.formSnapshot.wire;
+      if (baseUrlInput) baseUrlInput.value = this.formSnapshot.baseUrl;
+      if (modelsTextarea) modelsTextarea.value = this.formSnapshot.models;
+      if (defaultModelInput) defaultModelInput.value = this.formSnapshot.defaultModel;
+      if (keyInput) keyInput.value = this.formSnapshot.key;
+    }
 
     if (this.state.statusText) {
       const status = doc.createElement("div");
@@ -181,6 +225,9 @@ export class ProviderSettingsView {
   }
 
   private fillForm(profile: ProviderProfile): void {
+    // Clear the snapshot since user explicitly chose a preset/edit, overriding any typed values
+    this.formSnapshot = null;
+
     const query = <T extends HTMLElement>(selector: string) =>
       this.host.querySelector<T>(selector)!;
     query<HTMLInputElement>(".zc-provider-name").value = profile.name;

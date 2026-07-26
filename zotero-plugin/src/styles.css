@@ -490,6 +490,14 @@
 .zc-consent-card > p { margin: 7px 0 0; color: var(--zc-muted); font-size: 10.5px; }
 .zc-consent-card .zc-approval-heading > span { color: var(--zc-accent); background: color-mix(in srgb, var(--zc-accent) 11%, transparent); }
 
+.zc-provider-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  overflow: auto;
+  background: var(--zc-bg);
+}
+
 .zc-provider-settings { display: grid; gap: 8px; }
 .zc-provider-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
 .zc-provider-header strong { font-size: 11px; font-weight: 650; }
