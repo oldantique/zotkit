@@ -8,3 +8,5 @@ pref("extensions.zotkit.showReasoning", false);
 pref("extensions.zotkit.paperTrail", "unset");
 pref("extensions.zotkit.backend", "");
 pref("extensions.zotkit.providers", "[]");
+pref("extensions.zotkit.codexTarget", "local");
+pref("extensions.zotkit.sshProfiles", "[]");

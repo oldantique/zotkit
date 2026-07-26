@@ -98,7 +98,7 @@ export function configuredLibraryRoot(): string {
   return prefString("libraryRoot") || homePath("Documents", "chancezotero");
 }
 
-export async function findExecutable(name: "codex" | "claude"): Promise<string | null> {
+export async function findExecutable(name: "codex" | "claude" | "ssh"): Promise<string | null> {
   const override = prefString(`${name}Path`);
   const candidates = [
     override,

@@ -28,6 +28,7 @@ import type { ReaderContext, ReaderContextService, ReaderToolName } from "./read
 import { findExecutable, launchURL, makeLocalFile, prefString, profilePath, randomID, setPrefString } from "./platform";
 import type { ChatEntry, ModelOption, ResearchMode, ThreadOption } from "./sidebar";
 import type { AnchorRecord } from "./paper-trail";
+import { ASKPASS_SCRIPT, buildSshLaunch, loadSshProfiles, sshSecretRealm } from "./ssh-codex";
 
 export type CodexApprovalDecision = "approve-once" | "approve-session" | "reject" | "cancel";
 
@@ -179,6 +180,7 @@ export class CodexService {
   };
 
   private client: AgentClient | null = null;
+  private remoteCodex = false;
   private startPromise: Promise<void> | null = null;
   private appServerSessionId: string | null = null;
   private sessions: SessionFile = { version: 1, papers: {} };
@@ -280,14 +282,42 @@ export class CodexService {
       this.bridge.closeSession(this.appServerSessionId);
       this.appServerSessionId = null;
     }
-    const executable = await findExecutable("codex");
-    if (!executable) throw new Error("未找到 Codex CLI。请先安装 Codex，然后重试。");
+    const target = prefString("codexTarget", "local");
+    let argv: string[];
+    let env: Record<string, string>;
+    if (target === "local") {
+      this.remoteCodex = false;
+      const executable = await findExecutable("codex");
+      if (!executable) throw new Error("未找到 Codex CLI。请先安装 Codex，然后重试。");
+      argv = [executable, "app-server", "--stdio"];
+      env = { NO_COLOR: "1" };
+    }
+    else {
+      const profile = loadSshProfiles().find((candidate) => candidate.id === target);
+      if (!profile) throw new Error("找不到远程 Codex 配置，请检查设置");
+      this.remoteCodex = true;
+      let askpassPath: string | null = null;
+      if (profile.auth === "password") {
+        askpassPath = await this.ensureAskpassScript();
+      }
+      const launch = buildSshLaunch(profile, askpassPath);
+      // The native helper only accepts an absolute executable path for
+      // argv[0] (native-bridge.ts's spawnPipe guard); buildSshLaunch's argv
+      // is pinned to the literal "ssh" (see ssh-codex test), so resolve the
+      // local ssh client here and splice it in, leaving the rest of argv
+      // (the ssh arguments themselves) untouched.
+      const sshExecutable = await findExecutable("ssh");
+      if (!sshExecutable) throw new Error("未找到本机 ssh 客户端。请先安装 OpenSSH，然后重试。");
+      argv = [sshExecutable, ...launch.argv.slice(1)];
+      env = launch.env;
+      if (profile.auth === "password") {
+        const password = await readSecret(sshSecretRealm(profile.id), profile.id);
+        if (!password) throw new Error("远程 Codex 的 SSH 密码尚未保存，请在设置中填写");
+        env.ZOTKIT_SSH_PASSWORD = password;
+      }
+    }
     const sessionId = randomID("appserver").slice(0, 64);
-    await this.bridge.spawnPipe(sessionId, {
-      argv: [executable, "app-server", "--stdio"],
-      cwd: profilePath(),
-      env: { NO_COLOR: "1" }
-    });
+    await this.bridge.spawnPipe(sessionId, { argv, cwd: profilePath(), env });
     const socket = new NativeSessionSocket(this.bridge, sessionId);
     const client = new CodexAppServerClient({
       url: "zotkit://authenticated-stdio",
@@ -322,7 +352,9 @@ export class CodexService {
     try {
       await client.connect();
       this.client = client;
-      this.state.capabilities = client.agentCapabilities;
+      this.state.capabilities = this.remoteCodex
+        ? { ...client.agentCapabilities, supportsAgentMode: false, supportsCheckpoints: false }
+        : client.agentCapabilities;
       this.appServerSessionId = sessionId;
       this.state.connected = true;
       this.state.appServerAvailable = true;
@@ -335,8 +367,21 @@ export class CodexService {
     catch (error) {
       client.close(1011, "Codex app-server startup failed");
       this.bridge.closeSession(sessionId);
+      if (target !== "local") {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `远程 Codex 连接失败：${message}。若是首次连接该主机，请先在终端 ssh 一次以确认主机指纹（known_hosts）。`,
+        );
+      }
       throw error;
     }
+  }
+
+  private async ensureAskpassScript(): Promise<string> {
+    const path = profilePath("zotkit-askpass.sh");
+    await IOUtils.writeUTF8(path, ASKPASS_SCRIPT, { tmpPath: `${path}.tmp` });
+    await IOUtils.setPermissions?.(path, 0o700, false);
+    return path;
   }
 
   stop(): void {
@@ -351,6 +396,11 @@ export class CodexService {
     this.state.running = false;
     this.state.activeThreadId = null;
     this.state.activeTurnId = null;
+    // Only startCodexInternal's remote branch re-arms this; without a reset
+    // here, switching from a remote SSH codex session straight to the Engine
+    // backend (which never touches remoteCodex) would leak the read-only /
+    // no-local-paths remote semantics into Engine thread/turn settings.
+    this.remoteCodex = false;
   }
 
   isSignedIn(): boolean {
@@ -590,7 +640,11 @@ export class CodexService {
     if (!context || !paperKey || this.threadPaperKeys.get(threadId) !== paperKey) {
       throw new Error("论文对话尚未准备好，请稍候重试");
     }
-    const additionalContext = buildAdditionalContext(context, this.interactionContext);
+    const additionalContext = buildAdditionalContext(
+      context,
+      this.interactionContext,
+      { includeLocalPaths: !this.remoteCodex },
+    );
     const input = [{ type: "text" as const, text, text_elements: [] }];
     if (this.state.running) {
       const expectedTurnId = this.state.activeTurnId;
@@ -1149,6 +1203,15 @@ export class CodexService {
     | "developerInstructions"
     | "dynamicTools"
   > {
+    if (this.remoteCodex) {
+      return {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandbox: "read-only",
+        developerInstructions: ASK_DEVELOPER_INSTRUCTIONS,
+        dynamicTools: this.dynamicToolSpecs(),
+      };
+    }
     const roots = contextRoots(context);
     const agent = this.state.mode === "agent";
     return {
@@ -1166,6 +1229,13 @@ export class CodexService {
     TurnStartParams,
     "cwd" | "runtimeWorkspaceRoots" | "approvalPolicy" | "approvalsReviewer" | "sandboxPolicy"
   > {
+    if (this.remoteCodex) {
+      return {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandboxPolicy: { type: "readOnly", networkAccess: false },
+      };
+    }
     const roots = contextRoots(context);
     const agent = this.state.mode === "agent";
     const sandboxPolicy: SandboxPolicy = agent
@@ -1331,11 +1401,13 @@ function anchorIdentity(anchor: AnchorRecord): string {
   return `${anchor.libraryID ?? "0"}-${anchor.attachmentKey}`;
 }
 
-function buildAdditionalContext(
+export function buildAdditionalContext(
   context: ReaderContext | null,
   interactionContext: Record<string, CodexInteractionContextEntry> = {},
+  options: { includeLocalPaths?: boolean } = {},
 ): Record<string, AdditionalContextEntry> | null {
   if (!context) return null;
+  const includeLocalPaths = options.includeLocalPaths !== false;
   const title = context.parent?.title || context.attachment.title || context.attachment.filename || "Current PDF";
   const parent = context.parent;
   const authors = (parent?.creators || context.attachment.creators)
@@ -1356,8 +1428,8 @@ function buildAdditionalContext(
     parent?.doi ? `DOI: ${parent.doi}` : "",
     parent?.publicationTitle ? `Publication: ${parent.publicationTitle}` : "",
     `Attachment key: ${context.attachment.key}`,
-    context.pdfPath ? `PDF path: ${context.pdfPath}` : "",
-    directory ? `PDF directory: ${directory}` : "",
+    includeLocalPaths && context.pdfPath ? `PDF path: ${context.pdfPath}` : "",
+    includeLocalPaths && directory ? `PDF directory: ${directory}` : "",
     `Current PDF page: ${context.page.pageNumber}${context.page.pageLabel ? ` (label ${context.page.pageLabel})` : ""}`,
     `Current page text:\n${pageText}`,
     `Current selection:\n${selection}`,
