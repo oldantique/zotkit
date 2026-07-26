@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ReaderContext } from "../src/reader-context";
+import { sha256Bytes } from "../src/hashing";
 import {
   ZOTERO_MUTATION_TOOL,
   ZoteroMutationService,
@@ -103,6 +105,7 @@ function harness() {
       size: 128,
       sha256: "a".repeat(64),
     })),
+    resolveReplacementDestination: vi.fn(async (path: string) => path),
     createCheckpoint: vi.fn(async () => checkpoint),
     apply: vi.fn(async () => {}),
     restore: vi.fn(async () => ({
@@ -594,6 +597,7 @@ function makeRelinkTestBed(hooks: RelinkFsHooks = {}) {
   (globalThis as any).PathUtils = { join: (...parts: string[]) => parts.join("/").replace(/\/{2,}/g, "/") };
   (globalThis as any).Services = {
     prefs: { getStringPref: (_key: string, fallback: string) => LIBRARY_ROOT || fallback },
+    uuid: { generateUUID: () => "{00000000-0000-0000-0000-000000000000}" },
   };
   (globalThis as any).Components = {
     classes: {
@@ -605,14 +609,36 @@ function makeRelinkTestBed(hooks: RelinkFsHooks = {}) {
           isSymlink() { return hooks.isSymlink ? hooks.isSymlink(this.path) : false; },
         }),
       },
+      // Real Node-crypto-backed nsICryptoHash, for the replace_pdf apply
+      // path below: it calls sha256Bytes(...) on the (mocked) staged file's
+      // read() output to re-derive the fingerprint it compares against a
+      // caller-supplied StagedPdfBinding. A stub that returns a fixed digest
+      // wouldn't let a test assert a *specific*, independently-computable
+      // expected hash, so this drives an actual SHA-256 through the same
+      // update()/finish() shape hashing.ts expects.
+      "@mozilla.org/security/hash;1": {
+        createInstance: () => {
+          let chunks: number[] = [];
+          return {
+            SHA256: 4,
+            init() { chunks = []; },
+            update(bytes: Uint8Array) { chunks.push(...bytes); },
+            finish() {
+              const digest = createHash("sha256").update(Uint8Array.from(chunks)).digest();
+              return String.fromCharCode(...digest);
+            },
+          };
+        },
+      },
     },
-    interfaces: { nsIFile: {} },
+    interfaces: { nsIFile: {}, nsICryptoHash: {} },
   };
   const ioUtils = {
     stat: vi.fn(async () => ({ type: "regular", size: 16 })),
     read: vi.fn(async (_path: string, options?: { maxBytes?: number }) => (
       options?.maxBytes ? Uint8Array.from([37, 80, 68, 70, 45]) : new Uint8Array(16)
     )),
+    write: vi.fn(async () => {}),
   };
   const host = createZoteroMutationHost(runtime, ioUtils, (globalThis as any).PathUtils);
   const restore = () => {
@@ -743,6 +769,152 @@ describe("createZoteroMutationHost", () => {
         // validateOperations canonicalizes operation.newPath in place, so the
         // diff (built from the same operations array) also reflects it.
         expect(operations[0]).toMatchObject({ newPath: canonicalPath });
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("refuses to relink when the target's canonical resolution shifts between apply's own pre-check and its write-time re-validation", async () => {
+      // apply() re-validates the relink target twice in quick succession:
+      // once via its shared top-level validateOperations() call, then again
+      // (write-time) inside the relink branch itself, right before
+      // relinkAttachmentFile is invoked -- with real Zotero.Items lookups
+      // awaited in between. A symlink parent directory swapped in that
+      // window would make the two calls resolve to different canonical
+      // paths; a stub whose normalize() mapping for the *target* path is
+      // unstable across calls simulates exactly that, without needing real
+      // wall-clock timing. (Only the target path's mapping is call-counted --
+      // the allowed-root path also runs through normalize() during the
+      // containment check, and must keep resolving to itself or every call
+      // would spuriously fail containment instead.)
+      const targetPath = `${LIBRARY_ROOT}/paper.pdf`;
+      const firstCanonical = targetPath;
+      const retargetedCanonical = `${LIBRARY_ROOT}/paper-retargeted.pdf`;
+      let targetNormalizeCalls = 0;
+      const { host, attachment, restore } = makeRelinkTestBed({
+        normalize: (path) => {
+          if (path !== targetPath) return path;
+          targetNormalizeCalls += 1;
+          return targetNormalizeCalls === 1 ? firstCanonical : retargetedCanonical;
+        },
+      });
+      try {
+        const operations: ZoteroMutationOperation[] = [
+          { type: "relink_attachment", newPath: targetPath },
+        ];
+
+        await expect(host.apply(context(), snapshot(), operations, []))
+          .rejects.toThrow("The relink target's real path changed after review. Generate a fresh proposal.");
+        expect(attachment.relinkAttachmentFile).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+  });
+
+  describe("replace_pdf destination containment + symlink/TOCTOU safety", () => {
+    it("rejects resolving a replacement destination that is itself a symlink leaf", async () => {
+      const { host, restore } = makeRelinkTestBed({
+        isSymlink: (path) => path === "/papers/paper.pdf",
+      });
+      try {
+        await expect(host.resolveReplacementDestination("/papers/paper.pdf"))
+          .rejects.toThrow("Symbolic-link PDF targets are not accepted");
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("refuses to write and touches no bytes when the destination's canonical path no longer matches the reviewed binding (TOCTOU)", async () => {
+      // The binding below simulates one staged at propose time, pinning
+      // destinationCanonicalPath to the attachment's real path *then*.
+      // Flipping `retargeted` simulates a symlinked parent directory
+      // swapped in the window between that proposal and this Apply.
+      const targetPath = "/papers/paper.pdf";
+      let retargeted = false;
+      const { host, ioUtils, restore } = makeRelinkTestBed({
+        normalize: (path) => (retargeted && path === targetPath) ? "/papers/paper-retargeted.pdf" : path,
+      });
+      try {
+        const stagedPdfBindings = [{
+          operationIndex: 0,
+          stagedPath: "/profile/papers/1-ATTACH/output.pdf",
+          canonicalPath: "/profile/papers/1-ATTACH/output.pdf",
+          size: 16,
+          sha256: sha256Bytes(new Uint8Array(16)),
+          destinationCanonicalPath: targetPath,
+        }];
+        retargeted = true;
+
+        const operations: ZoteroMutationOperation[] = [
+          { type: "replace_pdf", stagedPath: "/profile/papers/1-ATTACH/output.pdf" },
+        ];
+        await expect(host.apply(context(), snapshot(), operations, stagedPdfBindings))
+          .rejects.toThrow("The replacement target's real path changed after review. Generate a fresh proposal.");
+        expect(ioUtils.write).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("rejects Apply when the staged PDF binding is missing its destination fingerprint", async () => {
+      const { host, ioUtils, restore } = makeRelinkTestBed();
+      try {
+        // Simulates a binding built before destinationCanonicalPath existed
+        // (in-memory state only -- bindings are never persisted -- but
+        // defended against regardless of how it could arise).
+        const stagedPdfBindings = [{
+          operationIndex: 0,
+          stagedPath: "/profile/papers/1-ATTACH/output.pdf",
+          canonicalPath: "/profile/papers/1-ATTACH/output.pdf",
+          size: 16,
+          sha256: sha256Bytes(new Uint8Array(16)),
+        } as any];
+
+        const operations: ZoteroMutationOperation[] = [
+          { type: "replace_pdf", stagedPath: "/profile/papers/1-ATTACH/output.pdf" },
+        ];
+        await expect(host.apply(context(), snapshot(), operations, stagedPdfBindings))
+          .rejects.toThrow("The staged PDF binding is missing its destination fingerprint");
+        expect(ioUtils.write).not.toHaveBeenCalled();
+      }
+      finally {
+        restore();
+      }
+    });
+
+    it("writes to the canonical destination path, not the raw attachment path, when normalize() rewrites it", async () => {
+      const rawTarget = "/papers/paper.pdf";
+      const canonicalTarget = "/real/papers/paper.pdf";
+      const { host, ioUtils, restore } = makeRelinkTestBed({
+        normalize: (path) => path === rawTarget ? canonicalTarget : path,
+      });
+      try {
+        const stagedPath = "/profile/papers/1-ATTACH/output.pdf";
+        const stagedPdfBindings = [{
+          operationIndex: 0,
+          stagedPath,
+          canonicalPath: stagedPath,
+          size: 16,
+          sha256: sha256Bytes(new Uint8Array(16)),
+          destinationCanonicalPath: canonicalTarget,
+        }];
+
+        const operations: ZoteroMutationOperation[] = [
+          { type: "replace_pdf", stagedPath },
+        ];
+        await host.apply(context(), snapshot(), operations, stagedPdfBindings);
+
+        expect(ioUtils.write).toHaveBeenCalledWith(
+          canonicalTarget,
+          expect.anything(),
+          expect.objectContaining({ tmpPath: expect.stringContaining(canonicalTarget) }),
+        );
+        expect(ioUtils.write).not.toHaveBeenCalledWith(rawTarget, expect.anything(), expect.anything());
       }
       finally {
         restore();

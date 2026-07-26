@@ -58,6 +58,15 @@ export interface StagedPdfFingerprint {
 interface StagedPdfBinding extends StagedPdfFingerprint {
   operationIndex: number;
   stagedPath: string;
+  // The canonical (symlink-leaf-rejected, post-normalize) form of the
+  // *destination* attachment path at the time this binding was staged.
+  // Apply re-derives this from the live attachment path immediately before
+  // writing and refuses to write if it no longer matches -- otherwise a
+  // symlink swapped in between review and Apply could redirect the write
+  // to a path the user never reviewed. Required (not optional) so a
+  // binding built before this field existed is structurally rejected by
+  // the missing-field check in Apply rather than silently skipping it.
+  destinationCanonicalPath: string;
 }
 
 export interface MutationEffects {
@@ -96,6 +105,15 @@ export interface MutationHost {
     operations: readonly ZoteroMutationOperation[],
   ): Promise<void>;
   fingerprintPdf(context: ReaderContext, path: string): Promise<StagedPdfFingerprint>;
+  /**
+   * Resolves `path` (the current attachment's resolved file path) to its
+   * canonical, symlink-leaf-rejected form for a replace_pdf write
+   * destination. Called once when staging the binding (proposal time) and
+   * again immediately before Apply writes, so a retargeted symlink between
+   * those two calls is caught by comparing the two results instead of
+   * trusting whichever one ran last.
+   */
+  resolveReplacementDestination(path: string): Promise<string>;
   createCheckpoint(
     id: string,
     label: string,
@@ -185,7 +203,7 @@ export class ZoteroMutationService {
     const snapshot = await this.host.snapshot(context);
     assertSnapshotMatchesContext(snapshot, context);
     await this.host.validateOperations(context, snapshot, operations);
-    const stagedPdfBindings = await bindStagedPdfs(this.host, context, operations);
+    const stagedPdfBindings = await bindStagedPdfs(this.host, context, operations, snapshot);
     const id = this.idFactory("review");
     const createdAt = this.now().toISOString();
     const diff = await buildMutationDiff(this.host, snapshot, operations, stagedPdfBindings);
@@ -285,6 +303,7 @@ export class ZoteroMutationService {
           context,
           pending.operations,
           pending.stagedPdfBindings,
+          current,
         );
       }
       catch (error) {
@@ -514,6 +533,21 @@ export function createZoteroMutationHost(
     };
   };
 
+  // Shared by bindStagedPdfs (proposal time, via the MutationHost interface)
+  // and apply()'s replace_pdf branch below (write time, called directly
+  // since we're already inside this closure). Unlike validatePdfPath, this
+  // doesn't check containment or stat the file -- it's the *destination*
+  // attachment path Zotero already manages, not a file being staged -- it
+  // only rejects a symlink leaf and returns the normalize()d canonical form,
+  // mirroring relink's isSymlink-before-normalize ordering so the check can
+  // never end up inspecting an already-resolved (never-a-symlink) path.
+  const resolveReplacementDestination = async (path: string): Promise<string> => {
+    const file = makeLocalFile(path);
+    if (file.isSymlink?.()) throw new Error("Symbolic-link PDF targets are not accepted");
+    file.normalize?.();
+    return String(file.path || path);
+  };
+
   const invalidateZoteroFullText = async (attachment: any): Promise<void> => {
     const fulltext = zotero.Fulltext ?? zotero.FullText;
     if (
@@ -598,15 +632,20 @@ export function createZoteroMutationHost(
           // Re-validate at Apply time (mirrors replace_pdf below): the review
           // ran validateOperations once already, but the window between that
           // check and this write is exactly where a symlink could be
-          // retargeted. Re-resolving here and forwarding the fresh
-          // canonicalPath -- never the caller-supplied operation.newPath --
-          // closes that gap.
+          // retargeted. Re-resolving here and asserting it still matches
+          // operation.newPath -- the canonical path the user actually
+          // reviewed -- closes that gap: if the filesystem now resolves to
+          // something else, Apply refuses instead of silently relinking to a
+          // target the diff never showed.
           const inspected = await validatePdfPath(
             operation.newPath,
             [configuredLibraryRoot()],
             ioUtils,
             RELINK_CONTAINMENT_ERROR,
           );
+          if (inspected.canonicalPath !== operation.newPath) {
+            throw new Error("The relink target's real path changed after review. Generate a fresh proposal.");
+          }
           await attachment.relinkAttachmentFile(inspected.canonicalPath);
           attachmentContentChanged = true;
         }
@@ -615,6 +654,22 @@ export function createZoteroMutationHost(
           if (!target) throw new Error("The active PDF path is unavailable");
           const expected = stagedPdfBindings.find((entry) => entry.operationIndex === operationIndex);
           if (!expected) throw new Error("The staged PDF fingerprint is unavailable; generate a fresh proposal");
+          // A binding staged before destinationCanonicalPath existed (or
+          // otherwise missing it) can't be trusted to pin a write target --
+          // reject it the same way a stale/absent binding is already
+          // rejected above, rather than falling back to an unpinned write.
+          if (!expected.destinationCanonicalPath) {
+            throw new Error("The staged PDF binding is missing its destination fingerprint; generate a fresh proposal");
+          }
+          // Re-derive the destination's canonical path right before writing
+          // (mirrors relink's write-time re-validation above): if it no
+          // longer matches what was pinned when this binding was staged, a
+          // symlink was retargeted in between and Apply must refuse instead
+          // of writing to a path the user never reviewed.
+          const destinationCanonicalPath = await resolveReplacementDestination(target);
+          if (destinationCanonicalPath !== expected.destinationCanonicalPath) {
+            throw new Error("The replacement target's real path changed after review. Generate a fresh proposal.");
+          }
           const allowedRoots = [context.workspace?.root, profilePath("staging")].filter(Boolean) as string[];
           const inspected = await validatePdfPath(operation.stagedPath, allowedRoots, ioUtils);
           const bytes = await ioUtils.read(inspected.canonicalPath);
@@ -630,7 +685,11 @@ export function createZoteroMutationHost(
           ) {
             throw new Error("The staged PDF changed while Apply was starting. No replacement was written.");
           }
-          await ioUtils.write(target, bytes, { tmpPath: target + `.zotkit-${safeLeaf(randomID("apply"))}.tmp` });
+          await ioUtils.write(
+            destinationCanonicalPath,
+            bytes,
+            { tmpPath: destinationCanonicalPath + `.zotkit-${safeLeaf(randomID("apply"))}.tmp` },
+          );
           attachmentContentChanged = true;
         }
       }
@@ -703,6 +762,7 @@ export function createZoteroMutationHost(
     describeCollections,
     validateOperations,
     fingerprintPdf,
+    resolveReplacementDestination,
     createCheckpoint,
     apply,
     restore,
@@ -888,15 +948,19 @@ async function bindStagedPdfs(
   host: MutationHost,
   context: ReaderContext,
   operations: readonly ZoteroMutationOperation[],
+  snapshot: PaperMutationSnapshot,
 ): Promise<StagedPdfBinding[]> {
   const bindings: StagedPdfBinding[] = [];
   for (let operationIndex = 0; operationIndex < operations.length; operationIndex += 1) {
     const operation = operations[operationIndex]!;
     if (operation.type !== "replace_pdf") continue;
     const fingerprint = await host.fingerprintPdf(context, operation.stagedPath);
+    if (!snapshot.attachment.resolvedPath) throw new Error("The active PDF path is unavailable");
+    const destinationCanonicalPath = await host.resolveReplacementDestination(snapshot.attachment.resolvedPath);
     bindings.push({
       operationIndex,
       stagedPath: operation.stagedPath,
+      destinationCanonicalPath,
       ...fingerprint,
     });
   }
@@ -908,8 +972,9 @@ async function assertStagedPdfBindings(
   context: ReaderContext,
   operations: readonly ZoteroMutationOperation[],
   expected: readonly StagedPdfBinding[],
+  snapshot: PaperMutationSnapshot,
 ): Promise<void> {
-  const actual = await bindStagedPdfs(host, context, operations);
+  const actual = await bindStagedPdfs(host, context, operations, snapshot);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error("The staged PDF changed after this diff was prepared. Generate a fresh proposal before Apply.");
   }
