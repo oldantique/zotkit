@@ -48,6 +48,7 @@ import type {
   WebSocketFactory,
   WebSocketLike,
 } from "./protocol";
+import { CODEX_CAPABILITIES } from "./agent-client";
 
 export * from "./protocol";
 
@@ -673,6 +674,7 @@ function defaultWebSocketFactory(
 
 export class CodexAppServerClient {
   readonly store: ThreadStore;
+  readonly agentCapabilities = CODEX_CAPABILITIES;
 
   private readonly options: CodexAppServerClientOptions;
   private readonly webSocketFactory: WebSocketFactory;

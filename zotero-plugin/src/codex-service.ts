@@ -17,6 +17,7 @@ import {
   type ThreadStartParams,
   type TurnStartParams
 } from "./codex-app-server";
+import { CODEX_CAPABILITIES, type AgentCapabilities, type AgentClient } from "./agent-client";
 import type { NativeBridge } from "./native-bridge";
 import { NativeSessionSocket } from "./native-session-socket";
 import type { ReaderContext, ReaderContextService, ReaderToolName } from "./reader-context";
@@ -105,6 +106,7 @@ export interface CodexServiceState {
   pendingApprovals: readonly CodexPendingApproval[];
   appServerAvailable: boolean;
   fallbackReason: string | null;
+  capabilities: AgentCapabilities;
 }
 
 export interface CodexServiceCallbacks {
@@ -165,10 +167,11 @@ export class CodexService {
     running: false,
     pendingApprovals: [],
     appServerAvailable: true,
-    fallbackReason: null
+    fallbackReason: null,
+    capabilities: CODEX_CAPABILITIES
   };
 
-  private client: CodexAppServerClient | null = null;
+  private client: AgentClient | null = null;
   private startPromise: Promise<void> | null = null;
   private appServerSessionId: string | null = null;
   private sessions: SessionFile = { version: 1, papers: {} };
@@ -277,6 +280,7 @@ export class CodexService {
     try {
       await client.connect();
       this.client = client;
+      this.state.capabilities = client.agentCapabilities;
       this.appServerSessionId = sessionId;
       this.state.connected = true;
       this.state.appServerAvailable = true;
@@ -321,8 +325,10 @@ export class CodexService {
   }
 
   async login(): Promise<void> {
-    const client = this.requireClient();
-    const response = await client.accountLoginStart({
+    if (!this.state.capabilities.supportsLogin || !this.requireClient().accountLoginStart) {
+      throw new Error("当前后端不需要登录");
+    }
+    const response = await this.requireClient().accountLoginStart!({
       type: "chatgpt",
       codexStreamlinedLogin: true,
       useHostedLoginSuccessPage: true
@@ -332,8 +338,11 @@ export class CodexService {
   }
 
   async logout(): Promise<void> {
+    if (!this.state.capabilities.supportsLogin || !this.requireClient().accountLogout) {
+      throw new Error("当前后端不支持退出登录");
+    }
     const client = this.requireClient();
-    await client.accountLogout();
+    await client.accountLogout!();
     this.state.account = await client.accountRead({ refreshToken: false });
     this.state.activeThreadId = null;
     this.callbacks.onState();
@@ -349,6 +358,9 @@ export class CodexService {
   setMode(mode: ResearchMode): Promise<void> {
     if (mode !== "ask" && mode !== "agent") {
       return Promise.reject(new Error(`Unsupported research mode: ${String(mode)}`));
+    }
+    if (mode === "agent" && !this.state.capabilities.supportsAgentMode) {
+      return Promise.reject(new Error("当前模型服务不支持 Agent 模式"));
     }
     return this.enqueuePaperTransition(async () => {
       if (this.state.mode === mode) return;
@@ -532,8 +544,12 @@ export class CodexService {
     if (this.state.running) {
       const expectedTurnId = this.state.activeTurnId;
       if (!expectedTurnId) throw new Error("当前回答正在启动，请稍候再发送补充");
+      const client = this.requireClient();
+      if (!this.state.capabilities.supportsSteering || !client.turnSteer) {
+        throw new Error("当前模型服务不支持在回答进行中追加，请等待完成或先点停止");
+      }
       try {
-        const response = await this.requireClient().turnSteer({
+        const response = await client.turnSteer({
           threadId,
           expectedTurnId,
           input,
@@ -821,7 +837,10 @@ export class CodexService {
       if (!checkpoint) throw new Error("找不到这个检查点");
       this.cancelAllPendingApprovals("cancel");
       await this.interruptActiveTurn();
-      const result = await this.requireClient().threadFork({
+      if (!this.state.capabilities.supportsCheckpoints || !this.requireClient().threadFork) {
+        throw new Error("当前后端不支持检查点");
+      }
+      const result = await this.requireClient().threadFork!({
         threadId: checkpoint.sourceThreadId,
         beforeTurnId: checkpoint.beforeTurnId,
         ...this.threadModeSettings(context),
@@ -852,7 +871,10 @@ export class CodexService {
     if (!this.state.activeThreadId) throw new Error("没有可回滚的对话");
     this.cancelAllPendingApprovals("cancel");
     await this.interruptActiveTurn();
-    const result = await this.requireClient().threadRollback({
+    if (!this.state.capabilities.supportsCheckpoints || !this.requireClient().threadRollback) {
+      throw new Error("当前后端不支持检查点");
+    }
+    const result = await this.requireClient().threadRollback!({
       threadId: this.state.activeThreadId,
       numTurns,
     });
@@ -991,7 +1013,7 @@ export class CodexService {
     }
   }
 
-  private requireClient(): CodexAppServerClient {
+  private requireClient(): AgentClient {
     if (!this.client) throw new Error("Codex 尚未连接");
     return this.client;
   }
