@@ -1,5 +1,14 @@
 # 设计:阅读留痕(Paper Trail)+ Noting 综合笔记
 
+> **修订 2026-07-26(用户决策,推翻下文"批注只写一次"):**
+> 1. 批注 comment 改为**该锚点的完整对话逐字记录**(`Q: …` / `A: …` 逐轮原文,
+>    总长上限 50000 字符,超出时截断并附"完整记录见对话面板"标记),
+>    **每轮回答完成后重写一次**(仍走串行写入队列,每轮一次 saveTx)。
+>    首轮"问题 + 要点"格式废弃;要点摘要仍用于问题清单等 UI 展示。
+> 2. turnRange 扩展改为**按线程身份触发**:活跃线程存在 status=open 的锚点时,
+>    每个完成的回合都扩展该锚点的 turnRange——不再依赖"带选区提问"路径
+>    (修复浮窗打字追问不扩展区间、Noting 只取首轮的缺陷)。
+
 日期:2026-07-25
 分支:`feature/zotero-reader-codex-integration`(基于 `ad8bfd1`)
 范围:仅 `zotero-plugin/`(TypeScript 前端;不涉及 macOS 原生 helper 与 Python CLI)
