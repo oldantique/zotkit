@@ -6,3 +6,5 @@ pref("extensions.zotkit.approvalPolicy", "untrusted");
 pref("extensions.zotkit.terminalHeight", 420);
 pref("extensions.zotkit.showReasoning", false);
 pref("extensions.zotkit.paperTrail", "unset");
+pref("extensions.zotkit.backend", "");
+pref("extensions.zotkit.providers", "[]");
