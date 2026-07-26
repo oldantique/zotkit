@@ -17,11 +17,15 @@ import {
   type ThreadStartParams,
   type TurnStartParams
 } from "./codex-app-server";
-import { CODEX_CAPABILITIES, type AgentCapabilities, type AgentClient } from "./agent-client";
+import { CODEX_CAPABILITIES, ENGINE_CAPABILITIES, type AgentCapabilities, type AgentClient } from "./agent-client";
+import { EngineClient, type EngineClientOptions } from "./engine-client";
+import { loadProviders, providerKeyRealm } from "./providers";
+import { readSecret } from "./secrets";
+import type { EngineHistoryMessage } from "./engine-messages";
 import type { NativeBridge } from "./native-bridge";
 import { NativeSessionSocket } from "./native-session-socket";
 import type { ReaderContext, ReaderContextService, ReaderToolName } from "./reader-context";
-import { findExecutable, launchURL, makeLocalFile, profilePath, randomID } from "./platform";
+import { findExecutable, launchURL, makeLocalFile, prefString, profilePath, randomID, setPrefString } from "./platform";
 import type { ChatEntry, ModelOption, ResearchMode, ThreadOption } from "./sidebar";
 import type { AnchorRecord } from "./paper-trail";
 
@@ -97,6 +101,7 @@ export interface CodexInteractionContextEntry {
 
 export interface CodexServiceState {
   connected: boolean;
+  backend: "codex" | "engine";
   mode: ResearchMode;
   account: AccountReadResponse | null;
   models: ModelOption[];
@@ -121,6 +126,7 @@ interface SessionRecord {
   title: string;
   workspace: string;
   updatedAt: string;
+  backend?: "codex" | "engine";
 }
 
 interface SessionFile {
@@ -159,6 +165,7 @@ export class CodexService {
   readonly store = new ThreadStore();
   readonly state: CodexServiceState = {
     connected: false,
+    backend: "codex",
     mode: "ask",
     account: null,
     models: [],
@@ -197,6 +204,8 @@ export class CodexService {
     private readonly version: string,
     private readonly callbacks: CodexServiceCallbacks,
     private agentToolProvider: CodexAgentToolProvider | null = null,
+    private readonly engineClientFactory: (options: EngineClientOptions) => AgentClient
+      = (options) => new EngineClient(options),
   ) {}
 
   setAgentToolProvider(provider: CodexAgentToolProvider | null): void {
@@ -227,6 +236,39 @@ export class CodexService {
 
   private async startInternal(): Promise<void> {
     await this.loadSessions();
+    const backend = (prefString("backend", "") || "engine") as "codex" | "engine";
+    this.state.backend = backend;
+    if (backend === "engine") await this.startEngineInternal();
+    else await this.startCodexInternal();
+  }
+
+  private async startEngineInternal(): Promise<void> {
+    this.unsubscribeStore?.();
+    this.unsubscribeStore = null;
+    if (this.client) {
+      this.client.close(1000, "Zotkit reconnecting");
+      this.client = null;
+    }
+    const client = this.engineClientFactory({
+      store: this.store,
+      providers: () => loadProviders(),
+      readKey: (providerId) => readSecret(providerKeyRealm(providerId), providerId),
+      handlers: { dynamicToolCall: (params) => this.handleDynamicTool(params) },
+      onNotification: (notification) => this.handleNotification(notification),
+    });
+    await client.connect();
+    this.client = client;
+    this.state.connected = true;
+    this.state.appServerAvailable = true;
+    this.state.fallbackReason = null;
+    this.state.capabilities = client.agentCapabilities;
+    this.unsubscribeStore = this.store.subscribe(() => this.callbacks.onState());
+    this.state.account = await client.accountRead({ refreshToken: false });
+    await this.refreshModels();
+    this.callbacks.onState();
+  }
+
+  private async startCodexInternal(): Promise<void> {
     await this.bridge.start();
     this.unsubscribeStore?.();
     this.unsubscribeStore = null;
@@ -316,6 +358,12 @@ export class CodexService {
   }
 
   accountLabel(): string {
+    if (this.state.backend === "engine") {
+      const providers = loadProviders();
+      return providers.length
+        ? `内置引擎 · ${providers.length} 个模型服务`
+        : "内置引擎 · 未配置模型服务";
+    }
     const account = this.state.account?.account || {};
     const email = typeof account.email === "string" ? account.email : "";
     const plan = typeof account.planType === "string"
@@ -403,7 +451,7 @@ export class CodexService {
     try {
       await this.interruptActiveTurn();
       const existing = this.sessions.papers[paperKey];
-      if (existing) {
+      if (existing && (existing.backend ?? "codex") === this.state.backend) {
         try {
           const response = await this.requireClient().threadResume({
             threadId: existing.threadId,
@@ -465,7 +513,8 @@ export class CodexService {
         threadId: response.thread.id,
         title,
         workspace: workspace.root,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        backend: this.state.backend
       };
       await this.saveSessions();
     }
@@ -480,6 +529,7 @@ export class CodexService {
     return [current, ...history]
       .filter((record): record is SessionRecord => Boolean(record))
       .filter((record, index, records) => records.findIndex((candidate) => candidate.threadId === record.threadId) === index)
+      .filter((record) => (record.backend ?? "codex") === this.state.backend)
       .map((record) => ({
         id: record.threadId,
         title: record.title,
@@ -498,7 +548,8 @@ export class CodexService {
     const records = [
       this.sessions.papers[this.activePaperKey],
       ...(this.sessions.history?.[this.activePaperKey] || [])
-    ].filter((record): record is SessionRecord => Boolean(record));
+    ].filter((record): record is SessionRecord => Boolean(record))
+      .filter((record) => (record.backend ?? "codex") === this.state.backend);
     const selected = records.find((record) => record.threadId === threadId);
     if (!selected) throw new Error("找不到这个论文对话");
     const response = await this.requireClient().threadResume({
@@ -669,6 +720,56 @@ export class CodexService {
       await this.interruptActiveTurn();
       this.callbacks.onState();
     });
+  }
+
+  switchBackend(target: "codex" | "engine", carryHistory: boolean): Promise<void> {
+    return this.enqueuePaperTransition(() => this.switchBackendInternal(target, carryHistory));
+  }
+
+  private async switchBackendInternal(
+    target: "codex" | "engine",
+    carryHistory: boolean,
+  ): Promise<void> {
+    if (target === this.state.backend && this.state.connected) return;
+    const context = this.activeContext;
+    const paperKey = this.activePaperKey;
+    let carried: EngineHistoryMessage[] = [];
+    let title = "论文对话";
+    if (carryHistory && target === "engine" && this.state.activeThreadId && paperKey) {
+      const turns = await this.readThreadTurns(this.state.activeThreadId);
+      carried = turns.flat()
+        .filter((entry) => entry.kind === "user" || entry.kind === "assistant")
+        .map((entry) => ({
+          role: entry.kind === "user" ? "user" as const : "assistant" as const,
+          text: entry.text,
+        }))
+        .filter((message) => message.text.trim().length > 0);
+      title = this.sessions.papers[paperKey]?.title || title;
+    }
+    this.stop();
+    setPrefString("backend", target);
+    await this.startInternal();
+    this.activeContext = context;
+    this.activePaperKey = null;
+    if (carried.length && context?.workspace && paperKey && this.client instanceof EngineClient) {
+      const threadId = await this.client.importThread(title, carried);
+      this.activePaperKey = paperKey;
+      this.rememberActiveThread(paperKey, {
+        threadId,
+        title,
+        workspace: context.workspace.root,
+        updatedAt: new Date().toISOString(),
+        backend: "engine",
+      });
+      this.state.activeThreadId = threadId;
+      this.state.activeTurnId = null;
+      this.threadPaperKeys.set(threadId, paperKey);
+      await this.saveSessions();
+    }
+    else if (context) {
+      await this.setPaperInternal(context);
+    }
+    this.callbacks.onState();
   }
 
   private async interruptActiveTurn(): Promise<void> {
@@ -851,6 +952,7 @@ export class CodexService {
         title,
         workspace: context.workspace.root,
         updatedAt: new Date().toISOString(),
+        backend: this.state.backend,
       });
       this.state.activeThreadId = result.thread.id;
       this.state.activeTurnId = null;
