@@ -453,12 +453,12 @@ describe("diff fidelity: review must show exactly what Apply will write", () => 
     const { service } = harness();
 
     const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
-      operations: [{ type: "set_fields", fields: { title: "Evil‮title" } }],
+      operations: [{ type: "set_fields", fields: { title: "Evil\u202Etitle" } }],
     });
 
     const diffText = String(result.diff);
     expect(diffText).toContain("\\u202E");
-    expect(diffText).not.toMatch(/‮/);
+    expect(diffText).not.toMatch(/\u202E/);
   });
 
   it("rejects field values beyond the 20000-character reviewable limit instead of silently truncating them", async () => {
@@ -490,18 +490,18 @@ describe("diff fidelity: review must show exactly what Apply will write", () => 
     const { service } = harness();
 
     const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
-      title: "Malicious‮title",
+      title: "Malicious\u202Etitle",
       operations: [{ type: "set_fields", fields: { title: "New title" } }],
     });
 
     const review = service.getReviews()[0]!;
     expect(review.title).toContain("\\u202E");
-    expect(review.title).not.toMatch(/‮/);
+    expect(review.title).not.toMatch(/\u202E/);
   });
 
   it("sanitizes control/bidi characters in boundedError output to prevent error-message injection", async () => {
     const { service, host } = harness();
-    vi.mocked(host.apply).mockRejectedValueOnce(new Error("Error with‮bidi"));
+    vi.mocked(host.apply).mockRejectedValueOnce(new Error("Error with\u202Ebidi"));
 
     await service.invokeTool(ZOTERO_MUTATION_TOOL, {
       operations: [{ type: "set_fields", fields: { title: "New title" } }],
@@ -516,14 +516,14 @@ describe("diff fidelity: review must show exactly what Apply will write", () => 
     }
 
     expect(errorThrown).toContain("\\u202E");
-    expect(errorThrown).not.toMatch(/‮/);
+    expect(errorThrown).not.toMatch(/\u202E/);
   });
 
   it("sanitizes DEL (U+007F) along with other control characters", async () => {
     const { service } = harness();
 
     const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
-      operations: [{ type: "set_fields", fields: { abstractNote: "Text withDel" } }],
+      operations: [{ type: "set_fields", fields: { abstractNote: "Text with\x7fDel" } }],
     });
 
     const diffText = String(result.diff);
@@ -548,6 +548,32 @@ describe("diff fidelity: review must show exactly what Apply will write", () => 
       expect(diffText).toContain(`\\u${code}`);
     }
     expect(diffText).not.toMatch(/[\u200B\u200C\u200D\uFEFF\u2060\u061C\u2028\u2029]/);
+  });
+
+  it("escapes soft hyphen, invisible math operators, variation selectors, and astral Tag characters that the round-3 gate missed", async () => {
+    const { service } = harness();
+    // Empirically unescaped before this fix: U+00AD (soft hyphen, hides
+    // inside a word), U+2064 (invisible plus -- adjacent to the already-
+    // covered U+2060 but outside its old single-codepoint match), U+FE0F
+    // (variation selector-16), and U+E0041 -- a member of the astral Tags
+    // block (U+E0000-U+E007F), the "hidden ASCII in emoji" smuggling
+    // vector. The old regex lacked the `u` flag, so a `\u{E0000}-\u{E007F}`
+    // range wasn't even expressible, and an astral codepoint like this
+    // passed through completely unescaped regardless.
+    const attack = "A\u00ADb\u2064c\uFE0Fd\u{E0041}e";
+
+    const result = await service.invokeTool(ZOTERO_MUTATION_TOOL, {
+      operations: [{ type: "set_fields", fields: { title: attack } }],
+    });
+
+    const diffText = String(result.diff);
+    for (const code of ["00AD", "2064", "FE0F"]) {
+      expect(diffText).toContain(`\\u${code}`);
+    }
+    // A plain `\uXXXX` escape can't represent more than 4 hex digits, so
+    // the astral codepoint must render in the `\u{XXXXX}` curly-brace form.
+    expect(diffText).toContain("\\u{E0041}");
+    expect(diffText).not.toMatch(/[\u00AD\u2064\uFE0F\u{E0041}]/u);
   });
 
   it("inline-escapes a newline embedded in a collection label instead of letting it fake an extra diff line", async () => {

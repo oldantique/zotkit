@@ -1067,19 +1067,39 @@ function snapshotFingerprint(snapshot: PaperMutationSnapshot): string {
 // A prompt-injected proposal could otherwise use these to make the
 // reviewed diff *display* something other than the bytes Apply actually
 // writes.
-const DANGEROUS_DIFF_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F\u0080-\u009F\u061C\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
+//
+// Round-3 follow-up gap: also covers U+00AD (soft hyphen, hides inside a
+// word), U+034F (combining grapheme joiner), U+115F/U+1160/U+3164 (Hangul
+// filler characters), U+180E (Mongolian vowel separator), the invisible
+// math operators U+2061-U+2064 (adjacent to the already-covered word
+// joiner U+2060), the variation selectors U+FE00-U+FE0F, and the
+// interlinear-annotation characters U+FFF9-U+FFFB. The `u` flag plus the
+// `\u{E0000}-\u{E007F}` range additionally covers the astral Unicode Tags
+// block -- a known "hidden ASCII inside emoji" text-smuggling vector that
+// a non-`u` regex cannot even express (it operates on UTF-16 code units,
+// not code points, so a surrogate-pair character never matches a
+// `\u{...}` range) and would otherwise pass through completely unescaped.
+const DANGEROUS_DIFF_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F\u0080-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\u3164\uFE00-\uFE0F\uFEFF\uFFF9-\uFFFB\u{E0000}-\u{E007F}]/gu;
 
 /**
  * Replaces control characters and bidi-override characters with a visible
- * `\uXXXX` literal escape so they can never render as invisible or
- * direction-flipping bytes inside the reviewed diff. `\n` and `\t` pass
- * through untouched -- they are rendered as real line breaks/tabs by the
+ * literal escape so they can never render as invisible or direction-
+ * flipping bytes inside the reviewed diff. `\n` and `\t` pass through
+ * untouched -- they are rendered as real line breaks/tabs by the
  * line-splitting in {@link diffValueLines}.
+ *
+ * Renders BMP codepoints (<= U+FFFF) as the familiar 4-hex-digit `\uXXXX`
+ * form. A plain `\uXXXX` escape can only carry 4 hex digits, so astral
+ * codepoints (e.g. the U+E0000-U+E007F Tags block matched above) render
+ * in the `\u{XXXXX}` curly-brace form instead -- `codePointAt` (not
+ * `charCodeAt`) is required here so a surrogate pair is read as the one
+ * code point it represents rather than two meaningless half-escapes.
  */
 export function sanitizeDiffText(value: string): string {
-  return value.replace(DANGEROUS_DIFF_CHARS, (char) => (
-    `\\u${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`
-  ));
+  return value.replace(DANGEROUS_DIFF_CHARS, (char) => {
+    const hex = char.codePointAt(0)!.toString(16).toUpperCase();
+    return hex.length > 4 ? `\\u{${hex}}` : `\\u${hex.padStart(4, "0")}`;
+  });
 }
 
 /**
