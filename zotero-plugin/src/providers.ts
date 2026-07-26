@@ -1,6 +1,7 @@
 import { prefString, setPrefString } from "./platform";
 import { streamRequest, type StreamRequestOptions, type StreamResult } from "./http-stream";
 import { OpenAIWire } from "./wire-openai";
+import { AnthropicWire } from "./wire-anthropic";
 
 export interface ProviderModel {
   id: string;
@@ -106,10 +107,7 @@ export async function testProvider(
     ?? profile.models[0];
   if (!model) throw new Error("请先在模型列表里至少配置一个模型");
   if (!profile.baseUrl) throw new Error("请填写 baseUrl");
-  // Anthropic wire arrives in Task 11; until then connectivity tests use the
-  // OpenAI wire and anthropic-wire profiles surface a readable notice.
-  if (profile.wire === "anthropic") throw new Error("Anthropic 兼容服务的连通性测试将在后续版本提供");
-  const wire = new OpenAIWire();
+  const wire = profile.wire === "anthropic" ? new AnthropicWire() : new OpenAIWire();
   const request = wire.buildRequest(
     profile.baseUrl,
     apiKey,

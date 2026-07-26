@@ -16,6 +16,7 @@ import { ThreadStore } from "./codex-app-server";
 import { ENGINE_CAPABILITIES, type AgentClient } from "./agent-client";
 import { streamRequest } from "./http-stream";
 import { OpenAIWire } from "./wire-openai";
+import { AnthropicWire } from "./wire-anthropic";
 import type { WireAdapter, WireMessage, WireToolCall, WireToolSpec } from "./wire";
 import type { ProviderProfile } from "./providers";
 import { connectivityError } from "./providers";
@@ -413,7 +414,8 @@ export class EngineClient implements AgentClient {
     const custom = this.options.wireAdapters?.[provider.wire];
     if (custom) return custom;
     if (provider.wire === "openai") return new OpenAIWire();
-    throw new EngineTurnError("Anthropic 兼容接入将在后续版本提供");
+    if (provider.wire === "anthropic") return new AnthropicWire();
+    throw new EngineTurnError("不支持的 wire 类型");
   }
 
   private notify(method: string, params: Record<string, unknown>): void {
