@@ -1,3 +1,4 @@
+import { buildQaFromEntries } from "./exchanges";
 import { sha256File } from "./hashing";
 import { randomID } from "./platform";
 import type { ReaderContext, JsonValue } from "./reader-context";
@@ -27,10 +28,26 @@ export interface AnchorRecord {
   resolvedAt?: string;
 }
 
-export function buildAnchorComment(question: string, summary: string): string {
-  const q = question.trim().slice(0, 600);
-  const s = summary.trim().slice(0, 900);
-  return s ? `Q: ${q}\n\n${s}` : `Q: ${q}`;
+/** 一条锚点对应的对话轮次(question + answer 原文,均未截断)。 */
+export interface TranscriptExchange {
+  question: string;
+  answer: string;
+}
+
+const TRANSCRIPT_CHAR_CAP = 50_000;
+const TRANSCRIPT_TRUNCATED_MARKER = "\n\n（对话过长，已截断，完整记录见对话面板）";
+
+/**
+ * Full-transcript annotation comment (spec amendment 2026-07-26, replacing
+ * the old "Q + 要点" `buildAnchorComment`): every `Q:`/`A:` round verbatim,
+ * joined with a blank line, capped at TRANSCRIPT_CHAR_CAP total characters.
+ * Individual answers are never pre-truncated -- only the joined total is,
+ * with a marker appended pointing back at the live conversation panel.
+ */
+export function buildAnchorTranscriptComment(exchanges: TranscriptExchange[]): string {
+  const full = exchanges.map((exchange) => `Q: ${exchange.question}\n\nA: ${exchange.answer}`).join("\n\n");
+  if (full.length <= TRANSCRIPT_CHAR_CAP) return full;
+  return `${full.slice(0, TRANSCRIPT_CHAR_CAP)}${TRANSCRIPT_TRUNCATED_MARKER}`;
 }
 
 /** 首段纯文本降级摘要:去掉常见 Markdown 记号,≤300 字。 */
@@ -86,6 +103,8 @@ export interface AnchorHost {
     add: readonly string[],
     remove: readonly string[],
   ): Promise<void>;
+  /** Rewrites an existing annotation's comment (full transcript, rewritten each turn an anchor extends). */
+  updateAnnotationComment(libraryID: number | string, annotationKey: string, comment: string): Promise<void>;
   deleteAnnotation(libraryID: number | string, annotationKey: string): Promise<void>;
   annotationExists(libraryID: number | string, annotationKey: string): Promise<boolean>;
   resolveParentItemKey(libraryID: number | string, attachmentKey: string): Promise<string | null>;
@@ -122,6 +141,15 @@ export function createZoteroAnchorHost(zotero: any): AnchorHost {
       for (const tag of remove) annotation.removeTag?.(tag);
       for (const tag of add) annotation.addTag?.(tag);
       await annotation.saveTx({ skipDateModifiedUpdate: true });
+    },
+    async updateAnnotationComment(libraryID, annotationKey, comment) {
+      // getByKey() throws when the annotation is gone (deleted by hand);
+      // the caller (rewriteTranscript) catches that and skips silently.
+      const annotation = await getByKey(libraryID, annotationKey);
+      annotation.annotationComment = comment;
+      // Unlike the tag swap above, a comment rewrite is real content --
+      // dateModified should reflect it, so this is a plain saveTx().
+      await annotation.saveTx();
     },
     async deleteAnnotation(libraryID, annotationKey) {
       try {
@@ -160,8 +188,15 @@ export type PaperTrailConsent = "unset" | "on" | "off";
 
 export interface PaperTrailCallbacks {
   onState(): void;
-  /** Returns null on failure/timeout -- callers fall back to summaryFallback(answer). */
-  summarize(question: string, answerMarkdown: string): Promise<string | null>;
+  /**
+   * Per-turn transcript for a thread (same pipeline Noting's buildNotingSnapshot
+   * uses -- CodexService.readThreadTurns). Used to build/rewrite an anchor's
+   * annotation comment from its turnRange. May reject (offline app-server,
+   * unknown thread, etc.) -- PaperTrailService degrades on failure rather
+   * than writing/overwriting a comment with empty content; see writeAnnotation
+   * and rewriteTranscript.
+   */
+  readThreadTurns(threadId: string): Promise<ChatEntry[][]>;
   getAnchors(context: ReaderContext): AnchorRecord[];
   recordAnchor(context: ReaderContext, anchor: AnchorRecord): Promise<void>;
   updateAnchor(context: ReaderContext, anchorId: string, patch: Partial<AnchorRecord>): Promise<void>;
@@ -265,11 +300,25 @@ export class PaperTrailService {
   }
 
   /**
-   * Called once the turn that beginPendingAnchor() opened has finished.
-   * Persists the anchor record first, then branches on consent for the
-   * (optional) annotation write. Returns the new/extended anchor, or null
-   * when there was nothing to anchor (no matching pending snapshot, or the
-   * turn ended in an error).
+   * Called once a turn on `threadId` has finished. Two independent triggers
+   * share this one entry point:
+   *
+   * 1. **Pending-anchor path** -- this turn began with beginPendingAnchor()
+   *    (a live selection was reattached at send time). Either creates a
+   *    fresh anchor, or -- when the selection matched an anchor already on
+   *    this thread -- extends that anchor (the pre-amendment behavior).
+   * 2. **Thread-scoped path** (spec amendment 2026-07-26 / bug-triage #4) --
+   *    no matching pending snapshot (the common case: a typed follow-up with
+   *    no selection reattached), but the thread already has an OPEN anchor.
+   *    Extends that anchor regardless of selection, closing the gap where
+   *    normal follow-ups never grew turnRange past the first turn.
+   *
+   * Every extension (either path) rewrites the anchor's annotation comment
+   * with the full transcript of its (possibly now-wider) turnRange, through
+   * the same serialized write queue as every other Zotero mutation here.
+   * Returns the new/extended anchor, or null when there was nothing to do
+   * (no pending snapshot and no open anchor for this thread, or the turn
+   * ended in an error).
    */
   async completeTurn(
     context: ReaderContext,
@@ -277,33 +326,65 @@ export class PaperTrailService {
     entries: ChatEntry[],
     turnIndex: number,
   ): Promise<AnchorRecord | null> {
+    const erroredThisTurn = entries.at(-1)?.kind === "error";
     const pending = this.pendingAnchor;
-    if (!pending || pending.threadId !== threadId) return null;
 
-    const lastEntry = entries.at(-1);
-    if (lastEntry?.kind === "error") {
+    if (pending && pending.threadId === threadId) {
       this.pendingAnchor = null;
-      return null;
-    }
-    this.pendingAnchor = null;
+      if (erroredThisTurn) return null;
 
-    if (pending.followUpOf) {
-      const existing = this.callbacks.getAnchors(context).find((anchor) => anchor.anchorId === pending.followUpOf);
-      if (!existing) return null;
-      const turnRange: [number, number] = [existing.turnRange[0], turnIndex];
-      await this.callbacks.updateAnchor(context, existing.anchorId, { turnRange });
-      return { ...existing, turnRange };
+      if (pending.followUpOf) {
+        const existing = this.callbacks.getAnchors(context).find((anchor) => anchor.anchorId === pending.followUpOf);
+        if (!existing) return null;
+        return this.extendAnchor(context, existing, turnIndex);
+      }
+
+      return this.createAnchor(context, pending, entries, turnIndex);
     }
 
+    // No pending snapshot for THIS thread (typed follow-up, or a pending
+    // snapshot that belongs to some other thread and is left untouched for
+    // its own turn to consume later): fall back to thread identity. Only
+    // ever touches the single open anchor with the latest turnRange end for
+    // `threadId` -- never a different thread, never a different paper
+    // (getAnchors(context) is already scoped to the live context's paper).
+    if (erroredThisTurn) return null;
+    const openAnchor = this.latestOpenAnchorForThread(context, threadId);
+    if (!openAnchor || openAnchor.turnRange[1] >= turnIndex) return null;
+    return this.extendAnchor(context, openAnchor, turnIndex);
+  }
+
+  /** The open anchor for `threadId` with the greatest turnRange end, or null when none is open. */
+  private latestOpenAnchorForThread(context: ReaderContext, threadId: string): AnchorRecord | null {
+    let latest: AnchorRecord | null = null;
+    for (const anchor of this.callbacks.getAnchors(context)) {
+      if (anchor.threadId !== threadId || anchor.status !== "open") continue;
+      if (!latest || anchor.turnRange[1] > latest.turnRange[1]) latest = anchor;
+    }
+    return latest;
+  }
+
+  /**
+   * Creates a brand-new anchor for a just-answered pending selection+question.
+   * `answerSummary` is a free, synchronous first-paragraph digest (see
+   * summaryFallback) rather than an LLM-generated one: the spec amendment
+   * that introduced the full-transcript comment also retired the old
+   * blocking `summarize()` round-trip (a 10s-capped runUtilityTurn call)
+   * that used to feed the now-deprecated "Q + 要点" comment -- its only
+   * remaining consumer is noting.ts's degenerate "thread unreadable"
+   * fallback, which doesn't justify gating every write on an LLM call.
+   * The annotation comment itself no longer depends on the summary at all:
+   * writeAnnotation() below pulls the real transcript for this anchor's
+   * turnRange via readThreadTurns().
+   */
+  private async createAnchor(
+    context: ReaderContext,
+    pending: PendingAnchor,
+    entries: ChatEntry[],
+    turnIndex: number,
+  ): Promise<AnchorRecord> {
     const answer = [...entries].reverse().find((entry) => entry.kind === "assistant")?.text ?? "";
-    let summary: string | null = null;
-    try {
-      summary = await this.callbacks.summarize(pending.question, answer);
-    }
-    catch {
-      summary = null;
-    }
-    const answerSummary = summary ?? summaryFallback(answer);
+    const answerSummary = summaryFallback(answer);
 
     let itemKey: string | null = null;
     try {
@@ -353,6 +434,26 @@ export class PaperTrailService {
     }
 
     return record;
+  }
+
+  /**
+   * Extends an already-open anchor's turnRange to `turnIndex` and rewrites
+   * its annotation comment with the full transcript of the widened range --
+   * one enqueue() per turn, so the session-store patch and the Zotero
+   * saveTx() never interleave with another queued write for this paper.
+   */
+  private async extendAnchor(
+    context: ReaderContext,
+    anchor: AnchorRecord,
+    turnIndex: number,
+  ): Promise<AnchorRecord> {
+    const turnRange: [number, number] = [anchor.turnRange[0], turnIndex];
+    return this.enqueue(async () => {
+      await this.callbacks.updateAnchor(context, anchor.anchorId, { turnRange });
+      const updated: AnchorRecord = { ...anchor, turnRange };
+      await this.rewriteTranscript(updated);
+      return updated;
+    });
   }
 
   /** Non-null when a consent card needs to be rendered. */
@@ -460,10 +561,40 @@ export class PaperTrailService {
   }
 
   /**
+   * Reads a thread's turns (via the readThreadTurns callback -- the same
+   * pipeline Noting's buildNotingSnapshot uses) and slices them to a
+   * turnRange, producing the {question, answer} pairs the transcript
+   * builder needs. Rejects when the read itself fails (offline app-server,
+   * etc.) -- callers decide what "no transcript available" should degrade
+   * to; this never silently substitutes an empty transcript, which would
+   * read as "this anchor has no Q&A" instead of "we couldn't fetch it".
+   */
+  private async transcriptExchangesFor(
+    threadId: string,
+    turnRange: readonly [number, number],
+  ): Promise<TranscriptExchange[]> {
+    const turns = await this.callbacks.readThreadTurns(threadId);
+    const [start, end] = turnRange;
+    return turns.slice(start, end + 1)
+      .flatMap((turnEntries) => buildQaFromEntries(turnEntries, undefined))
+      .map((qa) => ({ question: qa.question, answer: qa.answerMarkdown }));
+  }
+
+  private async buildTranscriptComment(anchor: AnchorRecord): Promise<string> {
+    const exchanges = await this.transcriptExchangesFor(anchor.threadId, anchor.turnRange);
+    return buildAnchorTranscriptComment(exchanges);
+  }
+
+  /**
    * Writes (or silently skips, when the selection has no position to anchor
    * to) the Zotero highlight for a just-recorded anchor. Always runs inside
    * `enqueue()` so it never interleaves with another queued write for the
-   * same paper.
+   * same paper. The comment is the anchor's full transcript (round 1 only,
+   * at creation time -- its turnRange is still [turnIndex, turnIndex]). If
+   * the transcript read itself fails, this still writes an annotation --
+   * just with a minimal one-round comment built from data already on hand
+   * (record.question/answerSummary) instead of leaving the highlight
+   * commentless.
    */
   private async writeAnnotation(context: ReaderContext, record: AnchorRecord): Promise<AnchorRecord> {
     if (record.position === undefined || record.position === null) {
@@ -474,11 +605,18 @@ export class PaperTrailService {
       return record;
     }
     try {
+      let comment: string;
+      try {
+        comment = await this.buildTranscriptComment(record);
+      }
+      catch {
+        comment = buildAnchorTranscriptComment([{ question: record.question, answer: record.answerSummary ?? "" }]);
+      }
       const annotationKey = await this.host.createHighlight({
         libraryID: record.libraryID,
         attachmentKey: record.attachmentKey,
         selectedText: record.selectedText,
-        comment: buildAnchorComment(record.question, record.answerSummary ?? ""),
+        comment,
         color: ANCHOR_COLOR,
         pageLabel: record.pageNumber !== undefined ? String(record.pageNumber) : "",
         position: record.position,
@@ -494,6 +632,35 @@ export class PaperTrailService {
       // Record stays in place without an annotation; nothing else to roll back.
       this.callbacks.onState();
       return record;
+    }
+  }
+
+  /**
+   * Rewrites an already-written annotation's comment with the full
+   * transcript of `anchor`'s (possibly just-widened) turnRange. A no-op
+   * when the anchor never got an annotation (no position, consent off/parked)
+   * -- nothing to rewrite. When the transcript read itself fails, this skips
+   * the rewrite entirely rather than overwriting a good existing comment
+   * with an empty one -- next turn's rewrite will catch it up. When the
+   * annotation was deleted by the user by hand, updateAnnotationComment()
+   * rejects (mirrors createZoteroAnchorHost's other lookups) and this skips
+   * silently too, exactly like deleteAnnotation's "already removed" handling
+   * -- neither failure mode ever fails the write queue.
+   */
+  private async rewriteTranscript(anchor: AnchorRecord): Promise<void> {
+    if (!anchor.annotationKey) return;
+    let comment: string;
+    try {
+      comment = await this.buildTranscriptComment(anchor);
+    }
+    catch {
+      return;
+    }
+    try {
+      await this.host.updateAnnotationComment(anchor.libraryID, anchor.annotationKey, comment);
+    }
+    catch {
+      // User already removed it by hand: rewrite stays a silent no-op.
     }
   }
 

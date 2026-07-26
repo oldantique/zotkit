@@ -199,15 +199,15 @@ export class ZoteroChatPlugin {
       this.anchorHost,
       {
         onState: () => this.scheduleChatRender(),
-        summarize: async (question, answer) => {
-          try {
-            return await this.codex.runUtilityTurn(
-              `用 2–3 句中文总结下面这轮问答的要点,只输出要点本身。\n\n问题:${question}\n\n回答:\n${answer.slice(0, 8000)}`,
-              { timeoutMs: 10_000 },
-            );
-          }
-          catch { return null; }
-        },
+        // Same pipeline Noting's buildNotingSnapshot uses to slice a thread
+        // by turnRange -- paper-trail reuses it to build/rewrite the
+        // full-transcript annotation comment (see paper-trail.ts's
+        // transcriptExchangesFor). No LLM round-trip on the write path
+        // anymore: the old `summarize()` callback (a 10s-capped
+        // runUtilityTurn call feeding the deprecated "Q + 要点" comment
+        // format) is gone -- answerSummary is now the free, synchronous
+        // summaryFallback() digest instead.
+        readThreadTurns: (threadId) => this.codex.readThreadTurns(threadId),
         getAnchors: (context) => this.codex.getAnchors(context),
         recordAnchor: (context, anchor) => this.codex.recordAnchor(context, anchor),
         updateAnchor: (context, id, patch) => this.codex.updateAnchor(context, id, patch),
