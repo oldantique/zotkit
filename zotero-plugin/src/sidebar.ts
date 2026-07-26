@@ -158,6 +158,7 @@ export interface SidebarCallbacks {
   onStop(): void;
   onNewThread(): void;
   onSelectThread(threadId: string): void;
+  onDeleteThread?(threadId: string): void;
   onLogin(): void;
   onLogout(): void;
   onOpenTerminal(): void;
@@ -588,6 +589,8 @@ export class SidebarView {
     const scroller = this.doc.createElement("div");
     scroller.className = "zc-thread-tab-scroll";
     for (const thread of this.state.threads.slice(0, 12)) {
+      const item = this.doc.createElement("span");
+      item.className = "zc-thread-tab-item";
       const button = this.doc.createElement("button");
       button.type = "button";
       button.className = "zc-thread-tab";
@@ -602,7 +605,23 @@ export class SidebarView {
       label.textContent = thread.title || "论文对话";
       button.append(state, label);
       button.addEventListener("click", () => this.callbacks.onSelectThread(thread.id));
-      scroller.appendChild(button);
+      item.appendChild(button);
+      // Deleting only forgets the local picker record -- recoverable by
+      // starting a new chat, so a single click is enough (no typed
+      // confirmation). stopPropagation keeps the click from also bubbling
+      // into anything listening on the tab row itself.
+      const remove = this.doc.createElement("button");
+      remove.type = "button";
+      remove.className = "zc-thread-delete";
+      remove.title = "删除对话";
+      remove.setAttribute("aria-label", "删除对话");
+      remove.textContent = "×";
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.callbacks.onDeleteThread?.(thread.id);
+      });
+      item.appendChild(remove);
+      scroller.appendChild(item);
     }
     const add = this.iconButton("new", "新对话", () => this.callbacks.onNewThread());
     add.classList.add("zc-thread-tab-add");

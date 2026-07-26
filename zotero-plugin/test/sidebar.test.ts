@@ -152,6 +152,35 @@ describe("SidebarView", () => {
     expect(menu.hidden).toBe(true);
   });
 
+  it("gives every thread tab a delete button that removes the record without switching to it (bug-triage #3)", () => {
+    const body = document.createElement("div");
+    document.body.appendChild(body);
+    const handlers = callbacks();
+    handlers.onDeleteThread = vi.fn();
+    const view = new SidebarView(body, handlers);
+    view.setState({
+      phase: "ready",
+      threads: [
+        { id: "thread-a", title: "Main theorem", updatedAt: "2026-07-22", active: true, status: "idle" },
+        { id: "thread-b", title: "Methods", updatedAt: "2026-07-21", active: false },
+      ],
+    });
+
+    const deleteButtons = body.querySelectorAll<HTMLButtonElement>(".zc-thread-delete");
+    // One per row, including the active thread's row -- deleting the active
+    // thread is allowed; codex-service falls back per its own semantics.
+    expect(deleteButtons).toHaveLength(2);
+    for (const button of deleteButtons) {
+      expect(button.textContent).toBe("×");
+      expect(button.title).toBe("删除对话");
+    }
+
+    deleteButtons[1]!.click();
+    expect(handlers.onDeleteThread).toHaveBeenCalledWith("thread-b");
+    expect(handlers.onDeleteThread).toHaveBeenCalledOnce();
+    expect(handlers.onSelectThread).not.toHaveBeenCalled();
+  });
+
   it("renders plan, diff review, pending approval, and restorable checkpoints", () => {
     const body = document.createElement("div");
     document.body.appendChild(body);

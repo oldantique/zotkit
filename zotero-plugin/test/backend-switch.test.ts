@@ -322,3 +322,97 @@ describe("resume-failure archives the stale session record (I5)", () => {
     expect(history.some((record: { threadId: string }) => record.threadId === "eng-stale")).toBe(true);
   });
 });
+
+describe("deleteThread (bug-triage #3)", () => {
+  it("removes a non-active thread's history record without touching the active thread", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    const { service } = makeService(engine);
+    await service.start();
+    const internal = service as any;
+    internal.saveSessions = vi.fn().mockResolvedValue(undefined);
+    await service.setPaper(paperContext());
+    const activeId = service.state.activeThreadId!;
+    internal.sessions.history = {
+      "1-ATTACH": [
+        { threadId: "eng-old", title: "旧会话", workspace: "/w", updatedAt: "t0", backend: "engine" },
+      ],
+    };
+
+    await service.deleteThread("eng-old");
+
+    expect(internal.sessions.history["1-ATTACH"]).toEqual([]);
+    expect(internal.sessions.papers["1-ATTACH"].threadId).toBe(activeId);
+    expect(service.state.activeThreadId).toBe(activeId);
+    expect((engine as any).turnInterrupt).not.toHaveBeenCalled();
+    expect((engine as any).threadResume).not.toHaveBeenCalled();
+    expect(internal.saveSessions).toHaveBeenCalled();
+  });
+
+  it("deleting the active thread interrupts a running turn and resumes the most recently used remaining record", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    const { service } = makeService(engine);
+    await service.start();
+    const internal = service as any;
+    internal.saveSessions = vi.fn().mockResolvedValue(undefined);
+    await service.setPaper(paperContext());
+    const activeId = service.state.activeThreadId!;
+    internal.sessions.history = {
+      "1-ATTACH": [
+        { threadId: "eng-old-2", title: "较新的旧会话", workspace: "/w", updatedAt: "t2", backend: "engine" },
+        { threadId: "eng-old-1", title: "更旧的会话", workspace: "/w", updatedAt: "t1", backend: "engine" },
+      ],
+    };
+    service.state.running = true;
+    service.state.activeTurnId = "turn-live";
+
+    await service.deleteThread(activeId);
+
+    expect((engine as any).turnInterrupt).toHaveBeenCalledWith({ threadId: activeId, turnId: "turn-live" });
+    expect((engine as any).threadResume).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "eng-old-2" }),
+    );
+    expect(service.state.running).toBe(false);
+    expect(service.state.activeThreadId).toBe("eng-old-2");
+    expect(internal.sessions.papers["1-ATTACH"].threadId).toBe("eng-old-2");
+    expect(internal.sessions.history["1-ATTACH"]).toEqual([
+      { threadId: "eng-old-1", title: "更旧的会话", workspace: "/w", updatedAt: "t1", backend: "engine" },
+    ]);
+  });
+
+  it("deleting the active thread with no remaining records leaves activeThreadId null -- the next send() starts fresh", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    const { service } = makeService(engine);
+    await service.start();
+    const internal = service as any;
+    internal.saveSessions = vi.fn().mockResolvedValue(undefined);
+    await service.setPaper(paperContext());
+    const activeId = service.state.activeThreadId!;
+
+    await service.deleteThread(activeId);
+
+    expect(service.state.activeThreadId).toBeNull();
+    expect(service.state.activeTurnId).toBeNull();
+    expect(internal.sessions.papers["1-ATTACH"]).toBeUndefined();
+    expect((engine as any).threadResume).not.toHaveBeenCalled();
+  });
+
+  it("no-ops for a thread id that isn't the paper's current record or in its history", async () => {
+    setPrefString("backend", "engine");
+    const engine = fakeEngine();
+    const { service } = makeService(engine);
+    await service.start();
+    const internal = service as any;
+    internal.saveSessions = vi.fn().mockResolvedValue(undefined);
+    await service.setPaper(paperContext());
+    const activeId = service.state.activeThreadId!;
+    internal.saveSessions.mockClear();
+
+    await service.deleteThread("nonexistent-thread");
+
+    expect(service.state.activeThreadId).toBe(activeId);
+    expect(internal.saveSessions).not.toHaveBeenCalled();
+  });
+});

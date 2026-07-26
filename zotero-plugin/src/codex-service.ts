@@ -667,6 +667,68 @@ export class CodexService {
     this.callbacks.onState();
   }
 
+  /**
+   * Bug-triage #3: 新对话 threads accumulate in the picker with no way to
+   * remove them. This is local-only forgetting -- it never touches the
+   * app-server's rollout/transcript for the thread (deliberate scope limit
+   * for this wave: dropping the picker record is enough to stop the
+   * clutter; the engine transcript file for `threadId`, if any, is left on
+   * disk). No-ops if `threadId` isn't the paper's current record or in its
+   * history.
+   */
+  deleteThread(threadId: string): Promise<void> {
+    return this.enqueuePaperTransition(() => this.deleteThreadInternal(threadId));
+  }
+
+  private async deleteThreadInternal(threadId: string): Promise<void> {
+    const paperKey = this.activePaperKey;
+    if (!paperKey) return;
+    const wasCurrentRecord = this.sessions.papers[paperKey]?.threadId === threadId;
+    const history = this.sessions.history?.[paperKey] || [];
+    const wasInHistory = history.some((record) => record.threadId === threadId);
+    if (!wasCurrentRecord && !wasInHistory) return;
+    const wasActive = threadId === this.state.activeThreadId;
+    if (wasCurrentRecord) delete this.sessions.papers[paperKey];
+    if (this.sessions.history) {
+      this.sessions.history[paperKey] = history.filter((record) => record.threadId !== threadId);
+    }
+    this.threadPaperKeys.delete(threadId);
+    if (wasActive) {
+      await this.interruptActiveTurn();
+      this.state.activeThreadId = null;
+      this.state.activeTurnId = null;
+      // Fall back to the most recently used remaining record for this
+      // paper (history is kept most-recent-first, mirroring
+      // switchThreadInternal's own bookkeeping), or leave no active thread
+      // when none remain -- the next send() starts a fresh one via
+      // sendToActiveTurn's `!activeThreadId` branch.
+      const remaining = (this.sessions.history?.[paperKey] || [])
+        .filter((record) => (record.backend ?? "codex") === this.state.backend);
+      const next = remaining[0];
+      if (next && this.activeContext?.workspace) {
+        try {
+          const response = await this.requireClient().threadResume({
+            threadId: next.threadId,
+            ...this.threadModeSettings(this.activeContext),
+          });
+          this.sessions.history![paperKey] = remaining.slice(1);
+          this.sessions.papers[paperKey] = { ...next, updatedAt: new Date().toISOString() };
+          this.state.activeThreadId = response.thread.id;
+          this.state.activeTurnId = null;
+          this.threadPaperKeys.set(response.thread.id, paperKey);
+          await this.requireClient().threadRead(response.thread.id, true);
+        }
+        catch {
+          // Resume failure on the fallback record -- leave activeThreadId
+          // null; the next send() starts a fresh thread the same way
+          // newThreadInternal's normal path does.
+        }
+      }
+    }
+    await this.saveSessions();
+    this.callbacks.onState();
+  }
+
   send(text: string, model: string, effort: string): Promise<void> {
     return this.enqueuePaperTransition(() => this.sendToActiveTurn(text, model, effort));
   }

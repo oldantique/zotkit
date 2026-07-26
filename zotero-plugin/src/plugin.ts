@@ -29,6 +29,7 @@ import { TerminalPanel, type TerminalPaperOptions } from "./terminal-panel";
 import { loadSettings, type ZoteroChatSettings } from "./settings";
 import { ProviderSettingsView } from "./provider-settings";
 import { defaultSelectableModel, modelBackend } from "./model-menu";
+import { shouldAutoOpenFloat } from "./plugin-helpers";
 import {
   loadProviders,
   saveProviders,
@@ -133,6 +134,17 @@ export class ZoteroChatPlugin {
   private pendingBackendSwitch: { targetModel: string; targetLabel: string; carryAvailable: boolean } | null = null;
   private providerSettingsHost: HTMLElement | null = null;
   private providerSettingsView: ProviderSettingsView | null = null;
+  // Bug-triage #2: keep a running turn visible even when the sidebar has no
+  // connected body (section collapsed/closed) by force-opening the float
+  // panel -- see maybeAutoOpenFloatForRunningTurn(). `currentTurnId` is a
+  // plugin-local id (not codex's own turnId, which is briefly null right as
+  // a turn starts) that changes exactly once per rising edge of
+  // codex.state.running, so a steered follow-up mid-turn keeps the same id.
+  private turnGeneration = 0;
+  private currentTurnId: string | null = null;
+  private wasCodexRunning = false;
+  private autoOpenedFloatTurnId: string | null = null;
+  private floatDismissedTurnId: string | null = null;
 
   async startup(data: PluginStartupData): Promise<void> {
     this.settings = await loadSettings();
@@ -680,6 +692,7 @@ export class ZoteroChatPlugin {
       onStop: () => void this.codex.interrupt().catch((error) => this.reportError(error)),
       onNewThread: () => void this.newChat().catch((error) => this.reportError(error)),
       onSelectThread: (threadID) => void this.codex.switchThread(threadID).catch((error) => this.reportError(error)),
+      onDeleteThread: (threadID) => void this.codex.deleteThread(threadID).catch((error) => this.reportError(error)),
       onLogin: () => void this.codex.login().catch((error) => this.reportError(error)),
       onLogout: () => void this.codex.logout().catch((error) => this.reportError(error)),
       onOpenTerminal: () => void this.openTerminal().then(() => this.terminal.focus()).catch((error) => this.reportError(error)),
@@ -780,8 +793,12 @@ export class ZoteroChatPlugin {
     this.chatPhase = "connecting";
     this.chatError = "";
     this.renderChatViews();
-    await this.refreshContext();
     try {
+      // Bug-triage #2 (edge 3): was awaited outside this try, so a non-stale
+      // reader-capture rejection here escaped as an unhandled rejection
+      // instead of surfacing through the catch below -- leaving chatPhase
+      // stuck at "connecting" (composer disabled) until the next retry.
+      await this.refreshContext();
       await this.codex.start();
       if (!this.codex.isSignedIn()) {
         this.chatPhase = "signed-out";
@@ -1012,6 +1029,14 @@ export class ZoteroChatPlugin {
     const entry = this.floatPanels.get(win);
     if (!entry?.view.isVisible()) return;
     entry.view.hide();
+    // Every user-facing "close" (close button, Escape, ⌘K toggle, Mark
+    // Understood) funnels through here. If a turn is running when this
+    // fires, remember it so maybeAutoOpenFloatForRunningTurn() doesn't
+    // immediately force the panel back open and fight the user (bug-triage
+    // #2's "at most once per turn, respect an explicit dismissal" rule).
+    if (this.codex?.state.running && this.currentTurnId) {
+      this.floatDismissedTurnId = this.currentTurnId;
+    }
     const target = entry.focusReturn;
     entry.focusReturn = null;
     if (target?.isConnected) {
@@ -1172,6 +1197,7 @@ export class ZoteroChatPlugin {
   private renderChatViews(): void {
     this.trackTurnTiming();
     if (!this.codex) return;
+    this.updateTurnTracking();
     const context = this.context;
     const plan = normalizePlan(this.codex.getActivePlan());
     const mutationReviews = this.mutations?.getReviews() || [];
@@ -1268,7 +1294,58 @@ export class ZoteroChatPlugin {
         noting: this.noting?.view() ?? null,
       });
     }
+    // `this.chatViews` is now pruned to connected bodies only -- this is the
+    // right point to decide whether a running turn needs the float panel
+    // forced open (bug-triage #2).
+    this.maybeAutoOpenFloatForRunningTurn();
     this.renderFloatPanels();
+  }
+
+  /**
+   * Advances the plugin-local turn identity on every false→true edge of
+   * codex.state.running (a genuinely new turn -- not a mid-turn steer, which
+   * leaves `running` continuously true), and resets the auto-open/dismissal
+   * trackers for that new turn. Called on every renderChatViews() pass, so
+   * `currentTurnId` is always current by the time it's read elsewhere.
+   */
+  private updateTurnTracking(): void {
+    const running = Boolean(this.codex?.state.running);
+    if (running && !this.wasCodexRunning) {
+      this.turnGeneration += 1;
+      this.autoOpenedFloatTurnId = null;
+      this.floatDismissedTurnId = null;
+    }
+    this.currentTurnId = running ? `turn-${this.turnGeneration}` : null;
+    this.wasCodexRunning = running;
+  }
+
+  /**
+   * Bug-triage #2: a running turn has no visible surface once the sidebar's
+   * chat views all disconnect (section collapsed/closed) -- streaming
+   * continues into the store, but nothing shows it, and the user reads that
+   * as "AI stopped". Force the float panel open in that case, reusing the
+   * ensure-open path resumeAnchorChat() uses so an already-open panel is
+   * never closed.
+   */
+  private maybeAutoOpenFloatForRunningTurn(): void {
+    if (!this.codex.state.running) return;
+    // Some plugin-state tests exercise renderChatViews() against a plugin
+    // instance without a full Zotero stub -- mirror the same defensive
+    // access installShortcutHandler's Escape handler uses.
+    const win = typeof Zotero === "undefined" ? null : Zotero.getMainWindow?.();
+    if (!win) return;
+    const floatVisible = Boolean(this.floatPanels.get(win)?.view.isVisible());
+    const shouldOpen = shouldAutoOpenFloat({
+      running: this.codex.state.running,
+      hasConnectedViews: this.chatViews.size > 0,
+      floatVisible,
+      autoOpenedTurnId: this.autoOpenedFloatTurnId,
+      dismissedTurnId: this.floatDismissedTurnId,
+      activeTurnId: this.currentTurnId,
+    });
+    if (!shouldOpen) return;
+    this.autoOpenedFloatTurnId = this.currentTurnId;
+    void this.ensureFloatPanelOpen().catch((error) => this.reportError(error));
   }
 
   /** The active thread's most recently opened (unresolved) paper-trail anchor, if any. */

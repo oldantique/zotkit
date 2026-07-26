@@ -172,6 +172,27 @@
 .zc-thread-tab-state { width: 5px; height: 5px; flex: none; border-radius: 50%; background: color-mix(in srgb, var(--zc-muted) 55%, transparent); }
 .zc-thread-tab-state.is-running { background: var(--zc-accent); box-shadow: 0 0 0 3px var(--zc-accent-soft); animation: zc-pulse 1.4s ease-in-out infinite; }
 .zc-thread-tab-state.is-attention { background: var(--zc-warning); }
+.zc-thread-tab-item { display: flex; align-items: center; min-width: 0; flex: 0 1 auto; }
+.zc-thread-delete {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--zc-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.zc-thread-tab-item:hover .zc-thread-delete,
+.zc-thread-tab-item:focus-within .zc-thread-delete { display: flex; }
+.zc-thread-delete:hover { color: var(--zc-danger); background: var(--zc-bg-hover); }
 .zc-thread-tab-add { width: 25px; min-width: 25px; height: 25px; margin-left: 3px; padding: 0; flex: none; }
 
 .zc-context-card {
