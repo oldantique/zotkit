@@ -2,6 +2,7 @@
 
 You (an AI agent) were likely given this repo because your user wants you to manage
 their Zotero library with **zotkit**. Here is exactly how to proceed.
+(Developing zotkit itself instead? Read [CLAUDE.md](CLAUDE.md), not this file.)
 
 ## 1. Install
 
