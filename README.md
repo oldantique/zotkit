@@ -31,6 +31,18 @@ code* so an agent (or a tired human) can't pollute your library with inconsisten
 | Attachment files on **WebDAV** | ✅ | ⚠️ download at best | ✅ **upload + download** |
 | Tag conventions enforced in code | ❌ | ❌ | ✅ optional `conventions.toml` |
 
+## The zotkit family
+
+Two independent, complementary projects — use either on its own, or both together:
+
+| | What it is |
+|---|---|
+| **zotkit** (this repo) | Headless Python CLI + library. Runs anywhere, needs no Zotero app. |
+| **[zotkit-reader](https://github.com/oldantique/zotkit-reader)** | A Zotero Reader sidebar that embeds a Codex/Claude agent beside the PDF you're reading. Maintained by [@ChanceSiyuan](https://github.com/ChanceSiyuan). |
+
+They share a name and a philosophy, not a codebase: zotkit-reader can call zotkit over MCP
+for library-wide operations, but neither requires the other to be installed.
+
 ## Install
 
 Pure Python (3.11+), no platform-specific bits — the same package works on macOS,

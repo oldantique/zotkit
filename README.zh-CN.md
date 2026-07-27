@@ -54,6 +54,18 @@ zotkit move AB12CD34 "Algorithms"        # 移动分类
 zotkit backup                            # 全库 JSON 备份(批量操作前必做)
 ```
 
+## zotkit 家族
+
+两个各自独立、互为补充的项目,单用哪个都行,一起用更顺:
+
+| | 是什么 |
+|---|---|
+| **zotkit**(本仓库) | 无头 Python CLI + 库。哪儿都能跑,不需要开 Zotero 客户端。 |
+| **[zotkit-reader](https://github.com/oldantique/zotkit-reader)** | Zotero 阅读器侧边栏,在你正读的 PDF 旁边嵌入 Codex/Claude 助手。由 [@ChanceSiyuan](https://github.com/ChanceSiyuan) 维护。 |
+
+两者共享名字和理念,但不共享代码:zotkit-reader 可以通过 MCP 调用 zotkit 做全库操作,
+但谁都不要求另一个必须装上。
+
 ## 想连文献库一起整理?
 
 我们把一套经过 300 篇文献实战的整理方法论写成了文档(分类当骨架、标签当血肉、
