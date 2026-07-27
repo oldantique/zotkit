@@ -1,7 +1,13 @@
 # zotkit
 
-Tools for working with a Zotero library alongside AI agents. One repo, two shipped
-components with deliberately different trust boundaries (see ADR-0001).
+Tools for working with a Zotero library alongside AI agents. Two shipped components with
+deliberately different trust boundaries, now in **two repos** (see ADR-0003, which supersedes
+ADR-0001): the Python package here, the Reader plugin at
+[oldantique/zotkit-reader](https://github.com/oldantique/zotkit-reader).
+
+The plugin-side entries below are kept because the vocabulary is shared across both repos and
+docs here still refer to it; **the plugin's own terms are owned by its repo now**, and paths
+given for it are relative to *that* repo.
 
 ## Language
 
@@ -13,17 +19,19 @@ WebDAV. Cross-platform, needs no desktop app.
 _Avoid_: "the CLI" alone when the Reader plugin is in scope — say which component.
 
 **Reader plugin**:
-The Zotero 9 desktop add-on in `zotero-plugin/` (XPI). Puts an agent-CLI terminal in
-the PDF Reader's sidebar. Does not install or invoke the Python package.
-_Avoid_: "the XPI" in docs prose; "Codex plugin" (it drives Codex *or* Claude Code).
+The Zotero 9 desktop add-on shipped from [oldantique/zotkit-reader](https://github.com/oldantique/zotkit-reader)
+(XPI). Puts an agent-CLI terminal — and a structured Research Chat — in the PDF Reader's
+sidebar. Does not install or invoke the Python package.
+_Avoid_: "the XPI" in docs prose; "Codex plugin" (it drives Codex *or* Claude Code);
+`zotero-plugin/` as a path (that directory no longer exists here — the plugin is its own repo).
 
 **agent CLI**:
 The external coding-agent binary the Reader plugin drives in its terminal — Codex CLI
 or Claude Code, chosen in settings. Authenticated by the user, never by the plugin.
 
 **native helper**:
-The macOS helper binary (compiled from `zotero-plugin/native/`) that owns PTY sessions
-for the Reader plugin and talks to it over an authenticated local socket.
+The macOS helper binary (compiled from `native/` in the zotkit-reader repo) that owns PTY
+sessions for the Reader plugin and talks to it over an authenticated local socket.
 
 ### Interfaces
 
