@@ -43,6 +43,13 @@ vocabulary is defined in [CONTEXT.md](CONTEXT.md); use those terms in docs and c
   If you change the upload/download code, keep this doc in sync (it is itself
   a headline feature of the repo).
 - `docs/adr/` — architecture decisions; add a numbered ADR for structural changes.
+- `zotkit/metadata.py` — identifier → item-JSON fetchers (arXiv/CrossRef). ALL
+  request pacing lives in its `_get` (per-host intervals) — never add sleeps or
+  retry logic in callers.
+- `zotkit/enrich.py` — in-place completion of existing items. Core invariant:
+  the item key never changes; merge policy (fill-empty-only, creator prefix
+  rule, append-only Extra, abstract-source stamp) is documented in its module
+  docstring and README → "Enriching existing items".
 - Tag conventions are **data + code**, not prose: users supply `conventions.toml`
   (see `conventions.example.toml`); `zotkit.core.lint_tags` enforces it in
   `create`/`tag`. Don't add convention rules that exist only in documentation.

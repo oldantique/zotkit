@@ -47,17 +47,12 @@ just read it. Quick reference:
 
 ```bash
 zotkit find --title "..." | --tag ns:value | --collection "Name"
-zotkit create --arxiv <id|url> ...   # fetch arXiv metadata (several ids OK — batched +
-                                     #   rate-limited internally); --apply attaches PDFs;
-                                     #   papers with a journal DOI auto-build the journal
-                                     #   record (version of record), arXiv id kept in Extra
+zotkit create --arxiv <id|url> ...   # fetch arXiv metadata; --apply attaches PDFs too
 zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
-zotkit enrich --key K [K...]         # complete existing items in place (missing
-                                     #   abstract/DOI/authors; --rebuild-record for
-                                     #   preprint→journal). Item keys NEVER change —
-                                     #   to update an item, enrich it; never delete+recreate
+zotkit enrich --key K [K...]         # complete EXISTING items in place — never
+                                     #   delete+recreate (item keys must stay stable)
 zotkit attach --from x.created.json --all
 zotkit fetch --key KEY --out downloads
 zotkit tag KEY topic:foo | zotkit status KEY read | zotkit move KEY "Collection"

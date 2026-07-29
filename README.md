@@ -108,9 +108,17 @@ zotkit lint field:physics topic:new-idea    # offline tag check
 ```
 
 `--arxiv` takes ids or abs/pdf URLs (several, space- or comma-separated) and maps
-the full record (all authors, abstract, date, DOI); `--doi`
-maps CrossRef records (journal articles, conference papers, books, chapters, …)
-and refuses to guess on CrossRef types it doesn't know.
+the full record (all authors, abstract, date, DOI); `--doi` maps CrossRef records
+(journal articles, conference papers, books, chapters, …) and refuses to guess on
+CrossRef types it doesn't know. Both accept `--collection` and `--tags`, and
+`--no-pdf` skips the arXiv PDFs. Rate limiting is built into the request layer —
+batches use one arXiv metadata request and space PDF downloads per arXiv's terms
+of use, so callers (humans or agents) never pace themselves. A bad id fails
+alone, not the batch; the exit code is non-zero only if something failed.
+Fetching metadata from arbitrary web pages is out of scope (zotkit stays a
+daemon-free CLI — no translation-server). CrossRef requests identify themselves
+to the polite pool with a contact address; that should be reachable, so if you
+distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
 
 **Version of record**: when arXiv reports a *journal* DOI (the paper was formally
 published — as opposed to arXiv's own `10.48550/*` DataCite DOI), `--arxiv`
@@ -121,15 +129,7 @@ the DOI field), the arXiv abstract fills in when CrossRef has none, and the PDF
 still comes from arXiv. If the CrossRef lookup fails, the item falls back to the
 preprint record with a warning rather than failing. Items whose abstract zotkit
 wrote also carry an `abstract-source: arxiv|crossref` line in Extra, naming where
-it actually came from. Both accept `--collection`
-and `--tags`, and `--no-pdf` skips the arXiv PDFs. Rate limiting is built into the
-request layer — batches use one arXiv metadata request and space PDF downloads
-per arXiv's terms of use, so callers (humans or agents) never pace themselves. A
-bad id fails alone, not the batch; the exit code is non-zero only if something
-failed. Fetching metadata from arbitrary web pages is out of scope (zotkit stays
-a daemon-free CLI — no translation-server). CrossRef requests identify themselves
-to the polite pool with a contact address; that should be reachable, so if you
-distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
+it actually came from.
 
 ### Enriching existing items
 
@@ -186,7 +186,7 @@ zotkit is designed to be driven by coding agents (Claude Code and similar): dry-
 defaults, code-enforced tag conventions, and a ready-made **Claude Code skill** in
 [`skills/zotkit/`](skills/zotkit/SKILL.md) — copy it to `~/.claude/skills/zotkit/` and
 any Claude session can search, file, and attach papers for you while respecting your
-taxonomy. (An MCP server is planned.)
+taxonomy.
 
 Want to clean up a messy library, not just maintain one? The battle-tested method —
 taxonomy design, parallel read-only analysis, serial reviewed writes — is written up in

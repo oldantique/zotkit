@@ -64,3 +64,20 @@ deterministic plugin code in response to an explicit user gesture, and is
 individually undoable. Generated files still stay under the add-on's private
 profile directory until the user applies them.
 _Avoid_: calling the plugin "read-only" without qualification.
+
+### Data conventions (Python package)
+
+**version of record**:
+The published journal form of a paper, identified by a *journal* DOI (anything
+other than arXiv's own `10.48550/*` DataCite DOI). zotkit prefers it wherever an
+itemType is chosen: `create --arxiv` builds it automatically, `enrich
+--rebuild-record` upgrades to it in place. Behavior details live in README →
+"Version of record".
+
+**abstract-source stamp**:
+The `abstract-source: arxiv|crossref` line zotkit appends to an item's Extra
+whenever *it* writes the abstract, naming the true origin. A stamp with no
+abstract means an owner deliberately removed the abstract — tooling must not
+re-add it (`enrich` reports NEEDS OWNER).
+_Avoid_: rewriting or deleting existing Extra lines; zotkit tooling treats Extra
+as append-only.
