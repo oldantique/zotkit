@@ -10,7 +10,8 @@ description: >
 # Managing a Zotero library with zotkit
 
 The `zotkit` CLI manages the user's Zotero library headless via the Zotero Web API;
-attachment files go directly to the user's WebDAV server. Credentials load from an
+attachment files go to the user's WebDAV server or Zotero Storage (auto-detected
+from the `.env`). Credentials load from an
 `.env` (`./.env`, `~/.config/zotkit/env`, or `$ZOTKIT_ENV`) — **never cat/echo/print
 the .env, the API key, or the WebDAV password.**
 

@@ -91,13 +91,14 @@ zotkit create --doi 10.1038/nature14539     # fetch CrossRef metadata by DOI (no
 
 zotkit create --file papers.json            # batch from JSON: dry-run preview
 zotkit create --file papers.json --apply    # create (dedups by DOI/title)
-zotkit attach --from papers.created.json --all   # upload the PDFs to WebDAV
+zotkit attach --from papers.created.json --all   # upload the PDFs (WebDAV or Zotero
+                                                 #   Storage — auto-detected from .env)
 
 zotkit enrich --key AB12CD34 EF56GH78       # fill missing fields on existing items
                                             #   in place (dry-run; --apply to write)
 
 zotkit attach --key AB12CD34 --pdf paper.pdf     # single attach
-zotkit fetch --key AB12CD34 --out downloads      # download attachment from WebDAV
+zotkit fetch --key AB12CD34 --out downloads      # download attachments (same auto-detection)
 
 zotkit tag AB12CD34 topic:qaoa prio:high    # validated against conventions.toml
 zotkit status AB12CD34 read                 # replaces the status: tag
@@ -171,7 +172,7 @@ from zotkit import Zot
 z = Zot()                                   # reads .env automatically
 z.find(tag="status:to-read")
 z.create_items([...])                       # dedup + convention checks
-z.attach("AB12CD34", "paper.pdf")           # PDF -> WebDAV
+z.attach("AB12CD34", "paper.pdf")           # PDF -> WebDAV / Zotero Storage
 z.fetch("AB12CD34", "downloads")
 z.set_status("AB12CD34", "read")
 z.backup()
