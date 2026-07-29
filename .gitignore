@@ -2,6 +2,9 @@
 .env
 conventions.toml
 
+# local agent config (session skills etc.) — not part of the published repo
+.claude/
+
 # python
 .venv/
 __pycache__/
