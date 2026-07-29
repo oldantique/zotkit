@@ -54,6 +54,10 @@ zotkit create --arxiv <id|url> ...   # fetch arXiv metadata (several ids OK — 
 zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
+zotkit enrich --key K [K...]         # complete existing items in place (missing
+                                     #   abstract/DOI/authors; --rebuild-record for
+                                     #   preprint→journal). Item keys NEVER change —
+                                     #   to update an item, enrich it; never delete+recreate
 zotkit attach --from x.created.json --all
 zotkit fetch --key KEY --out downloads
 zotkit tag KEY topic:foo | zotkit status KEY read | zotkit move KEY "Collection"

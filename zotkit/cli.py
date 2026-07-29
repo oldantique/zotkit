@@ -1,6 +1,6 @@
 """zotkit — CLI over zotkit.core.Zot.
 
-Subcommands: doctor, find, create, attach, fetch, tag, status, move, backup, lint.
+Subcommands: doctor, find, create, enrich, attach, fetch, tag, status, move, backup, lint.
 Write commands print what they did; `create` is dry-run unless --apply.
 """
 from __future__ import annotations
@@ -96,6 +96,15 @@ def main(argv=None):
     p.add_argument("--collection", help="with --arxiv/--doi: file the item here")
     p.add_argument("--tags", help="with --arxiv/--doi: comma-separated tags, "
                                   "e.g. field:ml,status:to-read")
+
+    p = sub.add_parser("enrich", help="fill missing fields on existing items from "
+                                      "arXiv/CrossRef, in place — the item key never "
+                                      "changes (dry unless --apply)")
+    p.add_argument("--key", nargs="+", required=True, metavar="KEY")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--rebuild-record", action="store_true",
+                   help="also upgrade preprint items with a journal DOI to the "
+                        "journal record, in place (version of record)")
 
     p = sub.add_parser("attach", help="attach a local file to an item (WebDAV or Zotero Storage)")
     p.add_argument("--key"); p.add_argument("--pdf")
@@ -240,6 +249,54 @@ def main(argv=None):
         if len(wanted) > 1:
             print(f"batch: created {len(new)}, skipped {dup} dup, failed {len(failures)}")
         return 1 if failures else 0
+
+    elif a.cmd == "enrich":
+        from .enrich import apply_plan, plan_enrich
+        counts = {"enriched": 0, "needs-identifier": 0, "stale-stamp": 0,
+                  "up-to-date": 0, "failed": 0}
+        for key in a.key:
+            try:
+                p_ = plan_enrich(zot, key, rebuild_record=a.rebuild_record)
+            except Exception as e:  # bad key, metadata lookup failure, …
+                counts["failed"] += 1
+                print(f"{key}  FAILED: {e}", file=sys.stderr)
+                continue
+            print(f"{key}  {p_['title'][:60]}")
+            for n in p_["notes"]:
+                print(f"    {n}")
+            if p_["status"] in ("needs-identifier", "stale-stamp", "up-to-date"):
+                if p_["status"] == "up-to-date":
+                    print("    up-to-date")
+                counts[p_["status"]] += 1
+                continue
+            if p_["rebuild"]:
+                print(f"    rebuild: {p_['item']['data']['itemType']} → "
+                      f"{p_['rebuild']} ({p_['auth'].get('DOI', '')})")
+            if p_["fills"]:
+                shown = [f + (f" (source: {p_['abstract_source']})"
+                              if f == "abstractNote" and p_["abstract_source"] else "")
+                         for f in p_["fills"]]
+                print(f"    will fill: {', '.join(shown)}")
+            for line in p_["extra_lines"]:
+                print(f"    extra += {line!r}")
+            if not a.apply:
+                continue
+            try:
+                apply_plan(zot, p_)
+                counts["enriched"] += 1
+                print("    enriched ✓")
+            except Exception as e:
+                counts["failed"] += 1
+                print(f"{key}  FAILED to write: {e}", file=sys.stderr)
+        if not a.apply:
+            print("DRY — add --apply to write.")
+        skipped = (counts["needs-identifier"] + counts["stale-stamp"]
+                   + counts["up-to-date"])
+        print(f"enriched {counts['enriched']} / skipped {skipped} "
+              f"(needs-identifier {counts['needs-identifier']}, "
+              f"stale-stamp {counts['stale-stamp']}, "
+              f"up-to-date {counts['up-to-date']}) / failed {counts['failed']}")
+        return 1 if counts["failed"] else 0
 
     elif a.cmd == "attach":
         if a.key and a.pdf:

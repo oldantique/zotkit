@@ -14,6 +14,7 @@ batch loops — never need to pace themselves.
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -23,7 +24,9 @@ import httpx
 
 from . import __version__
 
-CONTACT = "mailto:Eric.M.990909@gmail.com"
+# CrossRef's polite pool wants a reachable contact; $ZOTKIT_MAILTO overrides
+# the default (distributors of zotkit-based tools: please set your own).
+CONTACT = f"mailto:{os.environ.get('ZOTKIT_MAILTO', 'ccmuuc@gmail.com')}"
 USER_AGENT = f"zotkit/{__version__} (https://github.com/oldantique/zotkit; {CONTACT})"
 
 _ATOM = "{http://www.w3.org/2005/Atom}"

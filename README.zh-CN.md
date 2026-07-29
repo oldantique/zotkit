@@ -55,6 +55,10 @@ zotkit create --arxiv id1 id2 id3 --apply  # 批量:元信息合并一次请求,
 zotkit create --doi 10.1038/nature14539  # 按 DOI 从 CrossRef 抓元信息(不下 PDF;
                                          #   同样可一次给多个 DOI)
 zotkit create --file papers.json         # 从 JSON 批量建条目(默认演练,加 --apply 才执行)
+zotkit enrich --key AB12CD34             # 就地补全已有条目的缺失字段(摘要/DOI/
+                                         #   被截断的作者表;--rebuild-record 可把
+                                         #   已见刊的 preprint 就地升级为期刊记录)
+                                         #   item key 永不改变——下游引用不受影响
 zotkit attach --key AB12CD34 --pdf 论文.pdf   # 上传 PDF
 zotkit fetch --key AB12CD34 --out downloads   # 下载 PDF
 zotkit tag AB12CD34 topic:qaoa           # 打标签

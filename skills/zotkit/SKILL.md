@@ -55,6 +55,16 @@ zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same wa
 zotkit create --file x.json
 zotkit create --file x.json --apply
 
+# complete EXISTING items in place (dry-run first, then --apply)
+zotkit enrich --key AB12CD34 EF56GH78
+zotkit enrich --key AB12CD34 --rebuild-record --apply   # preprint→journal record upgrade
+#   To update an existing item, ALWAYS enrich — NEVER delete and recreate it: the
+#   item key must stay stable (downstream manifests reference it). enrich only
+#   fills empty fields (existing values are never overwritten), extends author
+#   lists only when the current list is a prefix of the authoritative one, and
+#   never touches tags/collections/attachments. "NEEDS OWNER" lines in its output
+#   are decisions for the user — surface them, don't work around them.
+
 # upload / attach PDFs (WebDAV or Zotero Storage — auto-detected from .env)
 zotkit attach --key <itemKey> --pdf /abs/paper.pdf
 zotkit attach --from x.created.json --all      # batch; skips already-attached

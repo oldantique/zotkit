@@ -93,6 +93,9 @@ zotkit create --file papers.json            # batch from JSON: dry-run preview
 zotkit create --file papers.json --apply    # create (dedups by DOI/title)
 zotkit attach --from papers.created.json --all   # upload the PDFs to WebDAV
 
+zotkit enrich --key AB12CD34 EF56GH78       # fill missing fields on existing items
+                                            #   in place (dry-run; --apply to write)
+
 zotkit attach --key AB12CD34 --pdf paper.pdf     # single attach
 zotkit fetch --key AB12CD34 --out downloads      # download attachment from WebDAV
 
@@ -124,7 +127,31 @@ request layer — batches use one arXiv metadata request and space PDF downloads
 per arXiv's terms of use, so callers (humans or agents) never pace themselves. A
 bad id fails alone, not the batch; the exit code is non-zero only if something
 failed. Fetching metadata from arbitrary web pages is out of scope (zotkit stays
-a daemon-free CLI — no translation-server).
+a daemon-free CLI — no translation-server). CrossRef requests identify themselves
+to the polite pool with a contact address; that should be reachable, so if you
+distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
+
+### Enriching existing items
+
+`zotkit enrich --key K [K …]` completes incomplete items — missing abstracts,
+DOIs, truncated author lists — from the same arXiv/CrossRef sources, **in
+place**. The item key never changes (keys are the stable handle downstream
+tooling references; delete-and-recreate is not an option), and writes carry the
+item version, so a concurrent edit fails that item loudly instead of clobbering.
+
+The merge is deliberately conservative: only empty fields are filled; creators
+are extended only when the current list is a same-order prefix of the
+authoritative one (the classic truncated-list case — any other difference is
+reported, not touched); tags, collections, relations, and attachments are never
+modified; Extra only gains lines. Abstracts zotkit writes are stamped
+`abstract-source: …` in Extra — a stamp with no abstract means someone
+deliberately removed it, and enrich will not re-add it (reported as NEEDS
+OWNER). Items with no DOI or arXiv id are reported as needs-identifier.
+
+`--rebuild-record` additionally upgrades a preprint whose paper has since been
+published (journal DOI present) to the journal record **in the same item**:
+itemType, published title/date/venue/volume/pages — with `arXiv: <id>` appended
+to Extra and attachments untouched.
 
 Item JSON for `zotkit create --file` (a list, one object per reference):
 
