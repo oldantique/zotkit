@@ -81,11 +81,13 @@ def main(argv=None):
                                       "or a DOI (dry unless --apply)")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--file")
-    src.add_argument("--arxiv", metavar="ID_OR_URL",
-                     help="arXiv id (2401.12345) or abs/pdf URL; fetches metadata, "
-                          "and with --apply also downloads + attaches the PDF")
-    src.add_argument("--doi", metavar="DOI",
-                     help="DOI (or doi.org URL); fetches metadata from CrossRef")
+    src.add_argument("--arxiv", metavar="ID_OR_URL", nargs="+",
+                     help="arXiv ids (2401.12345) or abs/pdf URLs — several allowed, "
+                          "space- or comma-separated; fetches metadata in one batched "
+                          "request, and with --apply also downloads + attaches the PDFs")
+    src.add_argument("--doi", metavar="DOI", nargs="+",
+                     help="DOIs (or doi.org URLs) — several allowed, space- or "
+                          "comma-separated; fetches metadata from CrossRef")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--no-dedup", action="store_true")
     p.add_argument("--loose-tags", action="store_true", help="warn instead of error on tag violations")
@@ -141,25 +143,43 @@ def main(argv=None):
         _print_items(zot.find(a.title, a.tag, a.collection))
 
     elif a.cmd == "create":
-        pdf_url = None
+        pdfs: dict[str, tuple[str, str]] = {}  # title -> (arXiv id, pdf url)
+        failures: list[tuple[str, str]] = []   # (identifier, why)
         if a.file:
             data = json.load(open(a.file, encoding="utf-8"))
             items = data["items"] if isinstance(data, dict) else data
         else:
-            from .metadata import MetadataError, fetch_arxiv, fetch_doi
+            from .metadata import MetadataError, fetch_arxiv_batch, fetch_doi
+            wanted = [w.strip() for arg in (a.arxiv or a.doi)
+                      for w in arg.split(",") if w.strip()]
+            items = []
             try:
                 if a.arxiv:
-                    item, pdf_url = fetch_arxiv(a.arxiv)
+                    for r in fetch_arxiv_batch(wanted):
+                        if r.get("error"):
+                            failures.append((r["id"], r["error"]))
+                        else:
+                            items.append(r["item"])
+                            pdfs[r["item"]["title"]] = (r["id"], r["pdf_url"])
                 else:
-                    item = fetch_doi(a.doi)
+                    for d in wanted:
+                        try:
+                            items.append(fetch_doi(d))
+                        except MetadataError as e:
+                            failures.append((d, str(e)))
             except MetadataError as e:
                 print(f"error: {e}", file=sys.stderr)
                 return 1
-            if a.collection:
-                item["collection"] = a.collection
-            if a.tags:
-                item["tags"] = [t.strip() for t in a.tags.split(",") if t.strip()]
-            items = [item]
+            for ident, why in failures:
+                prefix = f"{ident}: " if len(wanted) > 1 else ""
+                print(f"error: {prefix}{why}", file=sys.stderr)
+            for item in items:
+                if a.collection:
+                    item["collection"] = a.collection
+                if a.tags:
+                    item["tags"] = [t.strip() for t in a.tags.split(",") if t.strip()]
+            if not items:
+                return 1
         if not a.apply:
             for d in items:
                 problems = lint_tags(d.get("tags", []), conventions=zot.conventions,
@@ -171,42 +191,51 @@ def main(argv=None):
                     continue
                 flag = ("  !! " + "; ".join(problems)) if problems else ""
                 print(f"  [dry] {d.get('collection')} | {d.get('title','')[:60]}{flag}")
-            print(f"{len(items)} item(s). DRY — add --apply to create.")
-            return 0
+            tail = f", {len(failures)} failed to fetch" if failures else ""
+            print(f"{len(items)} item(s){tail}. DRY — add --apply to create.")
+            return 1 if failures else 0
         created = zot.create_items(items, dedup=not a.no_dedup, strict_tags=not a.loose_tags)
         new = [c for c in created if c.get("key")]
+        dup = len(created) - len(new)
         if a.file:
             out = Path(a.file).with_suffix(".created.json")
             json.dump(new, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-            print(f"created {len(new)} (skipped {len(created)-len(new)} dup) -> {out}")
+            print(f"created {len(new)} (skipped {dup} dup) -> {out}")
             if any(c.get("file_path") for c in new):
                 print(f"attach PDFs: zotkit attach --from {out} --all")
             return 0
-        # identifier mode: one item
-        if not new:
+        # identifier mode
+        if not new and not failures:
             print("skipped: an item with this DOI/title already exists (use --no-dedup "
                   "to force)")
             return 0
-        key = new[0]["key"]
-        print(f"created {key}  {items[0].get('title', '')[:70]}")
-        if pdf_url and not a.no_pdf:
-            from .metadata import download_pdf
-            import tempfile
-            with tempfile.TemporaryDirectory() as td:
-                pdf = Path(td) / (items[0]["archiveID"].replace("arXiv:", "arXiv-")
-                                  .replace("/", "_") + ".pdf")
-                try:
-                    download_pdf(pdf_url, pdf)
-                except MetadataError as e:
-                    print(f"item created, but PDF failed: {e}\n"
-                          f"  attach manually: zotkit attach --key {key} --pdf <file>",
-                          file=sys.stderr)
-                    return 1
-                info = zot.attach(key, pdf)
-            print(f"attached {info['filename']} ({info['storage']})")
-        elif a.doi:
+        for c in new:
+            key = c["key"]
+            print(f"created {key}  {str(c.get('title', ''))[:70]}")
+            aid_pdf = pdfs.get(c.get("title"))
+            if aid_pdf and not a.no_pdf:
+                from .metadata import download_pdf
+                import tempfile
+                aid, pdf_url = aid_pdf
+                with tempfile.TemporaryDirectory() as td:
+                    pdf = Path(td) / f"arXiv-{aid.replace('/', '_')}.pdf"
+                    try:
+                        download_pdf(pdf_url, pdf)  # spaced ≥3 s apart by metadata._get
+                    except MetadataError as e:
+                        failures.append((aid, f"item {key} created, but PDF failed: {e}"))
+                        print(f"error: item {key} created, but PDF failed: {e}\n"
+                              f"  attach manually: zotkit attach --key {key} --pdf <file>",
+                              file=sys.stderr)
+                        continue
+                    info = zot.attach(key, pdf)
+                print(f"attached {info['filename']} ({info['storage']})")
+        if a.doi and new:
+            hint = new[0]["key"] if len(new) == 1 else "<key>"
             print("no PDF downloaded (publisher PDFs are usually paywalled) — "
-                  f"attach one with: zotkit attach --key {key} --pdf <file>")
+                  f"attach one with: zotkit attach --key {hint} --pdf <file>")
+        if len(wanted) > 1:
+            print(f"batch: created {len(new)}, skipped {dup} dup, failed {len(failures)}")
+        return 1 if failures else 0
 
     elif a.cmd == "attach":
         if a.key and a.pdf:

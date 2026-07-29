@@ -33,11 +33,16 @@ zotkit find --title "boson sampling"
 zotkit find --tag status:to-read
 zotkit find --collection "Algorithms"
 
-# create from an identifier (auto-fetched metadata; dry-run first, then --apply)
+# create from identifiers (auto-fetched metadata; dry-run first, then --apply)
 zotkit create --arxiv 2401.12345                        # id, id+version, or abs/pdf URL
 zotkit create --arxiv 2401.12345 --apply --tags field:ai,status:to-read --collection "ML"
 #   --apply downloads and attaches the arXiv PDF too; add --no-pdf to skip
+zotkit create --arxiv id1 id2 id3 --apply               # batch (space- or comma-separated)
+#   batching + arXiv/CrossRef rate limits are handled INTERNALLY — never add sleeps
+#   or split a batch into repeated single-id calls; a bad id fails alone with its
+#   own error and the rest proceed (exit code non-zero iff something failed)
 zotkit create --doi 10.1038/nature14539 --apply --tags field:ai
+zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same way
 #   DOI mode never downloads a PDF (paywalls) — attach one manually afterwards;
 #   unknown CrossRef types error out: fall back to --file for those
 

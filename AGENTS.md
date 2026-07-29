@@ -47,8 +47,9 @@ just read it. Quick reference:
 
 ```bash
 zotkit find --title "..." | --tag ns:value | --collection "Name"
-zotkit create --arxiv <id|url>       # fetch arXiv metadata; --apply also attaches the PDF
-zotkit create --doi <doi>            # fetch CrossRef metadata (no PDF; attach manually)
+zotkit create --arxiv <id|url> ...   # fetch arXiv metadata (several ids OK — batched +
+                                     #   rate-limited internally); --apply attaches PDFs
+zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
 zotkit attach --from x.created.json --all

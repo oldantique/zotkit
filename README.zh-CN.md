@@ -47,7 +47,10 @@ zotkit doctor
 zotkit find --title "boson sampling"     # 搜索(也可 --tag / --collection)
 zotkit create --arxiv 2401.12345         # 抓 arXiv 元信息建条目(默认演练;
                                          #   --apply 执行并自动下载附上 PDF)
-zotkit create --doi 10.1038/nature14539  # 按 DOI 从 CrossRef 抓元信息(不下 PDF)
+zotkit create --arxiv id1 id2 id3 --apply  # 批量:元信息合并一次请求,
+                                         #   PDF 下载自动按 arXiv 限速间隔
+zotkit create --doi 10.1038/nature14539  # 按 DOI 从 CrossRef 抓元信息(不下 PDF;
+                                         #   同样可一次给多个 DOI)
 zotkit create --file papers.json         # 从 JSON 批量建条目(默认演练,加 --apply 才执行)
 zotkit attach --key AB12CD34 --pdf 论文.pdf   # 上传 PDF
 zotkit fetch --key AB12CD34 --out downloads   # 下载 PDF

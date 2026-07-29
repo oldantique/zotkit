@@ -84,6 +84,8 @@ zotkit find --tag status:to-read
 
 zotkit create --arxiv 2401.12345            # fetch arXiv metadata, dry-run preview
 zotkit create --arxiv 2401.12345 --apply --tags field:ai   # create + download & attach the PDF
+zotkit create --arxiv 2401.12345 1706.03762 math/0211159 --apply   # batch: one metadata
+                                            #   request, PDFs politely spaced ≥3 s apart
 zotkit create --doi 10.1038/nature14539     # fetch CrossRef metadata by DOI (no PDF —
                                             #   usually paywalled; attach manually after)
 
@@ -102,12 +104,16 @@ zotkit backup                               # full JSON snapshot -> backups/
 zotkit lint field:physics topic:new-idea    # offline tag check
 ```
 
-`--arxiv` takes an id or an abs/pdf URL and maps the full record (all authors,
-abstract, date, DOI, `preprint` item type); `--doi` maps CrossRef records
-(journal articles, conference papers, books, chapters, …) and refuses to guess
-on CrossRef types it doesn't know. Both accept `--collection` and `--tags`, and
-`--no-pdf` skips the arXiv PDF. Fetching metadata from arbitrary web pages is
-out of scope (zotkit stays a daemon-free CLI — no translation-server).
+`--arxiv` takes ids or abs/pdf URLs (several, space- or comma-separated) and maps
+the full record (all authors, abstract, date, DOI, `preprint` item type); `--doi`
+maps CrossRef records (journal articles, conference papers, books, chapters, …)
+and refuses to guess on CrossRef types it doesn't know. Both accept `--collection`
+and `--tags`, and `--no-pdf` skips the arXiv PDFs. Rate limiting is built into the
+request layer — batches use one arXiv metadata request and space PDF downloads
+per arXiv's terms of use, so callers (humans or agents) never pace themselves. A
+bad id fails alone, not the batch; the exit code is non-zero only if something
+failed. Fetching metadata from arbitrary web pages is out of scope (zotkit stays
+a daemon-free CLI — no translation-server).
 
 Item JSON for `zotkit create --file` (a list, one object per reference):
 
