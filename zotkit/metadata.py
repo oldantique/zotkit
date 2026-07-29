@@ -158,7 +158,52 @@ def _arxiv_item(entry, aid: str) -> tuple[dict, str]:
     return item, f"https://arxiv.org/pdf/{aid}"
 
 
-_DATACITE_PREFIX = "10.48550/"  # arXiv's own DOIs; anything else is a journal DOI
+# ---------- version-of-record predicate (single source of truth) ----------
+# "Is this DOI evidence of journal publication?" is answered here and only
+# here — create --arxiv and enrich --rebuild-record both go through these two
+# layers; never re-derive the answer in a caller.
+
+# Layer 1: DOI prefixes minted by preprint repositories for their own
+# postings. Such a DOI registers the preprint itself and is never evidence
+# of journal publication.
+REPOSITORY_DOI_PREFIXES = (
+    "10.48550/",  # arXiv (DataCite)
+    "10.2139/",   # SSRN
+    "10.1101/",   # bioRxiv / medRxiv
+    "10.21203/",  # Research Square
+    "10.31219/",  # OSF Preprints
+    "10.26434/",  # ChemRxiv
+    "10.36227/",  # TechRxiv
+    "10.20944/",  # Preprints.org
+)
+
+# Layer 2: pseudo-journal container titles repositories use when they
+# register with CrossRef (SSRN files working papers as type=journal-article
+# in this fake "journal", which defeats the type check alone).
+_REPOSITORY_CONTAINERS = {"ssrn electronic journal"}
+
+
+def is_repository_doi(doi: str) -> bool:
+    """Layer 1: True if the DOI's prefix belongs to a preprint repository."""
+    doi = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", (doi or "").strip(),
+                 flags=re.IGNORECASE).lower()
+    return doi.startswith(tuple(p.lower() for p in REPOSITORY_DOI_PREFIXES))
+
+
+def repository_record_reason(item: dict) -> str | None:
+    """Layer 2: reason string if a fetched CrossRef item is a repository
+    posting in disguise (so NOT a version of record), None if genuine."""
+    if item.get("itemType") == "preprint":
+        return "CrossRef type is posted-content (a repository posting)"
+    for field in _CONTAINER_FIELD.values():
+        container = _squash(item.get(field, ""))
+        if container.casefold() in _REPOSITORY_CONTAINERS:
+            return f'container "{container}" is a repository pseudo-journal'
+    return None
+
+
+class NotVersionOfRecord(MetadataError):
+    """The DOI resolved, but to a repository record, not a journal one."""
 
 
 def _journal_record(pre: dict, aid: str) -> dict:
@@ -166,9 +211,13 @@ def _journal_record(pre: dict, aid: str) -> dict:
     build the item from CrossRef instead (venue/volume/pages/formal date),
     keeping the arXiv identity: abstract fallback when CrossRef has none,
     `arXiv: <id>` in Extra, and the open-access abs page as url (the journal
-    link is carried by the DOI field). Raises MetadataError on lookup failure —
-    the caller falls back to the preprint record."""
+    link is carried by the DOI field). Raises NotVersionOfRecord when the DOI
+    resolves to a repository record in disguise, MetadataError on lookup
+    failure — either way the caller falls back to the preprint record."""
     j = fetch_doi(pre["DOI"])
+    reason = repository_record_reason(j)
+    if reason:
+        raise NotVersionOfRecord(reason)
     if not j.get("abstractNote") and pre.get("abstractNote"):
         j["abstractNote"] = pre["abstractNote"]
         _add_extra(j, "abstract-source: arxiv")
@@ -182,9 +231,11 @@ def fetch_arxiv_batch(ids_or_urls: list[str]) -> list[dict]:
     order, each {"id", "item", "pdf_url"} or {"id", "error"}. A bad id never
     fails the batch; only transport-level trouble raises MetadataError.
 
-    Version of record: when arXiv reports a journal DOI (not its own
-    10.48550/* DataCite DOI) the item is rebuilt from CrossRef ("note" key
-    says so); if that lookup fails the preprint record stands ("warning" key).
+    Version of record: when arXiv reports a journal DOI (per the two-layer
+    predicate above — not a repository-prefix DOI, and not resolving to a
+    repository record in disguise) the item is rebuilt from CrossRef ("note"
+    key says so); a repository record keeps the preprint with an explanatory
+    "note"; a failed lookup keeps the preprint with a "warning" key.
 
     The response can't be trusted positionally: entries come back in arbitrary
     order (and with resolved version numbers), so they are mapped back to the
@@ -227,11 +278,14 @@ def fetch_arxiv_batch(ids_or_urls: list[str]) -> list[dict]:
                 continue
             c["item"], c["pdf_url"] = _arxiv_item(entry, c["id"])
             doi = c["item"]["DOI"]
-            if not doi.startswith(_DATACITE_PREFIX):
+            if not is_repository_doi(doi):
                 try:
                     c["item"] = _journal_record(c["item"], c["id"])
                     c["note"] = (f"{c['id']} → journal DOI {doi}, "
                                  "building journal record")
+                except NotVersionOfRecord as e:
+                    c["note"] = (f"{c['id']}: DOI {doi} is not a version of "
+                                 f"record ({e}) — keeping preprint record")
                 except MetadataError as e:
                     c["warning"] = (f"{c['id']}: journal DOI {doi} lookup failed "
                                     f"({e}) — keeping preprint record")

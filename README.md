@@ -122,13 +122,20 @@ to the polite pool with a contact address; that should be reachable, so if you
 distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
 
 **Version of record**: when arXiv reports a *journal* DOI (the paper was formally
-published — as opposed to arXiv's own `10.48550/*` DataCite DOI), `--arxiv`
-builds the journal record from CrossRef instead of a `preprint`: proper item
+published), `--arxiv` builds the journal record from CrossRef instead of a
+`preprint`: proper item
 type, venue, volume/pages, formal date. The arXiv identity is kept — `arXiv: <id>`
 goes in Extra, the `url` stays the open-access abs page (the journal link lives in
 the DOI field), the arXiv abstract fills in when CrossRef has none, and the PDF
 still comes from arXiv. If the CrossRef lookup fails, the item falls back to the
-preprint record with a warning rather than failing. Items whose abstract zotkit
+preprint record with a warning rather than failing. A *repository* DOI is never
+mistaken for a journal one: DOIs under the preprint servers' own prefixes
+(arXiv `10.48550`, SSRN `10.2139`, bioRxiv/medRxiv `10.1101`, Research Square,
+OSF, ChemRxiv, TechRxiv, Preprints.org) don't trigger the upgrade, and neither
+does a CrossRef record that turns out to be a repository posting in disguise
+(SSRN registers working papers as articles in a fake "SSRN Electronic
+Journal") — those stay preprints, with the reason stated. The same predicate
+gates `enrich --rebuild-record`. Items whose abstract zotkit
 wrote also carry an `abstract-source: arxiv|crossref` line in Extra, naming where
 it actually came from.
 

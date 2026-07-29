@@ -8,7 +8,9 @@ edit fails that one item with 412 instead of clobbering).
 Merge policy:
 - only empty fields are filled — existing non-empty values are never overwritten
   (exception: --rebuild-record, which deliberately adopts the published title,
-  date, and venue when upgrading a preprint to its version of record);
+  date, and venue when upgrading a preprint to its version of record — and
+  upgrades only on a genuine journal DOI per metadata's two-layer
+  version-of-record predicate: repository DOIs like SSRN's never qualify);
 - creators are extended only when the current list is a same-order prefix of the
   authoritative one (the classic truncated-author-list case); any other
   difference is reported, not touched;
@@ -83,29 +85,42 @@ def _real_creators(creators: list[dict]) -> list[dict]:
             if any(v for k, v in c.items() if k != "creatorType")]
 
 
-def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None]:
-    """→ (authoritative record, arXiv id, skip reason). Journal DOI wins
-    (version of record); arXiv otherwise. The arXiv fetch itself may upgrade
-    to a journal record per v0.4.2 rules — equally welcome here."""
+def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None, str | None]:
+    """→ (authoritative record, arXiv id, no-VoR reason, skip reason).
+    A journal DOI — per metadata's two-layer version-of-record predicate —
+    wins; arXiv otherwise (that fetch itself may upgrade to a journal record
+    per v0.4.2 rules — equally welcome here). A repository DOI (SSRN & co.)
+    still resolves in CrossRef, so its record is fetched for fill-missing,
+    but the no-VoR reason marks it as never being grounds for a rebuild."""
     doi = (d.get("DOI") or "").strip()
     aid = _find_arxiv_id(d)
-    journal_doi = doi if doi and not doi.lower().startswith("10.48550/") else None
-    if journal_doi:
-        auth = md.fetch_doi(journal_doi)
-        # CrossRef abstracts are often absent; borrow arXiv's when we can
-        if not auth.get("abstractNote") and aid and not d.get("abstractNote"):
-            r = md.fetch_arxiv_batch([aid])[0]
-            pre = r.get("item") or {}
-            if pre.get("abstractNote"):
-                auth["abstractNote"] = pre["abstractNote"]
-                md._add_extra(auth, "abstract-source: arxiv")
-        return auth, aid, None
+    if doi and not md.is_repository_doi(doi):
+        auth = md.fetch_doi(doi)
+        reason = md.repository_record_reason(auth)
+        if reason is None:
+            # CrossRef abstracts are often absent; borrow arXiv's when we can
+            if not auth.get("abstractNote") and aid and not d.get("abstractNote"):
+                r = md.fetch_arxiv_batch([aid])[0]
+                pre = r.get("item") or {}
+                if pre.get("abstractNote"):
+                    auth["abstractNote"] = pre["abstractNote"]
+                    md._add_extra(auth, "abstract-source: arxiv")
+            return auth, aid, None, None
+        if not aid:
+            return auth, aid, f"DOI {doi}: {reason}", None
+        # repository record in disguise but the item has an arXiv identity:
+        # fall through — the arXiv record is the better preprint source
     if aid:
         r = md.fetch_arxiv_batch([aid])[0]
         if r.get("error"):
             raise md.MetadataError(r["error"])
-        return r["item"], aid, None
-    return None, None, "no DOI or arXiv id on the item"
+        # the arXiv path enforces the predicate itself: r["item"] is a journal
+        # record only when the DOI arXiv reports passed both layers
+        return r["item"], aid, None, None
+    if doi:  # repository-prefix DOI, no arXiv id (the pure-SSRN case)
+        auth = md.fetch_doi(doi)
+        return auth, aid, f"DOI {doi} is a repository DOI, not a journal one", None
+    return None, None, None, "no DOI or arXiv id on the item"
 
 
 def plan_enrich(zot, key: str, *, rebuild_record: bool = False) -> dict[str, Any]:
@@ -120,12 +135,12 @@ def plan_enrich(zot, key: str, *, rebuild_record: bool = False) -> dict[str, Any
                          "fills": {}, "extra_lines": [], "creators": None,
                          "rebuild": None, "notes": [], "abstract_source": None}
 
-    auth, aid, skip = _fetch_authoritative(d)
+    auth, aid, no_vor, skip = _fetch_authoritative(d)
     if auth is None:
         p["status"] = "needs-identifier"
         p["notes"].append(f"SKIP needs-identifier: {skip}")
         return p
-    p["auth"], p["aid"] = auth, aid
+    p["auth"], p["aid"], p["no_vor"] = auth, aid, no_vor
 
     # ---- abstract (stamp rules) ----
     stamped = _STAMP.search(d.get("extra", ""))
@@ -167,9 +182,12 @@ def plan_enrich(zot, key: str, *, rebuild_record: bool = False) -> dict[str, Any
                               f"({len(cur)} vs {len(authc)}) — left untouched")
 
     # ---- version-of-record rebuild (explicit opt-in) ----
-    if (rebuild_record and d.get("itemType") == "preprint"
-            and auth.get("itemType") not in (None, "preprint")):
-        p["rebuild"] = auth["itemType"]
+    if rebuild_record and d.get("itemType") == "preprint":
+        if no_vor:
+            p["notes"].append(f"no version-of-record upgrade: {no_vor} "
+                              "— keeping preprint")
+        elif auth.get("itemType") not in (None, "preprint"):
+            p["rebuild"] = auth["itemType"]
 
     # ---- arXiv identity line ----
     if aid:

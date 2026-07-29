@@ -50,6 +50,8 @@ zotkit create --arxiv 2401.12345         # 抓 arXiv 元信息建条目(默认�
                                          # 已正式发表(带期刊 DOI)的文章会自动
                                          #   按期刊记录建(version of record),
                                          #   Extra 里保留 arXiv: <id>;PDF 仍来自 arXiv
+                                         # 预印本仓库自有 DOI(arXiv/SSRN/bioRxiv 等
+                                         #   前缀)不算期刊 DOI,不会误触发升级
 zotkit create --arxiv id1 id2 id3 --apply  # 批量:元信息合并一次请求,
                                          #   PDF 下载自动按 arXiv 限速间隔
 zotkit create --doi 10.1038/nature14539  # 按 DOI 从 CrossRef 抓元信息(不下 PDF;

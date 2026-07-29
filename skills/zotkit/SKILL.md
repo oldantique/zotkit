@@ -44,8 +44,10 @@ zotkit create --arxiv id1 id2 id3 --apply               # batch (space- or comma
 #   own error and the rest proceed (exit code non-zero iff something failed)
 #   version of record is automatic: an arXiv paper with a journal DOI becomes a
 #   journal record (CrossRef metadata), with `arXiv: <id>` kept in Extra, the abs
-#   page as url, and the PDF still fetched from arXiv; papers with only arXiv's
-#   10.48550/* DOI stay preprint items. Do not "fix" either form by hand.
+#   page as url, and the PDF still fetched from arXiv; a repository DOI (arXiv
+#   10.48550/*, SSRN 10.2139/*, bioRxiv, …) is NOT a journal DOI — those items
+#   stay preprints (SSRN's "SSRN Electronic Journal" is not a real journal),
+#   and the output states why. Do not "fix" either form by hand.
 #   Extra may also carry `abstract-source: arxiv|crossref` — leave that line alone
 zotkit create --doi 10.1038/nature14539 --apply --tags field:ai
 zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same way
