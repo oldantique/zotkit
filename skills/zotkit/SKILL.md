@@ -33,6 +33,14 @@ zotkit find --title "boson sampling"
 zotkit find --tag status:to-read
 zotkit find --collection "Algorithms"
 
+# create from an identifier (auto-fetched metadata; dry-run first, then --apply)
+zotkit create --arxiv 2401.12345                        # id, id+version, or abs/pdf URL
+zotkit create --arxiv 2401.12345 --apply --tags field:ai,status:to-read --collection "ML"
+#   --apply downloads and attaches the arXiv PDF too; add --no-pdf to skip
+zotkit create --doi 10.1038/nature14539 --apply --tags field:ai
+#   DOI mode never downloads a PDF (paywalls) — attach one manually afterwards;
+#   unknown CrossRef types error out: fall back to --file for those
+
 # create items (JSON list; dry-run first, then --apply; saves x.created.json)
 zotkit create --file x.json
 zotkit create --file x.json --apply

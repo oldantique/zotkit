@@ -82,7 +82,12 @@ Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 zotkit find --title "boson sampling"        # search by title/tag/collection
 zotkit find --tag status:to-read
 
-zotkit create --file papers.json            # dry-run: shows what would be created
+zotkit create --arxiv 2401.12345            # fetch arXiv metadata, dry-run preview
+zotkit create --arxiv 2401.12345 --apply --tags field:ai   # create + download & attach the PDF
+zotkit create --doi 10.1038/nature14539     # fetch CrossRef metadata by DOI (no PDF —
+                                            #   usually paywalled; attach manually after)
+
+zotkit create --file papers.json            # batch from JSON: dry-run preview
 zotkit create --file papers.json --apply    # create (dedups by DOI/title)
 zotkit attach --from papers.created.json --all   # upload the PDFs to WebDAV
 
@@ -97,7 +102,14 @@ zotkit backup                               # full JSON snapshot -> backups/
 zotkit lint field:physics topic:new-idea    # offline tag check
 ```
 
-Item JSON for `zotkit create` (a list, one object per reference):
+`--arxiv` takes an id or an abs/pdf URL and maps the full record (all authors,
+abstract, date, DOI, `preprint` item type); `--doi` maps CrossRef records
+(journal articles, conference papers, books, chapters, …) and refuses to guess
+on CrossRef types it doesn't know. Both accept `--collection` and `--tags`, and
+`--no-pdf` skips the arXiv PDF. Fetching metadata from arbitrary web pages is
+out of scope (zotkit stays a daemon-free CLI — no translation-server).
+
+Item JSON for `zotkit create --file` (a list, one object per reference):
 
 ```json
 [{"itemType": "journalArticle", "title": "…",
@@ -167,7 +179,9 @@ This project is not affiliated with or endorsed by Zotero.
   sluggish for many thousands. Server-side search is planned.
 - Group libraries should work for item operations (untested); WebDAV file sync is
   personal-libraries-only (a Zotero limitation).
-- Planned: an MCP server wrapper, server-side search, DOI/arXiv one-shot import.
+- `--doi`/`--arxiv` import covers arXiv + CrossRef; DataCite-only DOIs and
+  arbitrary-URL scraping (translation-server territory) are out of scope.
+- Planned: an MCP server wrapper, server-side search.
 
 ## License
 
