@@ -95,6 +95,11 @@ def _squash(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
 
+def _add_extra(item: dict, line: str) -> None:
+    """Append a line to the item's Extra field, never overwriting what's there."""
+    item["extra"] = f"{item['extra']}\n{line}" if item.get("extra") else line
+
+
 def _person(name: str) -> dict:
     """Split a display name into first/last on the final space; single-token
     names go in lastName alone (matches Zotero's single-field mode)."""
@@ -145,13 +150,38 @@ def _arxiv_item(entry, aid: str) -> tuple[dict, str]:
         "archiveID": f"arXiv:{aid}",
         "libraryCatalog": "arXiv.org",
     }
+    if item["abstractNote"]:
+        _add_extra(item, "abstract-source: arxiv")
     return item, f"https://arxiv.org/pdf/{aid}"
+
+
+_DATACITE_PREFIX = "10.48550/"  # arXiv's own DOIs; anything else is a journal DOI
+
+
+def _journal_record(pre: dict, aid: str) -> dict:
+    """Version-of-record upgrade: the arXiv record carries a journal DOI, so
+    build the item from CrossRef instead (venue/volume/pages/formal date),
+    keeping the arXiv identity: abstract fallback when CrossRef has none,
+    `arXiv: <id>` in Extra, and the open-access abs page as url (the journal
+    link is carried by the DOI field). Raises MetadataError on lookup failure —
+    the caller falls back to the preprint record."""
+    j = fetch_doi(pre["DOI"])
+    if not j.get("abstractNote") and pre.get("abstractNote"):
+        j["abstractNote"] = pre["abstractNote"]
+        _add_extra(j, "abstract-source: arxiv")
+    j["url"] = pre["url"]
+    _add_extra(j, f"arXiv: {aid}")
+    return j
 
 
 def fetch_arxiv_batch(ids_or_urls: list[str]) -> list[dict]:
     """arXiv export API, one id_list request per ≤50 ids → results in input
     order, each {"id", "item", "pdf_url"} or {"id", "error"}. A bad id never
     fails the batch; only transport-level trouble raises MetadataError.
+
+    Version of record: when arXiv reports a journal DOI (not its own
+    10.48550/* DataCite DOI) the item is rebuilt from CrossRef ("note" key
+    says so); if that lookup fails the preprint record stands ("warning" key).
 
     The response can't be trusted positionally: entries come back in arbitrary
     order (and with resolved version numbers), so they are mapped back to the
@@ -191,8 +221,17 @@ def fetch_arxiv_batch(ids_or_urls: list[str]) -> list[dict]:
             entry = emap.get(_bare(c["id"]))
             if entry is None:
                 c["error"] = f"arXiv has no record for '{c['id']}' — check the id"
-            else:
-                c["item"], c["pdf_url"] = _arxiv_item(entry, c["id"])
+                continue
+            c["item"], c["pdf_url"] = _arxiv_item(entry, c["id"])
+            doi = c["item"]["DOI"]
+            if not doi.startswith(_DATACITE_PREFIX):
+                try:
+                    c["item"] = _journal_record(c["item"], c["id"])
+                    c["note"] = (f"{c['id']} → journal DOI {doi}, "
+                                 "building journal record")
+                except MetadataError as e:
+                    c["warning"] = (f"{c['id']}: journal DOI {doi} lookup failed "
+                                    f"({e}) — keeping preprint record")
     return results
 
 
@@ -268,7 +307,7 @@ def fetch_doi(doi: str) -> dict:
         "url": msg.get("URL") or f"https://doi.org/{doi}",
         "volume": msg.get("volume", ""),
         "issue": msg.get("issue", ""),
-        "pages": msg.get("page", ""),
+        "pages": msg.get("page") or msg.get("article-number", ""),
         "publisher": _squash(msg.get("publisher", "")),
         "language": msg.get("language", ""),
         "ISSN": (msg.get("ISSN") or [""])[0],
@@ -282,4 +321,7 @@ def fetch_doi(doi: str) -> dict:
     if not item["title"]:
         raise MetadataError(f"CrossRef record for '{doi}' has no title — refusing to "
                             "create an empty item")
-    return {k: v for k, v in item.items() if v not in ("", [])}
+    item = {k: v for k, v in item.items() if v not in ("", [])}
+    if item.get("abstractNote"):
+        _add_extra(item, "abstract-source: crossref")
+    return item

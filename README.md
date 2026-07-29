@@ -105,9 +105,20 @@ zotkit lint field:physics topic:new-idea    # offline tag check
 ```
 
 `--arxiv` takes ids or abs/pdf URLs (several, space- or comma-separated) and maps
-the full record (all authors, abstract, date, DOI, `preprint` item type); `--doi`
+the full record (all authors, abstract, date, DOI); `--doi`
 maps CrossRef records (journal articles, conference papers, books, chapters, …)
-and refuses to guess on CrossRef types it doesn't know. Both accept `--collection`
+and refuses to guess on CrossRef types it doesn't know.
+
+**Version of record**: when arXiv reports a *journal* DOI (the paper was formally
+published — as opposed to arXiv's own `10.48550/*` DataCite DOI), `--arxiv`
+builds the journal record from CrossRef instead of a `preprint`: proper item
+type, venue, volume/pages, formal date. The arXiv identity is kept — `arXiv: <id>`
+goes in Extra, the `url` stays the open-access abs page (the journal link lives in
+the DOI field), the arXiv abstract fills in when CrossRef has none, and the PDF
+still comes from arXiv. If the CrossRef lookup fails, the item falls back to the
+preprint record with a warning rather than failing. Items whose abstract zotkit
+wrote also carry an `abstract-source: arxiv|crossref` line in Extra, naming where
+it actually came from. Both accept `--collection`
 and `--tags`, and `--no-pdf` skips the arXiv PDFs. Rate limiting is built into the
 request layer — batches use one arXiv metadata request and space PDF downloads
 per arXiv's terms of use, so callers (humans or agents) never pace themselves. A

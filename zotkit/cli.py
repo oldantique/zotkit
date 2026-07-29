@@ -158,9 +158,13 @@ def main(argv=None):
                     for r in fetch_arxiv_batch(wanted):
                         if r.get("error"):
                             failures.append((r["id"], r["error"]))
-                        else:
-                            items.append(r["item"])
-                            pdfs[r["item"]["title"]] = (r["id"], r["pdf_url"])
+                            continue
+                        if r.get("note"):  # version-of-record upgrade happened
+                            print(r["note"])
+                        if r.get("warning"):
+                            print(f"warning: {r['warning']}", file=sys.stderr)
+                        items.append(r["item"])
+                        pdfs[r["item"]["title"]] = (r["id"], r["pdf_url"])
                 else:
                     for d in wanted:
                         try:

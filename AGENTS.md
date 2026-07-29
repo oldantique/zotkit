@@ -48,7 +48,9 @@ just read it. Quick reference:
 ```bash
 zotkit find --title "..." | --tag ns:value | --collection "Name"
 zotkit create --arxiv <id|url> ...   # fetch arXiv metadata (several ids OK — batched +
-                                     #   rate-limited internally); --apply attaches PDFs
+                                     #   rate-limited internally); --apply attaches PDFs;
+                                     #   papers with a journal DOI auto-build the journal
+                                     #   record (version of record), arXiv id kept in Extra
 zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
