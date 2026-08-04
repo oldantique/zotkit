@@ -5,7 +5,10 @@ consumes, so the CLI runs every source through the same lint/dry-run/create path
 Scope is deliberately narrow: stable JSON/Atom APIs only — no translation-server,
 no arbitrary-URL scraping (zotkit stays a daemon-free CLI).
 
-Abstracts are stored verbatim (line breaks, LaTeX, JATS markup untouched).
+Abstracts: plain-text abstracts (arXiv summaries) are stored verbatim — line
+breaks and LaTeX untouched. CrossRef abstracts arrive as JATS XML and are
+cleaned to readable plain text by `_clean_abstract` at the point they enter an
+item record; abstracts already in a library are never touched.
 
 Rate limiting lives here, in the request layer: every request through `_get`
 waits out the per-host minimum interval (arXiv's terms: 1 request / 3 s on a
@@ -14,6 +17,7 @@ batch loops — never need to pace themselves.
 """
 from __future__ import annotations
 
+import html
 import os
 import re
 import time
@@ -98,6 +102,38 @@ def _squash(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
 
+# a real markup tag (JATS or plain HTML) — deliberately a closed list of tag
+# names, so LaTeX like "$x<y$ and $z>w$" in a plain-text abstract can never
+# be mistaken for markup and mangled
+_ABS_TAG = re.compile(
+    r"</?(?:jats:)?(?:p|sup|sub|title|sec|italic|bold|i|b|em|strong|sc|"
+    r"underline|list|list-item|label|inline-formula|disp-formula|"
+    r"tex-math|styled-content|related-article|xref|ext-link)\b[^>]*>",
+    re.IGNORECASE)
+_SUP = re.compile(r"<(?:jats:)?sup[^>]*>(.*?)</(?:jats:)?sup>", re.I | re.S)
+_SUB = re.compile(r"<(?:jats:)?sub[^>]*>(.*?)</(?:jats:)?sub>", re.I | re.S)
+_TITLE = re.compile(r"<(?:jats:)?title[^>]*>(.*?)</(?:jats:)?title>", re.I | re.S)
+
+
+def _clean_abstract(text: str) -> str:
+    """Make an incoming abstract readable plain text. CrossRef serves JATS XML
+    (`<jats:title>Abstract</jats:title><jats:p>…`, `<jats:sup>`); convert
+    sup/sub to ^x/_x, drop the boilerplate "Abstract" heading (keep real
+    section headings as "Heading: "), strip remaining tags, unescape entities,
+    collapse whitespace. Text with no recognizable markup — arXiv summaries,
+    hand-written abstracts — passes through verbatim. Cleans *incoming* text
+    only; abstracts already stored in a library are never rewritten."""
+    if not text or not _ABS_TAG.search(text):
+        return text
+    text = _SUP.sub(r"^\1", text)
+    text = _SUB.sub(r"_\1", text)
+    text = _TITLE.sub(
+        lambda m: "" if _squash(m.group(1)).casefold() == "abstract"
+        else f"{_squash(m.group(1))}: ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return _squash(html.unescape(text))
+
+
 def _add_extra(item: dict, line: str) -> None:
     """Append a line to the item's Extra field, never overwriting what's there."""
     item["extra"] = f"{item['extra']}\n{line}" if item.get("extra") else line
@@ -145,7 +181,8 @@ def _arxiv_item(entry, aid: str) -> tuple[dict, str]:
         "title": _squash(entry.findtext(f"{_ATOM}title", "")),
         "creators": [_person(n.text or "")
                      for n in entry.findall(f"{_ATOM}author/{_ATOM}name")],
-        "abstractNote": (entry.findtext(f"{_ATOM}summary", "") or "").strip("\n "),
+        "abstractNote": _clean_abstract(
+            (entry.findtext(f"{_ATOM}summary", "") or "").strip("\n ")),
         "date": (entry.findtext(f"{_ATOM}published", "") or "")[:10],
         "url": f"https://arxiv.org/abs/{aid}",
         "DOI": doi,
@@ -358,7 +395,7 @@ def fetch_doi(doi: str) -> dict:
         "itemType": itype,
         "title": title,
         "creators": creators,
-        "abstractNote": msg.get("abstract", ""),
+        "abstractNote": _clean_abstract(msg.get("abstract", "")),
         "date": _crossref_date(msg),
         "DOI": doi,
         "url": msg.get("URL") or f"https://doi.org/{doi}",
