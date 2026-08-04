@@ -57,3 +57,12 @@ after extraction.)
 - Linked-file attachments (`linkMode = "linked_file"`) store no bytes on WebDAV at
   all; only `imported_file`/`imported_url` attachments have `K.zip`/`K.prop` pairs.
 - Reference implementation: `zotkit/core.py` → `Zot.attach` / `Zot.fetch`.
+
+## Compatibility baseline
+
+This format is **undocumented and carries no stability promise from Zotero** — it is
+whatever the desktop client implements. Interop last validated 2026-07 against
+then-current **Zotero 7.x** desktop clients (macOS; upload via zotkit → desktop sync,
+open, and re-sync all normal). After a major desktop release, re-verify with one
+round-trip (`attach` → desktop sync → open) before trusting bulk writes; if the
+client changes the layout, this doc and `Zot.attach`/`Zot.fetch` must move together.
