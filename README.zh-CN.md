@@ -97,7 +97,7 @@ AI 并行分析 + 分批执行):[docs/organizing-with-agents.md](docs/organizing
 
 ## 安全设计
 
-写操作默认演练(`--apply` 才动真格)、每批 ≤50 条且带版本校验、`zotkit backup`
+批量写操作(create/enrich)默认演练(`--apply` 才动真格)、每批 ≤50 条且带版本校验、`zotkit backup`
 一条命令全库快照。注意:所有写入都会同步到 zotero.org 和你的全部设备,
 大改之后记得在桌面端抽查一眼。
 

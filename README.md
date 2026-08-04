@@ -17,7 +17,7 @@ server**, zotkit can **upload and download the files themselves** by speaking
 Zotero's WebDAV storage format directly — a capability the Web API itself does not
 provide. The format is documented in [docs/webdav-format.md](docs/webdav-format.md).
 
-Built for servers, scripts, and **LLM agents**: every write is dry-run by default,
+Built for servers, scripts, and **LLM agents**: bulk writes are dry-run by default,
 batched, and version-checked, and you can define a tag taxonomy that is *enforced in
 code* so an agent (or a tired human) can't pollute your library with inconsistent tags.
 

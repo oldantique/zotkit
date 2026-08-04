@@ -1,6 +1,7 @@
 """zotkit — CLI over zotkit.core.Zot.
 
-Subcommands: doctor, find, create, enrich, attach, fetch, tag, status, move, backup, lint.
+Subcommands: doctor, find, create, enrich, abstract, audit, attach, fetch, tag,
+status, move, backup, lint.
 Write commands print what they did; `create` is dry-run unless --apply.
 """
 from __future__ import annotations
