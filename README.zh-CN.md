@@ -61,6 +61,13 @@ zotkit enrich --key AB12CD34             # 就地补全已有条目的缺失字�
                                          #   被截断的作者表;--rebuild-record 可把
                                          #   已见刊的 preprint 就地升级为期刊记录)
                                          #   item key 永不改变——下游引用不受影响
+zotkit enrich --missing abstract --apply # 批量:只跑缺摘要的条目(还有 --missing doi
+                                         #   / --all;限速在内部,调用方无需分批睡眠)
+zotkit audit                             # 只读体检报告:缺摘要/缺 DOI/缺 PDF/
+                                         #   abstract-source 戳的健康度(--json 给 agent)
+zotkit abstract --key AB12CD34 --source cnki --file abs.txt
+                                         # 粘贴摘要并记录出处(owner 工具;文本自动
+                                         #   清洗;已有摘要需 --force 才会替换)
 zotkit attach --key AB12CD34 --pdf 论文.pdf   # 上传 PDF
 zotkit fetch --key AB12CD34 --out downloads   # 下载 PDF
 zotkit tag AB12CD34 topic:qaoa           # 打标签

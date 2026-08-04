@@ -53,6 +53,10 @@ zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
 zotkit enrich --key K [K...]         # complete EXISTING items in place — never
                                      #   delete+recreate (item keys must stay stable)
+zotkit enrich --missing abstract|doi | --all   # batch enrich (rate limiting internal)
+zotkit audit [--json]                # read-only library health report
+zotkit abstract --key K --source SLUG   # store an OWNER-PROVIDED abstract with
+                                     #   provenance; --force only on owner's say-so
 zotkit attach --from x.created.json --all
 zotkit fetch --key KEY --out downloads
 zotkit tag KEY topic:foo | zotkit status KEY read | zotkit move KEY "Collection"

@@ -100,11 +100,35 @@ def main(argv=None):
     p = sub.add_parser("enrich", help="fill missing fields on existing items from "
                                       "arXiv/CrossRef, in place — the item key never "
                                       "changes (dry unless --apply)")
-    p.add_argument("--key", nargs="+", required=True, metavar="KEY")
+    which = p.add_mutually_exclusive_group(required=True)
+    which.add_argument("--key", nargs="+", metavar="KEY")
+    which.add_argument("--all", action="store_true",
+                       help="every top-level scholarly item")
+    which.add_argument("--missing", action="append", choices=["abstract", "doi"],
+                       metavar="{abstract,doi}",
+                       help="items missing this (repeatable; union)")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--rebuild-record", action="store_true",
                    help="also upgrade preprint items with a journal DOI to the "
                         "journal record, in place (version of record)")
+
+    p = sub.add_parser("abstract", help="set/replace one item's abstract with "
+                                        "provenance (owner's tool — may replace "
+                                        "with --force)")
+    p.add_argument("--key", required=True)
+    p.add_argument("--source", required=True, metavar="SLUG",
+                   help="where the text came from: cnki, ssrn, publisher, "
+                        "manual (= user-written), … — any lowercase slug")
+    p.add_argument("--file", help="read the abstract from this file "
+                                  "(default: stdin)")
+    p.add_argument("--force", action="store_true",
+                   help="replace an existing abstract and its "
+                        "abstract-source stamp")
+
+    p = sub.add_parser("audit", help="read-only health report: missing "
+                                     "abstracts/identifiers/PDFs, "
+                                     "abstract-source stamp hygiene")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
 
     p = sub.add_parser("attach", help="attach a local file to an item (WebDAV or Zotero Storage)")
     p.add_argument("--key"); p.add_argument("--pdf")
@@ -252,9 +276,23 @@ def main(argv=None):
 
     elif a.cmd == "enrich":
         from .enrich import apply_plan, plan_enrich
+        if a.key:
+            keys = a.key
+        else:  # --all / --missing: pick the work set from a read-only audit
+            from .audit import audit
+            rep = audit(zot)
+            if a.all:
+                keys = rep["keys"]
+            else:
+                bucket = {"abstract": "missing-abstract", "doi": "missing-identifier"}
+                want = {k for m in a.missing for k in rep["buckets"][bucket[m]]}
+                keys = [k for k in rep["keys"] if k in want]  # library order
+            print(f"selected {len(keys)} item(s) "
+                  f"({'all' if a.all else 'missing ' + '/'.join(a.missing)}) — "
+                  "rate limiting is internal, no pacing needed")
         counts = {"enriched": 0, "needs-identifier": 0, "stale-stamp": 0,
                   "up-to-date": 0, "failed": 0}
-        for key in a.key:
+        for key in keys:
             try:
                 p_ = plan_enrich(zot, key, rebuild_record=a.rebuild_record)
             except Exception as e:  # bad key, metadata lookup failure, …
@@ -297,6 +335,40 @@ def main(argv=None):
               f"stale-stamp {counts['stale-stamp']}, "
               f"up-to-date {counts['up-to-date']}) / failed {counts['failed']}")
         return 1 if counts["failed"] else 0
+
+    elif a.cmd == "abstract":
+        from .enrich import set_abstract
+        from .metadata import MetadataError
+        if a.file:
+            text = open(a.file, encoding="utf-8").read()
+        else:
+            if sys.stdin.isatty():
+                print("paste the abstract, then Ctrl-D:", file=sys.stderr)
+            text = sys.stdin.read()
+        try:
+            r = set_abstract(zot, a.key, text, a.source, force=a.force)
+        except MetadataError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        verb = "replaced" if r["replaced"] else "set"
+        print(f"{r['key']}  abstract {verb} ({r['chars']} chars, "
+              f"source: {a.source})  {r['title'][:55]}")
+
+    elif a.cmd == "audit":
+        from .audit import BUCKETS, audit
+        rep = audit(zot)
+        if a.json:
+            print(json.dumps(rep, ensure_ascii=False, indent=2))
+        else:
+            print(f"audited {rep['total']} top-level scholarly item(s)")
+            for b, label in BUCKETS.items():
+                ks = rep["buckets"][b]
+                print(f"\n{label}: {len(ks)}")
+                for i in range(0, len(ks), 8):
+                    print("    " + " ".join(ks[i:i + 8]))
+            print("\nnext steps: zotkit enrich --missing abstract|doi; "
+                  "zotkit abstract --key K --source <slug> for text "
+                  "enrich can't fetch")
 
     elif a.cmd == "attach":
         if a.key and a.pdf:

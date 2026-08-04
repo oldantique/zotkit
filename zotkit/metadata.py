@@ -115,23 +115,34 @@ _SUB = re.compile(r"<(?:jats:)?sub[^>]*>(.*?)</(?:jats:)?sub>", re.I | re.S)
 _TITLE = re.compile(r"<(?:jats:)?title[^>]*>(.*?)</(?:jats:)?title>", re.I | re.S)
 
 
-def _clean_abstract(text: str) -> str:
-    """Make an incoming abstract readable plain text. CrossRef serves JATS XML
+def _clean_abstract(text: str, *, unwrap: bool = False) -> str:
+    """Make an incoming abstract readable plain text — the one cleaner every
+    path an abstract enters must pass. CrossRef serves JATS XML
     (`<jats:title>Abstract</jats:title><jats:p>…`, `<jats:sup>`); convert
     sup/sub to ^x/_x, drop the boilerplate "Abstract" heading (keep real
     section headings as "Heading: "), strip remaining tags, unescape entities,
-    collapse whitespace. Text with no recognizable markup — arXiv summaries,
-    hand-written abstracts — passes through verbatim. Cleans *incoming* text
-    only; abstracts already stored in a library are never rewritten."""
-    if not text or not _ABS_TAG.search(text):
+    collapse whitespace. Soft hyphens and no-break spaces (copy-paste
+    artifacts) are normalized on every path. With `unwrap` (for text pasted
+    from web pages/PDFs) hard-wrapped lines are unwrapped — single newlines
+    become spaces, blank-line paragraph breaks are kept. Markup-free API text
+    (arXiv summaries) otherwise passes through verbatim. Cleans *incoming*
+    text only; abstracts already stored in a library are never rewritten."""
+    if not text:
         return text
-    text = _SUP.sub(r"^\1", text)
-    text = _SUB.sub(r"_\1", text)
-    text = _TITLE.sub(
-        lambda m: "" if _squash(m.group(1)).casefold() == "abstract"
-        else f"{_squash(m.group(1))}: ", text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return _squash(html.unescape(text))
+    text = text.replace("\u00ad", "")  # soft hyphen: a line-break artifact
+    if _ABS_TAG.search(text):
+        text = _SUP.sub(r"^\1", text)
+        text = _SUB.sub(r"_\1", text)
+        text = _TITLE.sub(
+            lambda m: "" if _squash(m.group(1)).casefold() == "abstract"
+            else f"{_squash(m.group(1))}: ", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+        return _squash(html.unescape(text))
+    text = text.replace("\u00a0", " ")  # no-break space -> plain space
+    if unwrap:
+        paras = [_squash(p) for p in re.split(r"\n\s*\n", text)]
+        text = "\n\n".join(p for p in paras if p)
+    return text
 
 
 def _add_extra(item: dict, line: str) -> None:

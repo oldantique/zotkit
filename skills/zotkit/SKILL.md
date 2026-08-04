@@ -68,6 +68,21 @@ zotkit enrich --key AB12CD34 --rebuild-record --apply   # preprint→journal rec
 #   never touches tags/collections/attachments. "NEEDS OWNER" lines in its output
 #   are decisions for the user — surface them, don't work around them.
 
+# batch enrich + library health
+zotkit audit                                   # read-only report: missing abstracts /
+zotkit audit --json                            #   DOIs / PDFs, abstract-source hygiene
+zotkit enrich --missing abstract --apply       # enrich only the gaps (also --missing doi,
+zotkit enrich --all                            #   repeatable; --all for everything)
+#   batching + rate limits stay INTERNAL — never split the set or add sleeps
+
+# store an abstract the user provides (CNKI, publisher page, their own words)
+zotkit abstract --key <itemKey> --source cnki --file abs.txt   # or pipe via stdin
+#   `abstract` is for relaying OWNER-PROVIDED text — you paste what the user gives
+#   you, with --source naming where THEIR text came from (cnki, ssrn, publisher,
+#   manual = user-written; any lowercase slug). It cleans web-copy artifacts
+#   automatically. It refuses to overwrite an existing abstract or stamp:
+#   --force may ONLY be used when the user explicitly says to replace.
+
 # upload / attach PDFs (WebDAV or Zotero Storage — auto-detected from .env)
 zotkit attach --key <itemKey> --pdf /abs/paper.pdf
 zotkit attach --from x.created.json --all      # batch; skips already-attached

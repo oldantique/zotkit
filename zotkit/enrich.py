@@ -20,6 +20,10 @@ Merge policy:
   existing lines are never rewritten;
 - tags, collections, relations, and child items are never touched.
 
+`set_abstract` (the `zotkit abstract` command) is the owner's deliberate
+exception: it may replace an existing abstract and rewrite the stamp line —
+but only behind `force`; all other Extra lines keep the append-only rule.
+
 Network requests reuse zotkit.metadata's fetchers and its per-host rate limit.
 """
 from __future__ import annotations
@@ -121,6 +125,53 @@ def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None, 
         auth = md.fetch_doi(doi)
         return auth, aid, f"DOI {doi} is a repository DOI, not a journal one", None
     return None, None, None, "no DOI or arXiv id on the item"
+
+
+_STAMP_LINE = re.compile(r"^abstract-source:[^\n]*", re.IGNORECASE | re.MULTILINE)
+_SLUG = re.compile(r"[a-z][a-z0-9-]*")
+
+
+def set_abstract(zot, key: str, text: str, source: str, *,
+                 force: bool = False) -> dict[str, Any]:
+    """Owner's tool: set an item's abstract with provenance, in place (the
+    item key never changes). `source` is an open vocabulary of lowercase
+    slugs naming where the TEXT came from (cnki, ssrn, publisher, manual, …).
+
+    Unlike enrich this may *replace* — but only with `force`: an existing
+    abstract or `abstract-source:` stamp otherwise refuses. With force, the
+    abstract and the stamp line are replaced (the stamp is rewritten, not
+    appended); every other Extra line is untouched. Returns
+    {"key", "title", "chars", "replaced"}."""
+    if not _SLUG.fullmatch(source):
+        raise md.MetadataError(
+            f"--source '{source}' is not a lowercase slug (want e.g. cnki, "
+            "ssrn, publisher, manual)")
+    text = md._clean_abstract(text or "", unwrap=True)
+    if not text:
+        raise md.MetadataError("abstract is empty after cleaning — nothing written")
+    item = zot.z.item(key)
+    d = item["data"]
+    if "abstractNote" not in d:
+        raise md.MetadataError(
+            f"{key} is a {d.get('itemType')} — it has no abstract field")
+    old_stamp = _STAMP.search(d.get("extra", ""))
+    replacing = bool(d.get("abstractNote") or old_stamp)
+    if replacing and not force:
+        have = (f"an abstract ({len(d['abstractNote'])} chars)"
+                if d.get("abstractNote") else "no abstract")
+        stamp = (f"abstract-source: {old_stamp.group(1)}" if old_stamp
+                 else "no abstract-source stamp")
+        raise md.MetadataError(
+            f"{key} already has {have} and {stamp} — pass --force to replace")
+    d["abstractNote"] = text
+    line = f"abstract-source: {source}"
+    if old_stamp:
+        d["extra"] = _STAMP_LINE.sub(line, d.get("extra", ""), count=1)
+    else:
+        md._add_extra(d, line)
+    zot.z.update_item(item)
+    return {"key": key, "title": d.get("title", ""), "chars": len(text),
+            "replaced": replacing}
 
 
 def plan_enrich(zot, key: str, *, rebuild_record: bool = False) -> dict[str, Any]:

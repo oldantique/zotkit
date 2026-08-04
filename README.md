@@ -96,6 +96,12 @@ zotkit attach --from papers.created.json --all   # upload the PDFs (WebDAV or Zo
 
 zotkit enrich --key AB12CD34 EF56GH78       # fill missing fields on existing items
                                             #   in place (dry-run; --apply to write)
+zotkit enrich --missing abstract --apply    # …or batch: every item missing an
+                                            #   abstract (also --missing doi, --all)
+zotkit audit                                # read-only health report: what's missing
+                                            #   where, stamp hygiene (--json for agents)
+zotkit abstract --key AB12CD34 --source cnki --file abs.txt   # paste an abstract
+                                            #   with provenance (owner's tool)
 
 zotkit attach --key AB12CD34 --pdf paper.pdf     # single attach
 zotkit fetch --key AB12CD34 --out downloads      # download attachments (same auto-detection)
@@ -160,6 +166,23 @@ OWNER). Items with no DOI or arXiv id are reported as needs-identifier.
 published (journal DOI present) to the journal record **in the same item**:
 itemType, published title/date/venue/volume/pages — with `arXiv: <id>` appended
 to Extra and attachments untouched.
+
+Instead of `--key`, `--all` runs over every top-level scholarly item and
+`--missing abstract` / `--missing doi` (repeatable) over just the gaps —
+batching and arXiv/CrossRef rate limiting stay internal, so no pacing or
+batch-splitting on the caller's side. **`zotkit audit`** is the read-only
+companion: counts and key lists for missing abstracts, missing DOI/arXiv id,
+missing PDF attachments, and `abstract-source` stamp hygiene (`--json` for
+agents).
+
+For text enrich *can't* fetch — CNKI, publisher pages, your own summary —
+**`zotkit abstract --key K --source <slug>`** stores a pasted abstract
+(stdin or `--file`) with provenance: the text is cleaned (hidden tags,
+`&nbsp;`, soft hyphens, hard-wrapped lines) and an `abstract-source: <slug>`
+line records where it came from (`cnki`, `ssrn`, `publisher`, `manual` = your
+own words — any lowercase slug). It is the owner's tool, so unlike enrich it
+may *replace* an existing abstract — but only with `--force`, which also
+rewrites the stamp line in place; all other Extra lines stay untouched.
 
 Item JSON for `zotkit create --file` (a list, one object per reference):
 
