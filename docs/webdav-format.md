@@ -61,8 +61,9 @@ after extraction.)
 ## Compatibility baseline
 
 This format is **undocumented and carries no stability promise from Zotero** — it is
-whatever the desktop client implements. Interop last validated 2026-07 against
-then-current **Zotero 7.x** desktop clients (macOS; upload via zotkit → desktop sync,
-open, and re-sync all normal). After a major desktop release, re-verify with one
-round-trip (`attach` → desktop sync → open) before trusting bulk writes; if the
-client changes the layout, this doc and `Zot.attach`/`Zot.fetch` must move together.
+whatever the desktop client implements. Interop was validated by round-trip against the
+maintainer's macOS desktop client (upload via zotkit → desktop sync → open → re-sync,
+all normal); that client is **Zotero 9.0.6** as of 2026-08-05. After a major desktop
+release, re-verify with one round-trip (`attach` → desktop sync → open) before trusting
+bulk writes; if the client changes the layout, this doc and `Zot.attach`/`Zot.fetch`
+must move together.
