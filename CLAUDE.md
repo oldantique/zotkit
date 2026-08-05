@@ -24,6 +24,26 @@ README — keep docs and code consistent with it.
    **Trusted Publishing** (no tokens anywhere). Tags are plain `vX.Y.Z`.
 6. Verify: `pipx run --spec zotkit==X.Y.Z zotkit --version` once PyPI updates.
 
+## Tests
+
+- `tests/` is the offline pytest suite: `test_metadata.py` (abstract cleaner +
+  two-layer version-of-record predicate + `fetch_arxiv_batch` against a canned
+  feed), `test_enrich.py` (`plan_enrich` VoR gate, `set_abstract`
+  guard/force/stamp matrix), `test_audit.py` (bucketing). Run with
+  `pip install -e ".[dev]" && pytest`. pytest is a dev extra only — runtime
+  deps stay exactly pyzotero + httpx.
+- **Tests stay offline**: no network, no `.env`, no credentials, no live
+  library. Anything that needs those is a manual smoke step: read-only
+  `zotkit audit` against the real library, plus a create/`abstract` round-trip
+  on a temp item that is deleted (and confirmed 404) afterwards.
+- CI (`.github/workflows/ci.yml`) runs the suite on every push/PR across
+  ubuntu + windows × Python 3.11/3.13 — Windows is not optional (the v0.1.x
+  release-breaker was a Windows UTF-8 bug). `publish.yml` runs the same test
+  job before build, so release step 3 (push) now implies CI must be green;
+  a failing suite blocks the PyPI publish.
+- Still-open debt: the Zotero Storage attachment branch has no automated or
+  live test — manual verification only (see Hard constraints).
+
 ## Hard constraints
 
 - **Windows text IO**: every `open()` for text must pass `encoding="utf-8"`.

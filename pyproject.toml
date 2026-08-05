@@ -20,6 +20,9 @@ classifiers = [
 ]
 dependencies = ["pyzotero", "httpx"]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.urls]
 Repository = "https://github.com/oldantique/zotkit"
 Issues = "https://github.com/oldantique/zotkit/issues"
