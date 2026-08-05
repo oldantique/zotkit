@@ -1,6 +1,11 @@
 # Reader plugin write layer: deterministic code, not model tool calls
 
-Status: accepted (2026-07-25)
+Status: accepted (2026-07-25); **scope moved out by
+[ADR-0003](0003-split-reader-plugin-into-its-own-repo.md)** (2026-07-27) — the write
+layer it governs ships in
+[oldantique/zotkit-reader](https://github.com/oldantique/zotkit-reader), not here.
+(It cites `CONTEXT.md`, a file dissolved in 2026-08; as a point-in-time record that
+reference is left as written.)
 
 The Reader plugin's original promise was "read-only": the model held no Zotero
 mutation tool at all, full stop (ADR-0001, CONTEXT.md `read-only guarantee`). Two

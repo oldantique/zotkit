@@ -1,6 +1,9 @@
 # zotkit is a product family in one repo
 
-Status: accepted (2026-07-22)
+Status: **superseded by [ADR-0003](0003-split-reader-plugin-into-its-own-repo.md)**
+(2026-07-27) — accepted 2026-07-22, and correct for what the contribution was then.
+The Reader plugin now lives in its own repository; what follows is the record of why
+the monorepo was chosen, not current architecture.
 
 zotkit began as a headless Python CLI/library. PR #1 contributed a full Zotero 9
 Reader add-on (TypeScript + a macOS native helper) that shares the zotkit name and
