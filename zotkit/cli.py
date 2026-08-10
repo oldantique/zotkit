@@ -1,7 +1,7 @@
 """zotkit — CLI over zotkit.core.Zot.
 
-Subcommands: doctor, find, show, create, enrich, abstract, audit, attach, fetch,
-tag, status, move, backup, lint.
+Subcommands: doctor, find, show, create, enrich, abstract, audit, export,
+attach, fetch, tag, status, move, backup, lint.
 Write commands print what they did; `create` is dry-run unless --apply.
 """
 from __future__ import annotations
@@ -229,6 +229,13 @@ def main(argv=None):
                                      "abstracts/identifiers/PDFs, "
                                      "abstract-source stamp hygiene")
     p.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p = sub.add_parser("export", help="emit BibTeX for items, with each cite key "
+                                      "rewritten to the Zotero item key")
+    p.add_argument("--key", nargs="+", metavar="KEY",
+                   help="item keys (default: read them from stdin, one per line)")
+    p.add_argument("-o", "--output", metavar="FILE",
+                   help="write the BibTeX here instead of stdout")
 
     p = sub.add_parser("attach", help="attach a local file to an item (WebDAV or Zotero Storage)")
     p.add_argument("--key"); p.add_argument("--pdf")
@@ -497,6 +504,27 @@ def main(argv=None):
             print("\nnext steps: zotkit enrich --missing abstract|doi; "
                   "zotkit abstract --key K --source <slug> for text "
                   "enrich can't fetch")
+
+    elif a.cmd == "export":
+        from .export import export_bibtex
+        if a.key:
+            keys = a.key
+        else:
+            if sys.stdin.isatty():
+                print("paste one item key per line, then Ctrl-D:", file=sys.stderr)
+            keys = [ln.strip() for ln in sys.stdin.read().splitlines() if ln.strip()]
+        if not keys:
+            print("error: no item keys given (use --key K1 K2 … or pipe them on "
+                  "stdin, one per line)", file=sys.stderr)
+            return 1
+        text, failed = export_bibtex(zot, keys)
+        if a.output:
+            Path(a.output).write_text(text, encoding="utf-8")
+            print(f"wrote {len(keys) - len(failed)} entr(ies) -> {a.output}",
+                  file=sys.stderr)
+        else:
+            sys.stdout.write(text)
+        return 1 if failed else 0
 
     elif a.cmd == "attach":
         if a.key and a.pdf:
