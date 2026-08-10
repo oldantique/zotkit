@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -90,7 +91,22 @@ def _identifier(d: dict) -> str:
     return f"arXiv:{aid}" if aid else "—"
 
 
-def _show(zot, keys, as_json: bool) -> int:
+_API_CODE_RE = re.compile(r"\bCode:\s*(\d{3})\b")
+
+
+def _short_api_error(e: Exception) -> str:
+    """One safe stderr line for a failed API call. pyzotero's message embeds
+    the full request URL — numeric library ID included — and `show` exists to
+    run in manifest-checking loops whose stderr lands in CI logs, so the
+    default output must not carry it."""
+    m = _API_CODE_RE.search(str(e))
+    if not m:
+        return type(e).__name__
+    code = int(m.group(1))
+    return f"not found ({code})" if code == 404 else f"API error ({code})"
+
+
+def _show(zot, keys, as_json: bool, verbose: bool = False) -> int:
     """One line per key (or --json dumps of the full item data). Bad keys are
     reported to stderr and don't stop the rest; exit 1 if any key failed."""
     failed = 0
@@ -101,7 +117,9 @@ def _show(zot, keys, as_json: bool) -> int:
             d = item["data"]
         except Exception as e:
             failed += 1
-            print(f"error: {key}: {e}", file=sys.stderr)
+            print(f"error: {key}: {_short_api_error(e)}", file=sys.stderr)
+            if verbose:
+                print(str(e).strip(), file=sys.stderr)
             continue
         if as_json:
             datas.append(d)
@@ -176,6 +194,9 @@ def main(argv=None):
     p.add_argument("keys", nargs="+", metavar="KEY")
     p.add_argument("--json", action="store_true",
                    help="dump the full item data instead of one-liners")
+    p.add_argument("--verbose", action="store_true",
+                   help="on errors, also print the full API exception "
+                        "(includes the request URL with your library ID)")
 
     p = sub.add_parser("create", help="create items from a JSON file, an arXiv id, "
                                       "or a DOI (dry unless --apply)")
@@ -286,7 +307,7 @@ def main(argv=None):
         _print_items(zot.find(a.title, a.tag, a.collection))
 
     elif a.cmd == "show":
-        return _show(zot, a.keys, a.json)
+        return _show(zot, a.keys, a.json, a.verbose)
 
     elif a.cmd == "create":
         pdfs: dict[str, tuple[str, str]] = {}  # title -> (arXiv id, pdf url)

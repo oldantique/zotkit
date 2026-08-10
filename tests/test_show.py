@@ -16,10 +16,21 @@ BARE = {"itemType": "book", "title": "Untitled Thing", "date": "",
         "creators": [{"creatorType": "author", "name": "The Committee"}]}
 
 
+# What pyzotero's error_handler actually raises: a multi-line message with
+# the full request URL, numeric library ID included.
+USER_ID = "4242424"
+
+
+def _pyzotero_404(key):
+    return Exception(f"\nCode: 404\n"
+                     f"URL: https://api.zotero.org/users/{USER_ID}/items/{key}"
+                     f"?format=json\nMethod: GET\nResponse: Not found")
+
+
 def fake_zot(items):
     def item(key):
         if key not in items:
-            raise ValueError(f"HTTP 404: item {key} not found")
+            raise _pyzotero_404(key)
         return {"key": key, "version": 1, "data": dict(items[key])}
     return types.SimpleNamespace(z=types.SimpleNamespace(item=item))
 
@@ -64,13 +75,43 @@ def test_json_dumps_full_item_data(capsys):
     assert payload[0]["creators"][0]["lastName"] == "Vaswani"
 
 
-def test_bad_key_reports_and_continues(capsys):
+def test_bad_key_reports_one_sanitized_line_and_continues(capsys):
     rc = cli._show(fake_zot({"GOOD1": PAPER}), ["BAD1", "GOOD1"], False)
     cap = capsys.readouterr()
     assert rc == 1
-    assert "BAD1" in cap.err and "error" in cap.err
+    assert cap.err.strip() == "error: BAD1: not found (404)"
+    assert USER_ID not in cap.err       # no library ID / URL in default output
     assert "GOOD1" in cap.out           # good key still printed
     assert "BAD1" not in cap.out
+
+
+def test_verbose_adds_the_full_exception_after_the_one_liner(capsys):
+    rc = cli._show(fake_zot({}), ["BAD1"], False, verbose=True)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert err.splitlines()[0] == "error: BAD1: not found (404)"
+    assert f"users/{USER_ID}/items/BAD1" in err   # full detail only here
+
+
+def test_non_404_status_is_reported_as_api_error(capsys):
+    def item(key):
+        raise Exception("\nCode: 403\nURL: https://api.zotero.org/users/"
+                        f"{USER_ID}/items/{key}\nMethod: GET\nResponse: Forbidden")
+    zot = types.SimpleNamespace(z=types.SimpleNamespace(item=item))
+    rc = cli._show(zot, ["K1"], False)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert err.strip() == "error: K1: API error (403)"
+    assert USER_ID not in err
+
+
+def test_exception_without_a_status_code_falls_back_to_the_class_name(capsys):
+    def item(key):
+        raise ConnectionError("network is down somewhere")
+    zot = types.SimpleNamespace(z=types.SimpleNamespace(item=item))
+    rc = cli._show(zot, ["K1"], False)
+    assert rc == 1
+    assert capsys.readouterr().err.strip() == "error: K1: ConnectionError"
 
 
 def test_bad_key_in_json_mode_still_exits_1(capsys):

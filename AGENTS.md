@@ -48,7 +48,8 @@ just read it. Quick reference:
 ```bash
 zotkit find --title "..." | --tag ns:value | --collection "Name"
 zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
-                                     #   unknown key -> stderr + exit 1
+                                     #   unknown key -> one stderr line + exit 1
+                                     #   (--verbose for the full API exception)
 zotkit create --arxiv <id|url> ...   # fetch arXiv metadata; --apply attaches PDFs too
 zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
