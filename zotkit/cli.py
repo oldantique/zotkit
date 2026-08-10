@@ -1,7 +1,7 @@
 """zotkit — CLI over zotkit.core.Zot.
 
-Subcommands: doctor, find, create, enrich, abstract, audit, attach, fetch, tag,
-status, move, backup, lint.
+Subcommands: doctor, find, show, create, enrich, abstract, audit, attach, fetch,
+tag, status, move, backup, lint.
 Write commands print what they did; `create` is dry-run unless --apply.
 """
 from __future__ import annotations
@@ -21,6 +21,91 @@ def _print_items(rows):
         print(f"    collections: {r['collections']}")
         print(f"    tags: {r['tags']}")
     print(f"\n{len(rows)} match(es)")
+
+
+def _inside_git_worktree(start: Path) -> bool:
+    """True if `start` or any ancestor holds a `.git` entry.
+
+    `.git` may be a directory (normal clone) or a file (linked worktree or
+    submodule) — both count. Pure filesystem walk, no subprocess, so it stays
+    trivially testable offline.
+    """
+    try:
+        here = Path(start).resolve()
+    except OSError:
+        return False
+    for d in (here, *here.parents):
+        if (d / ".git").exists():
+            return True
+    return False
+
+
+_FETCH_REPO_WARNING = (
+    "warning: --out not given, so files go to ./downloads — and the current "
+    "directory is inside a git repository.\n"
+    "  Loose PDF copies committed into a repo break a library-of-record setup "
+    "(the library is the one place a file lives).\n"
+    "  Pass an explicit destination outside the repo, e.g. "
+    "--out \"$(mktemp -d)\"."
+)
+
+
+def _fetch_out_dir(out, cwd: Path) -> str:
+    """Resolve `fetch --out`, warning when the implicit default lands in a repo."""
+    if out is not None:
+        return out
+    if _inside_git_worktree(cwd):
+        print(_FETCH_REPO_WARNING, file=sys.stderr)
+    return "downloads"
+
+
+def _first_author(d: dict) -> str:
+    for c in d.get("creators") or []:
+        name = (c.get("lastName") or c.get("name") or "").strip()
+        if name:
+            return name
+    return ""
+
+
+def _year(d: dict) -> str:
+    date = str(d.get("date") or "").strip()
+    return date[:4] if date[:4].isdigit() else ""
+
+
+def _identifier(d: dict) -> str:
+    doi = (d.get("DOI") or "").strip()
+    if doi:
+        return doi
+    from .enrich import _find_arxiv_id
+    aid = _find_arxiv_id(d)
+    return f"arXiv:{aid}" if aid else "—"
+
+
+def _show(zot, keys, as_json: bool) -> int:
+    """One line per key (or --json dumps of the full item data). Bad keys are
+    reported to stderr and don't stop the rest; exit 1 if any key failed."""
+    failed = 0
+    datas = []
+    for key in keys:
+        try:
+            item = zot.z.item(key)
+            d = item["data"]
+        except Exception as e:
+            failed += 1
+            print(f"error: {key}: {e}", file=sys.stderr)
+            continue
+        if as_json:
+            datas.append(d)
+            continue
+        who = " ".join(x for x in (_first_author(d), _year(d)) if x)
+        title = str(d.get("title") or "")
+        if len(title) > 60:
+            title = title[:59] + "…"
+        print(f"{key} · {d.get('itemType', '')} · {who} · {title} · "
+              f"{_identifier(d)}")
+    if as_json:
+        print(json.dumps(datas, ensure_ascii=False, indent=2))
+    return 1 if failed else 0
 
 
 def _doctor() -> int:
@@ -77,6 +162,11 @@ def main(argv=None):
 
     p = sub.add_parser("find", help="search items by title/tag/collection")
     p.add_argument("--title"); p.add_argument("--tag"); p.add_argument("--collection")
+
+    p = sub.add_parser("show", help="one-line summary per item key (read-only)")
+    p.add_argument("keys", nargs="+", metavar="KEY")
+    p.add_argument("--json", action="store_true",
+                   help="dump the full item data instead of one-liners")
 
     p = sub.add_parser("create", help="create items from a JSON file, an arXiv id, "
                                       "or a DOI (dry unless --apply)")
@@ -138,7 +228,10 @@ def main(argv=None):
 
     p = sub.add_parser("fetch", help="download attachment files (WebDAV or Zotero Storage)")
     p.add_argument("--key"); p.add_argument("--title"); p.add_argument("--collection")
-    p.add_argument("--out", default="downloads")
+    p.add_argument("--out", default=None,
+                   help="destination directory (default: ./downloads, relative "
+                        "to the current directory) — pass an explicit path to "
+                        "keep downloads out of a code repo")
 
     p = sub.add_parser("tag", help="add/remove tags on an item")
     p.add_argument("key"); p.add_argument("tags", nargs="+")
@@ -175,6 +268,9 @@ def main(argv=None):
 
     if a.cmd == "find":
         _print_items(zot.find(a.title, a.tag, a.collection))
+
+    elif a.cmd == "show":
+        return _show(zot, a.keys, a.json)
 
     elif a.cmd == "create":
         pdfs: dict[str, tuple[str, str]] = {}  # title -> (arXiv id, pdf url)
@@ -391,12 +487,13 @@ def main(argv=None):
             ap.error("attach needs --key + --pdf, or --from <created.json>")
 
     elif a.cmd == "fetch":
+        out = _fetch_out_dir(a.out, Path.cwd())
         keys = [a.key] if a.key else [r["key"] for r in zot.find(a.title, None, a.collection)]
         n = 0
         for k in keys:
-            for p_ in zot.fetch(k, a.out):
-                print(f"  saved: {p_}"); n += 1
-        print(f"downloaded {n} file(s) to {a.out}")
+            for p_ in zot.fetch(k, out):
+                print(f"  saved: {Path(p_).resolve()}"); n += 1
+        print(f"downloaded {n} file(s) to {Path(out).resolve()}")
 
     elif a.cmd == "tag":
         if a.rm:
