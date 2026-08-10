@@ -45,6 +45,9 @@ zotkit doctor
 
 ```bash
 zotkit find --title "boson sampling"     # 搜索(也可 --tag / --collection)
+zotkit show AB12CD34 EF56GH78            # 按 key 查条目,一行一条(只读;
+                                         #   --json 输出完整数据;key 不存在则
+                                         #   报错到 stderr 且退出码为 1)
 zotkit create --arxiv 2401.12345         # 抓 arXiv 元信息建条目(默认演练;
                                          #   --apply 执行并自动下载附上 PDF)
                                          # 已正式发表(带期刊 DOI)的文章会自动
@@ -57,6 +60,9 @@ zotkit create --arxiv id1 id2 id3 --apply  # 批量:元信息合并一次请求,
 zotkit create --doi 10.1038/nature14539  # 按 DOI 从 CrossRef 抓元信息(不下 PDF;
                                          #   同样可一次给多个 DOI)
 zotkit create --file papers.json         # 从 JSON 批量建条目(默认演练,加 --apply 才执行)
+                                         # 建条目默认按 DOI / 标题查重并跳过重复项;
+                                         #   演练输出会直接标出「已在库中,key 是哪个」,
+                                         #   确要重复创建才加 --no-dedup
 zotkit enrich --key AB12CD34             # 就地补全已有条目的缺失字段(摘要/DOI/
                                          #   被截断的作者表;--rebuild-record 可把
                                          #   已见刊的 preprint 就地升级为期刊记录)
@@ -69,7 +75,12 @@ zotkit abstract --key AB12CD34 --source cnki --file abs.txt
                                          # 粘贴摘要并记录出处(owner 工具;文本自动
                                          #   清洗;已有摘要需 --force 才会替换)
 zotkit attach --key AB12CD34 --pdf 论文.pdf   # 上传 PDF
-zotkit fetch --key AB12CD34 --out downloads   # 下载 PDF
+zotkit fetch --key AB12CD34 --out downloads   # 下载 PDF(不给 --out 时默认存到
+                                         #   ./downloads;若当前目录在 git 仓库里会
+                                         #   提示改用仓库外的明确路径)
+zotkit export --key AB12CD34 EF56GH78 -o refs.bib
+                                         # 导出 BibTeX(cite key 一律改写成
+                                         #   Zotero item key;key 也可从 stdin 逐行给)
 zotkit tag AB12CD34 topic:qaoa           # 打标签
 zotkit status AB12CD34 read              # 阅读状态 to-read / reading / read
 zotkit move AB12CD34 "Algorithms"        # 移动分类

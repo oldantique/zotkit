@@ -47,10 +47,15 @@ just read it. Quick reference:
 
 ```bash
 zotkit find --title "..." | --tag ns:value | --collection "Name"
+zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
+                                     #   unknown key -> stderr + exit 1
 zotkit create --arxiv <id|url> ...   # fetch arXiv metadata; --apply attaches PDFs too
 zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
+                                     # dedup (DOI/title) is the default: the dry run
+                                     #   prints "already in library as <KEY>" for
+                                     #   items --apply would skip; --no-dedup forces
 zotkit enrich --key K [K...]         # complete EXISTING items in place — never
                                      #   delete+recreate (item keys must stay stable)
 zotkit enrich --missing abstract|doi | --all   # batch enrich (rate limiting internal)
@@ -58,7 +63,9 @@ zotkit audit [--json]                # read-only library health report
 zotkit abstract --key K --source SLUG   # store an OWNER-PROVIDED abstract with
                                      #   provenance; --force only on owner's say-so
 zotkit attach --from x.created.json --all
-zotkit fetch --key KEY --out downloads
+zotkit fetch --key KEY --out downloads   # prefer an explicit --out OUTSIDE any git
+                                     #   repo (default ./downloads; it warns in a repo)
+zotkit export --key K [K...] [-o refs.bib]   # BibTeX; cite key = Zotero item key
 zotkit tag KEY topic:foo | zotkit status KEY read | zotkit move KEY "Collection"
 zotkit backup | zotkit lint tag...
 ```

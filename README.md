@@ -81,6 +81,8 @@ Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 ```bash
 zotkit find --title "boson sampling"        # search by title/tag/collection
 zotkit find --tag status:to-read
+zotkit show AB12CD34 EF56GH78               # one line per key (read-only);
+                                            #   --json for the full item data
 
 zotkit create --arxiv 2401.12345            # fetch arXiv metadata, dry-run preview
 zotkit create --arxiv 2401.12345 --apply --tags field:ai   # create + download & attach the PDF
@@ -89,7 +91,8 @@ zotkit create --arxiv 2401.12345 1706.03762 math/0211159 --apply   # batch: one 
 zotkit create --doi 10.1038/nature14539     # fetch CrossRef metadata by DOI (no PDF —
                                             #   usually paywalled; attach manually after)
 
-zotkit create --file papers.json            # batch from JSON: dry-run preview
+zotkit create --file papers.json            # batch from JSON: dry-run preview —
+                                            #   flags items already in the library
 zotkit create --file papers.json --apply    # create (dedups by DOI/title)
 zotkit attach --from papers.created.json --all   # upload the PDFs (WebDAV or Zotero
                                                  #   Storage — auto-detected from .env)
@@ -105,6 +108,8 @@ zotkit abstract --key AB12CD34 --source cnki --file abs.txt   # paste an abstrac
 
 zotkit attach --key AB12CD34 --pdf paper.pdf     # single attach
 zotkit fetch --key AB12CD34 --out downloads      # download attachments (same auto-detection)
+
+zotkit export --key AB12CD34 EF56GH78 -o refs.bib   # BibTeX; cite key = item key
 
 zotkit tag AB12CD34 topic:qaoa prio:high    # validated against conventions.toml
 zotkit status AB12CD34 read                 # replaces the status: tag
@@ -127,6 +132,14 @@ daemon-free CLI — no translation-server). CrossRef requests identify themselve
 to the polite pool with a contact address; that should be reachable, so if you
 distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
 
+**Duplicates**: `create` checks every candidate against the library by exact DOI and
+by normalized title, and skips the ones already there — that has always been the
+`--apply` behavior, and the dry run now runs the same check up front, printing
+`!! already in library as <KEY> — --apply will skip it (use --no-dedup to force)`
+so you see the collision before writing anything. The apply path names the existing
+item's key in its skip messages too. `--no-dedup` turns the check off and creates
+the item regardless.
+
 **Version of record**: when arXiv reports a *journal* DOI (the paper was formally
 published), `--arxiv` builds the journal record from CrossRef instead of a
 `preprint`: proper item
@@ -144,6 +157,29 @@ Journal") — those stay preprints, with the reason stated. The same predicate
 gates `enrich --rebuild-record`. Items whose abstract zotkit
 wrote also carry an `abstract-source: arxiv|crossref` line in Extra, naming where
 it actually came from.
+
+### Looking items up: `show` and `export`
+
+`zotkit show K [K …]` is the read-only lookup by item key: one line per key —
+`KEY · itemType · FirstAuthor Year · Title · DOI-or-arXiv-id` — or `--json` for the
+full item data. An unknown key is reported on stderr and the exit code is 1, while
+the remaining keys still print. This deliberately supersedes requests for a
+`find --key` flag and a `verify --manifest` subcommand: verifying a manifest is a
+loop over `show` on the project side, and manifest-file parsing is too
+project-specific to belong in zotkit.
+
+`zotkit export --key K [K …]` emits BibTeX for those items, to stdout or to `-o
+refs.bib`; keys are also accepted on stdin, one per line, so it composes with
+whatever produced them. Every entry's cite key is **always** rewritten to the
+Zotero item key — that is the point of the command: item keys are the identity in
+the manifest model, and author-year cite keys don't join against them. An unknown
+key errors on stderr (exit 1) without stopping the other entries from exporting.
+
+`zotkit fetch` still defaults to `./downloads` and prints the absolute path of every
+file it saves. If you omit `--out` while the current directory sits inside a git
+repository, it warns on stderr and suggests an explicit destination: loose PDF
+copies committed into a repo break a library-of-record setup, where the library is
+the one place a file lives.
 
 ### Enriching existing items
 

@@ -2,7 +2,8 @@
 name: zotkit
 description: >
   Use when the user wants to add, create, upload/attach, download/fetch, search, tag,
-  or organize references (papers, PDFs) in their Zotero library via the zotkit CLI —
+  look up by item key, export BibTeX for, or organize references (papers, PDFs) in
+  their Zotero library via the zotkit CLI —
   headless Zotero management through the Web API + WebDAV, no desktop app. Covers task
   recipes and safety rules. Requires zotkit installed and a configured .env (README).
 ---
@@ -34,6 +35,24 @@ zotkit find --title "boson sampling"
 zotkit find --tag status:to-read
 zotkit find --collection "Algorithms"
 
+# look items up by key (read-only)
+zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id
+zotkit show AB12CD34 EF56GH78 --json           # full item data instead of one-liners
+#   THE use case: verifying a manifest of item keys. Loop `show` over the keys and
+#   check the exit code — it is 1 if ANY key was unknown (each bad key is reported on
+#   stderr; the good ones still print), 0 when every key resolved:
+zotkit show $(cat keys.txt) || echo "some keys are missing from the library"
+#   zotkit has no `find --key` and no `verify --manifest`: reading the manifest file
+#   is the project's job, `show` is the lookup. Don't ask for those flags.
+
+# export BibTeX
+zotkit export --key AB12CD34 EF56GH78          # to stdout
+zotkit export --key AB12CD34 -o refs.bib       # or to a file
+zotkit export < keys.txt                       # keys on stdin, one per line
+#   every cite key is ALWAYS rewritten to the Zotero item key — item keys are the
+#   identity everything else joins on; do not "restore" author-year cite keys.
+#   An unknown key errors on stderr and exits 1; the other entries still export.
+
 # create from identifiers (auto-fetched metadata; dry-run first, then --apply)
 zotkit create --arxiv 2401.12345                        # id, id+version, or abs/pdf URL
 zotkit create --arxiv 2401.12345 --apply --tags field:ai,status:to-read --collection "ML"
@@ -57,6 +76,12 @@ zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same wa
 # create items (JSON list; dry-run first, then --apply; saves x.created.json)
 zotkit create --file x.json
 zotkit create --file x.json --apply
+#   dedup (exact DOI + normalized title) is ON by default and the dry run runs the
+#   same check --apply does: lines like
+#     !! already in library as AB12CD34 — --apply will skip it (use --no-dedup to force)
+#   mean the item exists. Show them to the user and use that key (e.g. `zotkit enrich`
+#   or `zotkit tag`) instead of creating a second copy. `--no-dedup` exists but is a
+#   deliberate choice — only pass it when the user says they want the duplicate.
 
 # complete EXISTING items in place (dry-run first, then --apply)
 zotkit enrich --key AB12CD34 EF56GH78
@@ -88,8 +113,12 @@ zotkit attach --key <itemKey> --pdf /abs/paper.pdf
 zotkit attach --from x.created.json --all      # batch; skips already-attached
 
 # download / fetch PDFs (same auto-detection)
-zotkit fetch --key <itemKey> --out downloads
-zotkit fetch --title "size and value"
+zotkit fetch --key <itemKey> --out /abs/path/outside/any/repo
+zotkit fetch --title "size and value" --out "$(mktemp -d)"
+#   ALWAYS pass an explicit --out pointing outside any git repo. Without it files
+#   land in ./downloads, and if the current directory is inside a repo the tool warns:
+#   loose PDF copies committed into a repo break the library-of-record setup (the
+#   library is the one place a file lives). Saved paths are printed absolute.
 
 # organize
 zotkit tag <itemKey> topic:qaoa prio:high      # add (validated); --rm to remove
