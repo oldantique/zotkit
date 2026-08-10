@@ -12,7 +12,16 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .core import Zot, lint_tags, load_conventions, load_env
+from .core import Zot, dedup_maps, duplicate_key, lint_tags, load_conventions, load_env
+
+
+def dup_notice(d, doi_map, title_map) -> str | None:
+    """Dry-run warning for an item `create --apply` would skip, else None."""
+    key = duplicate_key(d, doi_map, title_map)
+    if key is None:
+        return None
+    return (f"!! already in library as {key or '?'} — --apply will skip it "
+            "(use --no-dedup to force)")
 
 
 def _print_items(rows):
@@ -219,34 +228,56 @@ def main(argv=None):
             if not items:
                 return 1
         if not a.apply:
+            # The dry run is the surface users trust, so it must run the same
+            # dedup check --apply will. One library fetch per invocation.
+            doi_map, title_map = ({}, {})
+            if not a.no_dedup:
+                doi_map, title_map = dedup_maps(zot.z.everything(zot.z.top()))
+            dups = 0
             for d in items:
                 problems = lint_tags(d.get("tags", []), conventions=zot.conventions,
                                      auto_load=False)
+                dup = dup_notice(d, doi_map, title_map)
+                dups += dup is not None
                 if not a.file:  # identifier mode: show the full fetched record
                     print(json.dumps(d, ensure_ascii=False, indent=2))
                     if problems:
                         print("  !! " + "; ".join(problems))
+                    if dup:
+                        print(f"  {dup}")
                     continue
                 flag = ("  !! " + "; ".join(problems)) if problems else ""
                 print(f"  [dry] {d.get('collection')} | {d.get('title','')[:60]}{flag}")
+                if dup:
+                    print(f"       {dup}")
             tail = f", {len(failures)} failed to fetch" if failures else ""
-            print(f"{len(items)} item(s){tail}. DRY — add --apply to create.")
+            dup_tail = f", {dups} already in library" if dups else ""
+            print(f"{len(items)} item(s){dup_tail}{tail}. DRY — add --apply to create.")
             return 1 if failures else 0
         created = zot.create_items(items, dedup=not a.no_dedup, strict_tags=not a.loose_tags)
         new = [c for c in created if c.get("key")]
+        skips = [c for c in created if c.get("skipped")]
         dup = len(created) - len(new)
+        dup_keys = [c.get("existing_key") or "?" for c in skips]
         if a.file:
             out = Path(a.file).with_suffix(".created.json")
             json.dump(new, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
             print(f"created {len(new)} (skipped {dup} dup) -> {out}")
+            for c in skips:
+                print(f"  skipped dup: {str(c.get('title', ''))[:60]} "
+                      f"— already in library as {c.get('existing_key') or '?'}")
             if any(c.get("file_path") for c in new):
                 print(f"attach PDFs: zotkit attach --from {out} --all")
             return 0
         # identifier mode
         if not new and not failures:
-            print("skipped: an item with this DOI/title already exists (use --no-dedup "
-                  "to force)")
+            where = ", ".join(dup_keys) or "?"
+            print(f"skipped: an item with this DOI/title already exists as {where} "
+                  "(use --no-dedup to force)")
             return 0
+        for c in skips:
+            print(f"skipped {str(c.get('title', ''))[:60]} — already in library as "
+                  f"{c.get('existing_key') or '?'} (use --no-dedup to force)")
         for c in new:
             key = c["key"]
             print(f"created {key}  {str(c.get('title', ''))[:70]}")

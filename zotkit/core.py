@@ -137,6 +137,38 @@ def _norm_title(t: str | None) -> str:
     return re.sub(r"\W+", " ", (t or "").lower()).strip()
 
 
+def dedup_maps(existing: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
+    """Build the lookup maps used by `duplicate_key` from top-level library items.
+
+    Returns (normalized DOI -> existing item key, normalized title -> key).
+    First writer wins, so the earliest item in the library keeps the slot.
+    """
+    doi_map: dict[str, str] = {}
+    title_map: dict[str, str] = {}
+    for it in existing:
+        d = it.get("data", {})
+        key = it.get("key") or d.get("key", "")
+        doi = (d.get("DOI") or "").strip().lower()
+        if doi:
+            doi_map.setdefault(doi, key)
+        title_map.setdefault(_norm_title(d.get("title")), key)
+    return doi_map, title_map
+
+
+def duplicate_key(d: dict[str, Any], doi_map: dict[str, str],
+                  title_map: dict[str, str]) -> str | None:
+    """Key of the existing item `d` would duplicate, or None.
+
+    DOI exact match (normalized) wins; otherwise a normalized-title match.
+    This is the single definition of "duplicate" — both the `create` dry run
+    and `Zot.create_items` go through it.
+    """
+    doi = (d.get("DOI") or "").strip().lower()
+    if doi and doi in doi_map:
+        return doi_map[doi]
+    return title_map.get(_norm_title(d.get("title")))
+
+
 def _md5_file(p: Path) -> str:
     h = hashlib.md5()
     with open(p, "rb") as f:
@@ -212,9 +244,7 @@ class Zot:
         tags: [str], collection: name, file_path: optional (carried through).
         Validates tags against the configured conventions (raise if strict_tags)."""
         existing = self.z.everything(self.z.top()) if dedup else []
-        seen_doi = {(it["data"].get("DOI") or "").strip().lower()
-                    for it in existing if it["data"].get("DOI")}
-        seen_title = {_norm_title(it["data"].get("title")) for it in existing}
+        doi_map, title_map = dedup_maps(existing)
 
         templates: dict[str, dict] = {}
         payloads, meta = [], []
@@ -226,9 +256,10 @@ class Zot:
                 if strict_tags:
                     raise TagConventionError(msg)
                 print("WARN", msg)
-            doi = (d.get("DOI") or "").strip().lower()
-            if dedup and ((doi and doi in seen_doi) or _norm_title(d.get("title")) in seen_title):
-                meta.append({"title": d.get("title"), "skipped": "duplicate"})
+            dup = duplicate_key(d, doi_map, title_map) if dedup else None
+            if dup is not None:
+                meta.append({"title": d.get("title"), "skipped": "duplicate",
+                             "existing_key": dup})
                 continue
             t = d["itemType"]
             templates.setdefault(t, self.z.item_template(t))
