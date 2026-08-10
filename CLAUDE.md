@@ -29,7 +29,10 @@ README — keep docs and code consistent with it.
 - `tests/` is the offline pytest suite: `test_metadata.py` (abstract cleaner +
   two-layer version-of-record predicate + `fetch_arxiv_batch` against a canned
   feed), `test_enrich.py` (`plan_enrich` VoR gate, `set_abstract`
-  guard/force/stamp matrix), `test_audit.py` (bucketing). Run with
+  guard/force/stamp matrix), `test_audit.py` (bucketing), and the v0.7.0 CLI
+  features: `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
+  `test_show.py`, `test_export.py` (_rekey + faked HTTP), `test_fetch_warning.py`
+  (git-worktree detection on tmp repos). Run with
   `pip install -e ".[dev]" && pytest`. pytest is a dev extra only — runtime
   deps stay exactly pyzotero + httpx.
 - **Tests stay offline**: no network, no `.env`, no credentials, no live
@@ -71,6 +74,10 @@ README — keep docs and code consistent with it.
   the item key never changes; merge policy (fill-empty-only, creator prefix
   rule, append-only Extra, abstract-source stamp) is documented in its module
   docstring and README → "Enriching existing items".
+- `zotkit/export.py` — BibTeX export. Cite keys are ALWAYS rewritten to the
+  Zotero item key (that's the command's purpose); entries are fetched raw over
+  the Web API on purpose — do not "simplify" to pyzotero's `format='bibtex'`,
+  which reparses/reflows entries through bibtexparser.
 - Tag conventions are **data + code**, not prose: users supply `conventions.toml`
   (see `conventions.example.toml`); `zotkit.core.lint_tags` enforces it in
   `create`/`tag`. Don't add convention rules that exist only in documentation.
