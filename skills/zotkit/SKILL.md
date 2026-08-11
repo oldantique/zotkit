@@ -31,9 +31,17 @@ the .env, the API key, or the WebDAV password.**
 
 ```bash
 # search
+zotkit find --any vaswani                  # metadata-wide: title+abstract+creators+tags+extra
 zotkit find --title "boson sampling"
 zotkit find --tag status:to-read
 zotkit find --collection "Algorithms"
+zotkit find --abstract "surface code"      # abstract only (when --any is too noisy)
+#   filters AND together, e.g. --any vaswani --collection "ML". When the match is
+#   in a field the one-line output doesn't show, an indented line explains it:
+#     hit: abstract "...context around the match..."   /   hit: creator "Bultink"
+#   "Is this paper already in the library?" → `find --any <first-author-lastname>`
+#   is THE check. Do not guess title wordings, and don't ask for PDF full-text
+#   search — find covers metadata; a zero-hit answer means not in the library.
 
 # look items up by key (read-only)
 zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id
@@ -81,6 +89,8 @@ zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same wa
 # create items (JSON list; dry-run first, then --apply; saves x.created.json)
 zotkit create --file x.json
 zotkit create --file x.json --apply
+#   BEFORE creating, check existence with `zotkit find --any <first-author-lastname>`
+#   (one call, no title-wording guesswork — see the search recipe above). Then:
 #   dedup (exact DOI + normalized title) is ON by default and the dry run runs the
 #   same check --apply does: lines like
 #     !! already in library as AB12CD34 — --apply will skip it (use --no-dedup to force)

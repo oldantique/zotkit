@@ -2,4 +2,4 @@
 from .core import Conventions, TagConventionError, Zot, lint_tags, load_conventions
 
 __all__ = ["Zot", "lint_tags", "load_conventions", "Conventions", "TagConventionError"]
-__version__ = "0.7.1"
+__version__ = "0.8.0"

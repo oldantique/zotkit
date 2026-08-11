@@ -47,6 +47,10 @@ just read it. Quick reference:
 
 ```bash
 zotkit find --title "..." | --tag ns:value | --collection "Name"
+zotkit find --any TEXT [--abstract TEXT]  # metadata-wide (title+abstract+creators+
+                                     #   tags+extra); filters AND together. Non-
+                                     #   visible matches get a `hit: field "..."` line.
+                                     #   Existence check before create: --any <lastname>
 zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
                                      #   unknown key -> one stderr line + exit 1
                                      #   (--verbose for the full API exception)

@@ -30,6 +30,8 @@ def _print_items(rows):
         print(f"{r['key']}  [{r['itemType']}]  {r['title'][:75]}")
         print(f"    collections: {r['collections']}")
         print(f"    tags: {r['tags']}")
+        for h in r.get("hits", []):
+            print(f'    hit: {h["field"]} "{h["text"]}"')
     print(f"\n{len(rows)} match(es)")
 
 
@@ -187,8 +189,17 @@ def main(argv=None):
 
     sub.add_parser("doctor", help="validate setup: config, API access, attachment storage")
 
-    p = sub.add_parser("find", help="search items by title/tag/collection")
+    p = sub.add_parser("find", help="search items by title/tag/collection, or "
+                                    "metadata-wide with --any")
     p.add_argument("--title"); p.add_argument("--tag"); p.add_argument("--collection")
+    p.add_argument("--any", metavar="TEXT",
+                   help="case-insensitive substring match across title, "
+                        "abstract, creator names, tags, and extra (like the "
+                        "Zotero client's \"All Fields & Tags\"); combines "
+                        "with the other filters (AND)")
+    p.add_argument("--abstract", metavar="TEXT",
+                   help="same match, abstract field only — a noise-reduction "
+                        "variant of --any")
 
     p = sub.add_parser("show", help="one-line summary per item key (read-only)")
     p.add_argument("keys", nargs="+", metavar="KEY")
@@ -304,7 +315,8 @@ def main(argv=None):
     zot = Zot()
 
     if a.cmd == "find":
-        _print_items(zot.find(a.title, a.tag, a.collection))
+        _print_items(zot.find(a.title, a.tag, a.collection,
+                              any_text=a.any, abstract=a.abstract))
 
     elif a.cmd == "show":
         return _show(zot, a.keys, a.json, a.verbose)

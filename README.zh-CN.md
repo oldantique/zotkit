@@ -45,6 +45,8 @@ zotkit doctor
 
 ```bash
 zotkit find --title "boson sampling"     # 搜索(也可 --tag / --collection)
+zotkit find --any vaswani                # 全字段搜索:标题+摘要+作者+标签+extra;
+                                         #   建 create 前用 --any <一作姓氏> 查重
 zotkit show AB12CD34 EF56GH78            # 按 key 查条目,一行一条(只读;
                                          #   --json 输出完整数据;key 不存在则
                                          #   报错到 stderr 且退出码为 1)

@@ -169,6 +169,42 @@ def duplicate_key(d: dict[str, Any], doi_map: dict[str, str],
     return title_map.get(_norm_title(d.get("title")))
 
 
+def _creator_name(c: dict) -> str:
+    two = " ".join(x for x in (c.get("firstName"), c.get("lastName")) if x)
+    return two or c.get("name") or ""
+
+
+def _snippet(text: str, needle: str, ctx: int = 60) -> str:
+    """~±ctx chars of context around the first case-insensitive match, on one
+    line, with ellipses marking truncation."""
+    i = text.lower().find(needle.lower())
+    if i < 0:
+        return ""
+    start, end = max(0, i - ctx), min(len(text), i + len(needle) + ctx)
+    body = " ".join(text[start:end].split())
+    return ("..." if start > 0 else "") + body + ("..." if end < len(text) else "")
+
+
+def _any_hit(d: dict, tags: list[str], q: str) -> dict | None:
+    """Where `q` matches item data `d` (metadata-wide, case-insensitive), or
+    None. Checked in visibility order — title and tag hits are already visible
+    in find's one-line output, so callers annotate only the other fields."""
+    ql = q.lower()
+    if ql in (d.get("title") or "").lower():
+        return {"field": "title"}
+    if any(ql in t.lower() for t in tags):
+        return {"field": "tag"}
+    for c in d.get("creators", []):
+        name = _creator_name(c)
+        if ql in name.lower():
+            return {"field": "creator", "text": name}
+    for zfield, label in (("abstractNote", "abstract"), ("extra", "extra")):
+        val = d.get(zfield) or ""
+        if ql in val.lower():
+            return {"field": label, "text": _snippet(val, q)}
+    return None
+
+
 def _md5_file(p: Path) -> str:
     h = hashlib.md5()
     with open(p, "rb") as f:
@@ -215,8 +251,21 @@ class Zot:
 
     # ---------- search ----------
     def find(self, title: str | None = None, tag: str | None = None,
-             collection: str | None = None) -> list[dict]:
-        """Search top-level items; returns slim records with key/type/title/collections/tags."""
+             collection: str | None = None, any_text: str | None = None,
+             abstract: str | None = None) -> list[dict]:
+        """Search top-level items; returns slim records with key/type/title/
+        collections/tags. All given filters must match (AND).
+
+        `any_text` matches case-insensitively across title, abstract, creator
+        names, tags, and extra (the Zotero client's "All Fields & Tags");
+        `abstract` restricts the same match to the abstract. Both are local
+        filters over the full library on purpose: server-side `q=` search has
+        unreliable index coverage, and a zero-hit answer here is used to
+        conclude "not in the library" — completeness is the requirement.
+
+        A match that isn't visible in the one-line output (abstract, extra,
+        creator) is explained in the record's "hits" list so callers can show
+        why an item matched without re-fetching it."""
         ckey = self.collection_key(collection) if collection else None
         if collection and not ckey:
             raise KeyError(f"no collection named '{collection}'")
@@ -231,10 +280,25 @@ class Zot:
                 continue
             if ckey and ckey not in d.get("collections", []):
                 continue
+            hits = []
+            if any_text:
+                hit = _any_hit(d, tags, any_text)
+                if hit is None:
+                    continue
+                if hit["field"] not in ("title", "tag"):
+                    hits.append(hit)
+            if abstract:
+                ab = d.get("abstractNote") or ""
+                if abstract.lower() not in ab.lower():
+                    continue
+                hit = {"field": "abstract", "text": _snippet(ab, abstract)}
+                if hit not in hits:
+                    hits.append(hit)
             out.append({"key": it["key"], "itemType": d.get("itemType"),
                         "title": d.get("title", ""),
                         "collections": [cname.get(c, c) for c in d.get("collections", [])],
-                        "tags": tags, "version": d.get("version")})
+                        "tags": tags, "version": d.get("version"),
+                        "hits": hits})
         return out
 
     # ---------- create ----------

@@ -81,6 +81,10 @@ Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 ```bash
 zotkit find --title "boson sampling"        # search by title/tag/collection
 zotkit find --tag status:to-read
+zotkit find --any vaswani                   # metadata-wide: title, abstract,
+                                            #   creators, tags, extra ("All
+                                            #   Fields & Tags"); --abstract
+                                            #   for the abstract field only
 zotkit show AB12CD34 EF56GH78               # one line per key (read-only);
                                             #   --json for the full item data
 
@@ -132,7 +136,11 @@ daemon-free CLI — no translation-server). CrossRef requests identify themselve
 to the polite pool with a contact address; that should be reachable, so if you
 distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
 
-**Duplicates**: `create` checks every candidate against the library by exact DOI and
+**Duplicates**: before creating, check existence with
+`zotkit find --any <first-author-lastname>` — one call across title, abstract,
+creators, tags, and extra beats guessing at title wording (title-substring
+searches routinely take several attempts before a zero-hit answer can be
+trusted). Then: `create` checks every candidate against the library by exact DOI and
 by normalized title, and skips the ones already there — that has always been the
 `--apply` behavior, and the dry run now runs the same check up front, printing
 `!! already in library as <KEY> — --apply will skip it (use --no-dedup to force)`
@@ -158,7 +166,23 @@ gates `enrich --rebuild-record`. Items whose abstract zotkit
 wrote also carry an `abstract-source: arxiv|crossref` line in Extra, naming where
 it actually came from.
 
-### Looking items up: `show` and `export`
+### Looking items up: `find`, `show` and `export`
+
+`zotkit find --any TEXT` matches a case-insensitive substring across title,
+abstract, creator names, tags, and extra — the Zotero client's "All Fields &
+Tags" mode — and composes (AND) with `--title`/`--tag`/`--collection`.
+`--abstract TEXT` is the same match restricted to the abstract, for when
+`--any` hits too much via creators or extra. When a match isn't visible in the
+one-line result (abstract, extra, or a creator name), an indented
+`hit: <field> "..."` line names the field, with ~±60 chars of context for
+abstract/extra — so you never have to `show --json` a result just to learn why
+it matched. Deliberate non-goals: no PDF full-text search (once you need the
+full text you've already identified the paper — fetch it, don't search it) and
+no server-side `q=` search (its index coverage is unreliable — measured on
+this library it returned 26 hits where 37 abstract-level matches exist — and a
+zero-hit `find` answer is used to conclude "not in the library", so
+completeness is a hard requirement; `find` stays a local filter over the full
+library).
 
 `zotkit show K [K …]` is the read-only lookup by item key: one line per key —
 `KEY · itemType · FirstAuthor Year · Title · DOI-or-arXiv-id` — or `--json` for the
@@ -294,13 +318,14 @@ This project is not affiliated with or endorsed by Zotero.
 
 ## Limits & roadmap
 
-- `find` currently lists the library client-side — instant for hundreds of items,
-  sluggish for many thousands. Server-side search is planned.
+- `find` lists the library client-side — instant for hundreds of items, sluggish
+  for many thousands. That's by design, not debt: server-side `q=` search has
+  unreliable index coverage, and `find`'s zero-hit answers must be trustworthy.
 - Group libraries should work for item operations (untested); WebDAV file sync is
   personal-libraries-only (a Zotero limitation).
 - `--doi`/`--arxiv` import covers arXiv + CrossRef; DataCite-only DOIs and
   arbitrary-URL scraping (translation-server territory) are out of scope.
-- Planned: an MCP server wrapper, server-side search.
+- Planned: an MCP server wrapper.
 
 ## License
 
