@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-**不打开 Zotero,也能管理你的文献库。**
+**不打开 Zotero,也能管理你的文献库——为 AI agent 和脚本而生,自带 agent skill 和 [AGENTS.md](AGENTS.md)。**
 
 zotkit 是一个命令行工具 + Python 库,直接对接 Zotero Web API:搜索、建条目、打标签、
 归类、传 PDF,全程不需要 Zotero 桌面端。Mac / Windows / Linux 通用。

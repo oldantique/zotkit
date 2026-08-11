@@ -4,7 +4,8 @@
 [![Python](https://img.shields.io/pypi/pyversions/zotkit)](https://pypi.org/project/zotkit/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Headless Zotero library management — no desktop app required.**
+**Headless Zotero library management — no desktop app required. Built for AI
+agents and scripts: ships with an agent skill and [AGENTS.md](AGENTS.md).**
 
 **English** | [简体中文](README.zh-CN.md)
 
