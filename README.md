@@ -182,7 +182,11 @@ no server-side `q=` search (its index coverage is unreliable — measured on
 this library it returned 26 hits where 37 abstract-level matches exist — and a
 zero-hit `find` answer is used to conclude "not in the library", so
 completeness is a hard requirement; `find` stays a local filter over the full
-library).
+library). One caveat: a zero hit on a *concept* term does not mean the library
+lacks a paper on that concept — abstract matching is only as good as the
+stored abstract, and some items carry short publisher/CrossRef abstracts that
+omit the paper's key terms. The author's last name remains the reliable
+existence key.
 
 `zotkit show K [K …]` is the read-only lookup by item key: one line per key —
 `KEY · itemType · FirstAuthor Year · Title · DOI-or-arXiv-id` — or `--json` for the

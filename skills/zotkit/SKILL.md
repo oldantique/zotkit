@@ -41,7 +41,9 @@ zotkit find --abstract "surface code"      # abstract only (when --any is too no
 #     hit: abstract "...context around the match..."   /   hit: creator "Bultink"
 #   "Is this paper already in the library?" → `find --any <first-author-lastname>`
 #   is THE check. Do not guess title wordings, and don't ask for PDF full-text
-#   search — find covers metadata; a zero-hit answer means not in the library.
+#   search — find covers metadata; a zero hit on an author name means not in the
+#   library. A zero hit on a CONCEPT term does NOT: some stored abstracts are
+#   short publisher one-liners that omit the paper's key terms.
 
 # look items up by key (read-only)
 zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id
