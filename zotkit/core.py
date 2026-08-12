@@ -101,11 +101,20 @@ def load_conventions(env_dir: str | os.PathLike | None = None) -> Conventions | 
     return None
 
 
-def lint_tags(tags: list[str], *, for_new_item: bool = True,
+def _tag_strings(tags: list) -> list[str]:
+    """Normalize tags to plain strings: accepts both ["ns:v", ...] and
+    Zotero's native [{"tag": "ns:v"}, ...] (items exported from the API come
+    in the dict shape)."""
+    return [t["tag"] if isinstance(t, dict) else t for t in tags]
+
+
+def lint_tags(tags: list, *, for_new_item: bool = True,
               conventions: Conventions | None = None,
               auto_load: bool = True) -> list[str]:
-    """Return a list of convention problems (empty = OK).
+    """Return a list of convention problems (empty = OK). Tags may be plain
+    strings or Zotero-native {"tag": ...} dicts.
     With no conventions configured, everything passes."""
+    tags = _tag_strings(tags)
     conv = conventions or (load_conventions() if auto_load else None)
     if conv is None:
         return []
@@ -313,7 +322,7 @@ class Zot:
         templates: dict[str, dict] = {}
         payloads, meta = [], []
         for d in items:
-            tags = d.get("tags", [])
+            tags = _tag_strings(d.get("tags", []))
             problems = self._lint(tags, for_new_item=True)
             if problems:
                 msg = f"tags for '{d.get('title','')[:50]}': " + "; ".join(problems)

@@ -32,8 +32,9 @@ README — keep docs and code consistent with it.
   guard/force/stamp matrix), `test_audit.py` (bucketing), and the v0.7.0 CLI
   features: `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
   `test_show.py`, `test_export.py` (_rekey + faked HTTP), `test_fetch_warning.py`
-  (git-worktree detection on tmp repos), and `test_find.py` (v0.8.0 --any/
-  --abstract matching, hit annotations, snippet shape). Run with
+  (git-worktree detection on tmp repos), `test_find.py` (v0.8.0 --any/
+  --abstract matching, hit annotations, snippet shape), and `test_lint.py`
+  (lint_tags accepts both str and Zotero-native {"tag": ...} shapes). Run with
   `pip install -e ".[dev]" && pytest`. pytest is a dev extra only — runtime
   deps stay exactly pyzotero + httpx.
 - **Tests stay offline**: no network, no `.env`, no credentials, no live
