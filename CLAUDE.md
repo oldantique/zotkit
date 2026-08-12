@@ -12,6 +12,15 @@ The Zotero Reader plugin is a separate repo,
 Data conventions (version of record, abstract-source stamp) are documented in
 README — keep docs and code consistent with it.
 
+## Cross-session routing
+
+- Crash/bug reports arriving directly from any session may be fixed and shipped
+  right away when the fix is behavior-preserving and tested — but notify the HQ
+  session (private zotero repo) in the same breath. Feature requests, CLI surface
+  changes, and anything touching conventions/policy need an HQ work order first.
+  Never name other sessions' confidential projects in public surfaces (commit
+  messages, release notes, issues) — "a downstream session" is enough.
+
 ## Releasing
 
 1. Bump the version in **both** `pyproject.toml` and `zotkit/__init__.py` (keep them equal).
