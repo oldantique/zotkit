@@ -109,6 +109,10 @@ zotkit enrich --key AB12CD34 --rebuild-record --apply   # preprint→journal rec
 #   lists only when the current list is a prefix of the authoritative one, and
 #   never touches tags/collections/attachments. "NEEDS OWNER" lines in its output
 #   are decisions for the user — surface them, don't work around them.
+#   A "NOTE abstract still missing: <source> has none" line means the item is
+#   STILL missing an abstract and the source can't supply one — not "nothing
+#   missing" (the item stays up-to-date and audit keeps listing it). That's the
+#   cue to get the text elsewhere and store it with `zotkit abstract`.
 
 # batch enrich + library health
 zotkit audit                                   # read-only report: missing abstracts /

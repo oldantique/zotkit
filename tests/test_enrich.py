@@ -74,6 +74,82 @@ def test_no_identifier_skips_without_fetching(monkeypatch):
     assert p["status"] == "needs-identifier"
 
 
+# ---------- plan_enrich: "the source has no abstract" is reported ----------
+#
+# Regression for the silent path: an item with no abstract whose source also
+# has none used to produce no output at all, so `enrich` said up-to-date while
+# `audit` kept listing the item as missing an abstract — forever.
+
+PRA_ITEM = {"itemType": "journalArticle", "title": "Nanoscale NMR",
+            "publicationTitle": "Physical Review Applied",
+            "DOI": "10.1103/PhysRevApplied.16.014008", "date": "2021-07-06",
+            "creators": [{"creatorType": "author", "firstName": "H. J.",
+                          "lastName": "Mamin"}]}
+# complete except for the abstract, so nothing else lands in fills
+PRA_LIBRARY_ITEM = dict(PRA_ITEM, abstractNote="", extra="", url="x",
+                        archiveID="", tags=[], collections=[], relations={})
+
+
+def test_source_without_abstract_emits_a_note_naming_the_source(monkeypatch):
+    p = _plan(monkeypatch, PRA_LIBRARY_ITEM, PRA_ITEM, rebuild=False)
+    (note,) = [n for n in p["notes"] if "abstract still missing" in n]
+    assert note.startswith("NOTE abstract still missing:")
+    assert "CrossRef has none for DOI 10.1103/PhysRevApplied.16.014008" in note
+    assert "try another source" in note
+
+
+def test_the_note_does_not_change_status_or_write_anything(monkeypatch):
+    p = _plan(monkeypatch, PRA_LIBRARY_ITEM, PRA_ITEM, rebuild=False)
+    assert p["status"] == "up-to-date"      # nothing was writable — unchanged
+    assert p["fills"] == {} and p["extra_lines"] == []
+    assert p["abstract_source"] is None
+
+
+def test_source_with_an_abstract_fills_it_and_emits_no_note(monkeypatch):
+    p = _plan(monkeypatch, PRA_LIBRARY_ITEM,
+              dict(PRA_ITEM, abstractNote="A real abstract."), rebuild=False)
+    assert p["fills"]["abstractNote"] == "A real abstract."
+    assert p["status"] == "plan"
+    assert not any("abstract still missing" in n for n in p["notes"])
+
+
+def test_item_that_already_has_an_abstract_emits_no_note(monkeypatch):
+    have = dict(PRA_LIBRARY_ITEM, abstractNote="already here")
+    p = _plan(monkeypatch, have, PRA_ITEM, rebuild=False)
+    assert not any("abstract still missing" in n for n in p["notes"])
+
+
+def test_arxiv_branch_names_arxiv_and_the_id(monkeypatch):
+    monkeypatch.setattr(md, "fetch_doi",
+                        lambda doi: pytest.fail("must not fetch CrossRef"))
+    monkeypatch.setattr(md, "fetch_arxiv_batch", lambda ids: [
+        {"item": {"itemType": "preprint", "title": "P", "creators": []}}])
+    item = dict(PRA_LIBRARY_ITEM, DOI="", archiveID="arXiv:2401.12345")
+    p = enrich.plan_enrich(_read_only_zot(item), "KEY00001",
+                           rebuild_record=False)
+    (note,) = [n for n in p["notes"] if "abstract still missing" in n]
+    assert "arXiv has none for 2401.12345" in note
+
+
+def test_both_sources_tried_says_neither(monkeypatch):
+    # journal DOI without an abstract + an arXiv id: the CrossRef path already
+    # falls back to arXiv, so the note must not blame CrossRef alone
+    monkeypatch.setattr(md, "fetch_arxiv_batch", lambda ids: [
+        {"item": {"itemType": "preprint", "title": "P", "creators": []}}])
+    item = dict(PRA_LIBRARY_ITEM, archiveID="arXiv:2401.12345")
+    p = _plan(monkeypatch, item, PRA_ITEM, rebuild=False)
+    (note,) = [n for n in p["notes"] if "abstract still missing" in n]
+    assert "neither CrossRef nor arXiv has one" in note
+
+
+def test_stale_stamp_still_wins_over_the_new_note(monkeypatch):
+    stamped = dict(PRA_LIBRARY_ITEM, extra="abstract-source: cnki")
+    p = _plan(monkeypatch, stamped, PRA_ITEM, rebuild=False)
+    assert p["status"] == "stale-stamp"
+    assert any("NEEDS OWNER stale-stamp" in n for n in p["notes"])
+    assert not any("abstract still missing" in n for n in p["notes"])
+
+
 # ---------- set_abstract: guard / force / stamp matrix ----------
 
 class FakeZ:

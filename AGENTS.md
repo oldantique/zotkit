@@ -64,6 +64,8 @@ zotkit create --file x.json          # batch from JSON
 zotkit enrich --key K [K...]         # complete EXISTING items in place — never
                                      #   delete+recreate (item keys must stay stable)
 zotkit enrich --missing abstract|doi | --all   # batch enrich (rate limiting internal)
+                                     #   "NOTE abstract still missing: <source> has
+                                     #   none" = source can't fill it, not "all fine"
 zotkit audit [--json]                # read-only library health report
 zotkit abstract --key K --source SLUG   # store an OWNER-PROVIDED abstract with
                                      #   provenance; --force only on owner's say-so

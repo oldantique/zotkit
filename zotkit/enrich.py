@@ -89,8 +89,14 @@ def _real_creators(creators: list[dict]) -> list[dict]:
             if any(v for k, v in c.items() if k != "creatorType")]
 
 
-def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None, str | None]:
-    """→ (authoritative record, arXiv id, no-VoR reason, skip reason).
+def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None,
+                                           str | None, str | None]:
+    """→ (authoritative record, arXiv id, no-VoR reason, skip reason, source).
+
+    `source` names which upstream(s) could have supplied an abstract for this
+    item — "crossref", "arxiv", or "crossref+arxiv" when the CrossRef path
+    also tried arXiv. It is reporting-only: a caller that finds no abstract
+    anywhere can say *which* source came up empty instead of staying silent.
     A journal DOI — per metadata's two-layer version-of-record predicate —
     wins; arXiv otherwise (that fetch itself may upgrade to a journal record
     per v0.4.2 rules — equally welcome here). A repository DOI (SSRN & co.)
@@ -102,16 +108,18 @@ def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None, 
         auth = md.fetch_doi(doi)
         reason = md.repository_record_reason(auth)
         if reason is None:
+            src = "crossref"
             # CrossRef abstracts are often absent; borrow arXiv's when we can
             if not auth.get("abstractNote") and aid and not d.get("abstractNote"):
+                src = "crossref+arxiv"
                 r = md.fetch_arxiv_batch([aid])[0]
                 pre = r.get("item") or {}
                 if pre.get("abstractNote"):
                     auth["abstractNote"] = pre["abstractNote"]
                     md._add_extra(auth, "abstract-source: arxiv")
-            return auth, aid, None, None
+            return auth, aid, None, None, src
         if not aid:
-            return auth, aid, f"DOI {doi}: {reason}", None
+            return auth, aid, f"DOI {doi}: {reason}", None, "crossref"
         # repository record in disguise but the item has an arXiv identity:
         # fall through — the arXiv record is the better preprint source
     if aid:
@@ -120,11 +128,24 @@ def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None, 
             raise md.MetadataError(r["error"])
         # the arXiv path enforces the predicate itself: r["item"] is a journal
         # record only when the DOI arXiv reports passed both layers
-        return r["item"], aid, None, None
+        return r["item"], aid, None, None, "arxiv"
     if doi:  # repository-prefix DOI, no arXiv id (the pure-SSRN case)
         auth = md.fetch_doi(doi)
-        return auth, aid, f"DOI {doi} is a repository DOI, not a journal one", None
-    return None, None, None, "no DOI or arXiv id on the item"
+        return (auth, aid, f"DOI {doi} is a repository DOI, not a journal one",
+                None, "crossref")
+    return None, None, None, "no DOI or arXiv id on the item", None
+
+
+def _no_abstract_note(source: str | None, doi: str, aid: str | None) -> str:
+    """The note for an item that still has no abstract because the source had
+    none — the case that used to pass in silence and read as 'up-to-date'."""
+    if source == "crossref+arxiv":
+        where = "neither CrossRef nor arXiv has one"
+    elif source == "arxiv":
+        where = f"arXiv has none for {aid}"
+    else:
+        where = f"CrossRef has none for DOI {doi}"
+    return f"NOTE abstract still missing: {where} — try another source"
 
 
 _STAMP_LINE = re.compile(r"^abstract-source:[^\n]*", re.IGNORECASE | re.MULTILINE)
@@ -186,7 +207,7 @@ def plan_enrich(zot, key: str, *, rebuild_record: bool = False) -> dict[str, Any
                          "fills": {}, "extra_lines": [], "creators": None,
                          "rebuild": None, "notes": [], "abstract_source": None}
 
-    auth, aid, no_vor, skip = _fetch_authoritative(d)
+    auth, aid, no_vor, skip, ab_source = _fetch_authoritative(d)
     if auth is None:
         p["status"] = "needs-identifier"
         p["notes"].append(f"SKIP needs-identifier: {skip}")
@@ -206,6 +227,13 @@ def plan_enrich(zot, key: str, *, rebuild_record: bool = False) -> dict[str, Any
             p["abstract_source"] = (auth_ab_src or "").lower() or None
             if p["abstract_source"]:
                 p["extra_lines"].append(f"abstract-source: {p['abstract_source']}")
+        else:
+            # The source simply has no abstract. Say so: silence here reads as
+            # "nothing is missing", while `audit` keeps listing the item and
+            # `enrich --missing abstract` keeps re-selecting it forever.
+            p["notes"].append(_no_abstract_note(ab_source,
+                                                (d.get("DOI") or "").strip(),
+                                                aid))
 
     # ---- plain fields: fill only what's empty ----
     for f, v in auth.items():

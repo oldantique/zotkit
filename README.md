@@ -235,7 +235,12 @@ reported, not touched); tags, collections, relations, and attachments are never
 modified; Extra only gains lines. Abstracts zotkit writes are stamped
 `abstract-source: …` in Extra — a stamp with no abstract means someone
 deliberately removed it, and enrich will not re-add it (reported as NEEDS
-OWNER). Items with no DOI or arXiv id are reported as needs-identifier.
+OWNER). Items with no DOI or arXiv id are reported as needs-identifier. When an
+item still has no abstract only because the upstream source has none, enrich
+says so with a `NOTE abstract still missing: <source> has none …` line — "missing,
+but this source had nothing to fill it with" is a different answer from "nothing
+missing", and only the note distinguishes them (the item stays `up-to-date`,
+since nothing was writable, and `audit` keeps listing it).
 
 `--rebuild-record` additionally upgrades a preprint whose paper has since been
 published (journal DOI present) to the journal record **in the same item**:

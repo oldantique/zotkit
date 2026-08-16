@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zotkit"
-version = "0.8.0"
+version = "0.8.1"
 description = "Let AI agents manage your Zotero library: headless CLI + Python API to search, import, enrich, export BibTeX, and attach PDFs (Web API + WebDAV) — no desktop app required"
 readme = "README.md"
 license = "MIT"
