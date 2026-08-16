@@ -35,17 +35,20 @@ README — keep docs and code consistent with it.
 
 ## Tests
 
-- `tests/` is the offline pytest suite: `test_metadata.py` (abstract cleaner +
-  two-layer version-of-record predicate + `fetch_arxiv_batch` against a canned
-  feed), `test_enrich.py` (`plan_enrich` VoR gate, `set_abstract`
-  guard/force/stamp matrix), `test_audit.py` (bucketing), and the v0.7.0 CLI
-  features: `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
-  `test_show.py`, `test_export.py` (_rekey + faked HTTP), `test_fetch_warning.py`
-  (git-worktree detection on tmp repos), `test_find.py` (v0.8.0 --any/
-  --abstract matching, hit annotations, snippet shape), and `test_lint.py`
-  (lint_tags accepts both str and Zotero-native {"tag": ...} shapes). Run with
-  `pip install -e ".[dev]" && pytest`. pytest is a dev extra only — runtime
-  deps stay exactly pyzotero + httpx.
+- `tests/` is the offline pytest suite, filed **by module, never by release**
+  (a file named after a version guarantees an archaeology layer per release):
+  `test_metadata.py` (abstract cleaner + two-layer version-of-record predicate
+  + `fetch_arxiv_batch` against a canned feed), `test_enrich.py` (`plan_enrich`
+  VoR gate, the "source has no abstract" note + its status invariant,
+  `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing),
+  `test_find.py` (--any/--abstract matching, hit annotations, snippet shape),
+  `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
+  `test_show.py` (one-line format, sanitized errors, --verbose),
+  `test_export.py` (_rekey + provenance header + faked HTTP),
+  `test_fetch_warning.py` (git-worktree detection on tmp repos), and
+  `test_lint.py` (lint_tags accepts both str and Zotero-native {"tag": ...}
+  shapes). Run with `pip install -e ".[dev]" && pytest`. pytest is a dev extra
+  only — runtime deps stay exactly pyzotero + httpx.
 - **Tests stay offline**: no network, no `.env`, no credentials, no live
   library. Anything that needs those is a manual smoke step: read-only
   `zotkit audit` against the real library, plus a create/`abstract` round-trip
@@ -84,7 +87,11 @@ README — keep docs and code consistent with it.
 - `zotkit/enrich.py` — in-place completion of existing items. Core invariant:
   the item key never changes; merge policy (fill-empty-only, creator prefix
   rule, append-only Extra, abstract-source stamp) is documented in its module
-  docstring and README → "Enriching existing items".
+  docstring and README → "Enriching existing items". A second invariant, easy
+  to break: `plan_enrich`'s `status` values feed the `--all`/`--missing`
+  summary counts and everything downstream reads them, so a *reporting-only*
+  finding (e.g. "the source has no abstract either") gets a note — never a new
+  status, bucket, or exit code.
 - `zotkit/export.py` — BibTeX export. Cite keys are ALWAYS rewritten to the
   Zotero item key (that's the command's purpose); entries are fetched raw over
   the Web API on purpose — do not "simplify" to pyzotero's `format='bibtex'`,
