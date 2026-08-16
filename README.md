@@ -75,7 +75,9 @@ access, and attachment storage, and tells you exactly what to fix if anything fa
 Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 `conventions.toml` next to your `.env` to define a namespaced tag taxonomy
 (`field:physics`, `status:to-read`, …). With it in place, `zotkit create` / `zotkit tag`
-**reject** violations; without it, tags are unrestricted.
+**reject** violations; without it, tags are unrestricted. Searched in order:
+`$ZOTKIT_CONVENTIONS` (a full path to the file), then next to the `.env` in use, then
+`~/.config/zotkit/conventions.toml`.
 
 ## Quickstart
 

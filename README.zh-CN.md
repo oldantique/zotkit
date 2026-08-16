@@ -106,7 +106,9 @@ zotkit backup                            # 全库 JSON 备份(批量操作前必
 我们把一套经过 300 篇文献实战的整理方法论写成了文档(分类当骨架、标签当血肉、
 AI 并行分析 + 分批执行):[docs/organizing-with-agents.md](docs/organizing-with-agents.md)。
 配套的标签规范可以写进 `conventions.toml`([示例](conventions.example.toml)),
-之后 zotkit 会在代码层面拒绝所有违规标签——AI 想乱打标签也打不进去。
+之后 zotkit 会在代码层面拒绝所有违规标签——AI 想乱打标签也打不进去。查找顺序:
+`$ZOTKIT_CONVENTIONS`(指向文件的完整路径)→ 与所用 `.env` 同目录 →
+`~/.config/zotkit/conventions.toml`。
 
 ## 安全设计
 
