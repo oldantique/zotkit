@@ -335,9 +335,12 @@ This project is not affiliated with or endorsed by Zotero.
   unreliable index coverage, and `find`'s zero-hit answers must be trustworthy.
 - Group libraries should work for item operations (untested); WebDAV file sync is
   personal-libraries-only (a Zotero limitation).
-- `--doi`/`--arxiv` import covers arXiv + CrossRef; DataCite-only DOIs and
-  arbitrary-URL scraping (translation-server territory) are out of scope.
-- Planned: an MCP server wrapper.
+- `--doi`/`--arxiv` import covers arXiv + CrossRef; DataCite-only DOIs are not
+  yet supported ([#4](https://github.com/oldantique/zotkit/issues/4)).
+- Not planned: arbitrary-URL scraping (translation-server territory), SSRN/CNKI
+  scraping, and an overwrite mode for `enrich` — fill-empty-only is the contract.
+- Planned work is tracked as [GitHub issues](https://github.com/oldantique/zotkit/issues),
+  including the MCP server wrapper ([#8](https://github.com/oldantique/zotkit/issues/8)).
 
 ## License
 
