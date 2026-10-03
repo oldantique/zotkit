@@ -50,7 +50,8 @@ zotkit find --title "..." | --tag ns:value | --collection "Name"
 zotkit find --any TEXT [--abstract TEXT]  # metadata-wide (title+abstract+creators+
                                      #   tags+extra); filters AND together. Non-
                                      #   visible matches get a `hit: field "..."` line.
-                                     #   Existence check before create: --any <lastname>
+                                     #   Existence check when there's no arXiv id/DOI:
+                                     #   --any <lastname> (with ids: create's dry run)
                                      #   1st call downloads the library; later calls
                                      #   use a version-checked cache (still complete)
 zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
@@ -62,7 +63,9 @@ zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
                                      # dedup (DOI/title) is the default: the dry run
                                      #   prints "already in library as <KEY>" for
-                                     #   items --apply would skip; --no-dedup forces
+                                     #   items --apply would skip; --no-dedup forces.
+                                     #   With ids in hand this dry run IS the
+                                     #   existence check: no find loop first
 zotkit enrich --key K [K...]         # complete EXISTING items in place — never
                                      #   delete+recreate (item keys must stay stable)
 zotkit enrich --missing abstract|doi | --all   # batch enrich (rate limiting internal)

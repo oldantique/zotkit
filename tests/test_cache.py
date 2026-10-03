@@ -147,12 +147,13 @@ def test_unwritable_cache_dir_is_not_an_error(tmp_path):
     assert keys(run(blocker / "sub" / "top.json", srv)) == ["A"]
 
 
-def test_cache_root_honors_disable_and_xdg(monkeypatch, tmp_path):
+def test_cache_root_honors_disable_and_platform_base(monkeypatch, tmp_path):
     monkeypatch.setenv("ZOTKIT_CACHE", "0")
     assert cache.cache_root() is None
     monkeypatch.delenv("ZOTKIT_CACHE")
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    monkeypatch.setattr(cache.os, "name", "posix")
+    # Exercise the real platform's branch: faking os.name breaks pathlib on Windows.
+    monkeypatch.setenv("LOCALAPPDATA" if cache.os.name == "nt" else "XDG_CACHE_HOME",
+                       str(tmp_path))
     assert cache.cache_root() == tmp_path / "zotkit"
 
 

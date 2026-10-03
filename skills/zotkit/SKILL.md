@@ -39,16 +39,17 @@ zotkit find --abstract "surface code"      # abstract only (when --any is too no
 #   filters AND together, e.g. --any vaswani --collection "ML". When the match is
 #   in a field the one-line output doesn't show, an indented line explains it:
 #     hit: abstract "...context around the match..."   /   hit: creator "Bultink"
-#   "Is this paper already in the library?" → `find --any <first-author-lastname>`
-#   is THE check. Do not guess title wordings, and don't ask for PDF full-text
-#   search — find covers metadata; a zero hit on an author name means not in the
-#   library. A zero hit on a CONCEPT term does NOT: some stored abstracts are
+#   "Is this paper already in the library?" With an arXiv id or DOI, don't search
+#   at all: the `create --arxiv/--doi` dry run IS the check (see the create recipe
+#   below). Without one (a local PDF, hand-built JSON), or for "anything by X?",
+#   `find --any <first-author-lastname>` is the check. Do not guess title wordings,
+#   and don't ask for PDF full-text search: find covers metadata. A zero hit on an
+#   author name means not in the library. A zero hit on a CONCEPT term does NOT: some stored abstracts are
 #   short publisher one-liners that omit the paper's key terms.
 #   Speed: the first find/audit on a machine downloads the whole library (can take
 #   10–20 s for a few hundred items). After that, a local cache reconciled against
 #   the server makes calls take seconds, with no loss of completeness. Don't treat
-#   a slow first call as a hang. For a batch of new papers, `create`'s dry run
-#   already checks every item for duplicates (DOI, then title) in one pass.
+#   a slow first call as a hang.
 
 # look items up by key (read-only)
 zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id
@@ -90,14 +91,21 @@ zotkit create --arxiv id1 id2 id3 --apply               # batch (space- or comma
 #   Extra may also carry `abstract-source: arxiv|crossref` — leave that line alone
 zotkit create --doi 10.1038/nature14539 --apply --tags field:ai
 zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same way
+#   EXISTENCE CHECK = the dry run (same command, no --apply). One call checks the
+#   whole batch (exact DOI, then normalized title) and prints, for each item
+#   already there:
+#     !! already in library as AB12CD34 — --apply will skip it (use --no-dedup to force)
+#   Do NOT run one `find --any` per candidate first. That loop repeats the dry
+#   run's work and is what made agents time out.
 #   DOI mode never downloads a PDF (paywalls) — attach one manually afterwards;
 #   unknown CrossRef types error out: fall back to --file for those
 
 # create items (JSON list; dry-run first, then --apply; saves x.created.json)
 zotkit create --file x.json
 zotkit create --file x.json --apply
-#   BEFORE creating, check existence with `zotkit find --any <first-author-lastname>`
-#   (one call, no title-wording guesswork — see the search recipe above). Then:
+#   Hand-built JSON often lacks a DOI, so BEFORE creating, check existence with
+#   `zotkit find --any <first-author-lastname>` (one call, no title-wording
+#   guesswork; see the search recipe above). Then:
 #   dedup (exact DOI + normalized title) is ON by default and the dry run runs the
 #   same check --apply does: lines like
 #     !! already in library as AB12CD34 — --apply will skip it (use --no-dedup to force)

@@ -46,7 +46,9 @@ zotkit doctor
 ```bash
 zotkit find --title "boson sampling"     # 搜索(也可 --tag / --collection)
 zotkit find --any vaswani                # 全字段搜索:标题+摘要+作者+标签+extra;
-                                         #   建 create 前用 --any <一作姓氏> 查重
+                                         #   有 arXiv id/DOI 时,create 的 dry run 本身就是查重
+                                         #   (整批一次,DOI 再标题),不必先 find
+                                         #   没有 arXiv id/DOI 时,建条目前用 --any <一作姓氏> 查重
                                          #   首次调用会下载全库(几百条约 10–20 秒),之后走本地
                                          #   缓存,每次先和服务器版本号核对,结果仍完整;
                                          #   ZOTKIT_CACHE=0 可关闭

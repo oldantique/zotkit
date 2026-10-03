@@ -139,17 +139,19 @@ daemon-free CLI — no translation-server). CrossRef requests identify themselve
 to the polite pool with a contact address; that should be reachable, so if you
 distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
 
-**Duplicates**: before creating, check existence with
-`zotkit find --any <first-author-lastname>` — one call across title, abstract,
-creators, tags, and extra beats guessing at title wording (title-substring
-searches routinely take several attempts before a zero-hit answer can be
-trusted). Then: `create` checks every candidate against the library by exact DOI and
-by normalized title, and skips the ones already there — that has always been the
-`--apply` behavior, and the dry run now runs the same check up front, printing
+**Duplicates**: with arXiv ids or DOIs in hand, the existence check *is* the
+`create --arxiv/--doi` dry run. It checks the whole batch in one call, by exact DOI
+and then by normalized title, and prints
 `!! already in library as <KEY> — --apply will skip it (use --no-dedup to force)`
-so you see the collision before writing anything. The apply path names the existing
-item's key in its skip messages too. `--no-dedup` turns the check off and creates
-the item regardless.
+for each item already there. No separate `find` is needed, and a loop of one
+`find` per candidate only repeats work the dry run already does. `--apply` runs the
+same check and names the existing key in its skip messages. `--no-dedup` turns the
+check off and creates the item regardless. Without an identifier (a local PDF,
+hand-built `--file` JSON), or to answer "do we have anything by X?", use
+`zotkit find --any <first-author-lastname>`. That is one call across title,
+abstract, creators, tags, and extra, and it beats guessing at title wording:
+title-substring searches routinely take several attempts before a zero hit can be
+trusted.
 
 **Version of record**: when arXiv reports a *journal* DOI (the paper was formally
 published), `--arxiv` builds the journal record from CrossRef instead of a
