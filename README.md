@@ -330,9 +330,14 @@ This project is not affiliated with or endorsed by Zotero.
 
 ## Limits & roadmap
 
-- `find` lists the library client-side — instant for hundreds of items, sluggish
-  for many thousands. That's by design, not debt: server-side `q=` search has
-  unreliable index coverage, and `find`'s zero-hit answers must be trustworthy.
+- `find` downloads the whole library and filters it client-side. That's by design:
+  server-side `q=` search has unreliable index coverage, and `find`'s zero-hit
+  answers must be trustworthy. The cost is transfer, about 0.5 MB of item JSON per
+  100 items, so each call takes seconds per hundred items (more on a slow link to
+  api.zotero.org). A few hundred items can take 10–20 s, and thousands can take
+  minutes. Every call re-downloads, so a loop of `find` calls pays that cost each
+  time. `create`'s dry run checks a whole batch for duplicates (DOI, then title)
+  against a single listing.
 - Group libraries should work for item operations (untested); WebDAV file sync is
   personal-libraries-only (a Zotero limitation).
 - `--doi`/`--arxiv` import covers arXiv + CrossRef; DataCite-only DOIs are not
