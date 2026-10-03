@@ -24,6 +24,8 @@ from typing import Any
 import httpx
 from pyzotero import zotero
 
+from .cache import KEY_CHUNK, cache_root, sync_listing
+
 ENV_VARS = ("ZOTKIT_ENV", "ZOT_ENV")
 
 
@@ -238,10 +240,60 @@ class Zot:
         return lint_tags(tags, for_new_item=for_new_item,
                          conventions=self.conventions, auto_load=False)
 
+    # ---------- whole-library listings (cached, see zotkit/cache.py) ----------
+    _LISTINGS = {  # kind -> (API path, extra params)
+        "top": ("items/top", {}),
+        "attachments": ("items", {"itemType": "attachment"}),
+        "collections": ("collections", {}),
+    }
+
+    def _versions(self, path: str, params: dict) -> dict[str, int]:
+        # Raw request: pyzotero forces limit=100, which pages a versions map
+        # and its everything() can't merge dicts. Unlimited, it is one response.
+        lib_type = self.env.get("ZOTERO_LIBRARY_TYPE", "user")
+        lib_id = self.env["ZOTERO_LIBRARY_ID"]
+        r = httpx.get(f"https://api.zotero.org/{lib_type}s/{lib_id}/{path}",
+                      params={"format": "versions", **params},
+                      headers={"Zotero-API-Key": self.env["ZOTERO_API_KEY"],
+                               "Zotero-API-Version": "3"}, timeout=60)
+        # Never r.raise_for_status(): its message carries the URL, library ID
+        # included (the leak v0.7.1 removed from `show`).
+        if r.status_code != 200:
+            raise RuntimeError(f"Zotero API error ({r.status_code}) listing {path}")
+        vmap = r.json()
+        # The cache treats a key missing from this map as deleted, so a short
+        # map would silently drop items AND persist the loss. Fail loud instead.
+        total = r.headers.get("Total-Results")
+        if 'rel="next"' in r.headers.get("Link", "") or (
+                total is not None and int(total) != len(vmap)):
+            raise RuntimeError(f"incomplete version map for {path} "
+                               f"({len(vmap)} of {total}); not trusting the cache")
+        return vmap
+
+    def listing(self, kind: str) -> list[dict]:
+        """Every item of a whole-library listing: "top" (top-level items),
+        "attachments", or "collections". Served from the local cache wherever
+        the server's version map says it is current — as complete as a fresh
+        fetch (see zotkit/cache.py)."""
+        path, params = self._LISTINGS[kind]
+        root = cache_root()
+        lib = f"{self.env.get('ZOTERO_LIBRARY_TYPE', 'user')}-{self.env['ZOTERO_LIBRARY_ID']}"
+        if kind == "top":
+            fetch_all = lambda: self.z.everything(self.z.top())
+        elif kind == "collections":
+            fetch_all = lambda: self.z.everything(self.z.collections())
+        else:
+            fetch_all = lambda: self.z.everything(self.z.items(**params))
+        fetch_keys = None
+        if kind != "collections":
+            fetch_keys = lambda ks: self.z.items(itemKey=",".join(ks), limit=KEY_CHUNK)
+        return sync_listing(root / lib / f"{kind}.json" if root else None,
+                            lambda: self._versions(path, params), fetch_all, fetch_keys)
+
     # ---------- collections ----------
     def collections(self, refresh: bool = False) -> list[dict]:
         if self._cols is None or refresh:
-            self._cols = self.z.everything(self.z.collections())
+            self._cols = self.listing("collections")
         return self._cols
 
     def collection_key(self, name: str) -> str | None:
@@ -280,7 +332,7 @@ class Zot:
             raise KeyError(f"no collection named '{collection}'")
         cname = self.collection_names()
         out = []
-        for it in self.z.everything(self.z.top()):
+        for it in self.listing("top"):
             d = it["data"]
             tags = [t["tag"] for t in d.get("tags", [])]
             if title and title.lower() not in d.get("title", "").lower():
@@ -316,7 +368,7 @@ class Zot:
         """Create bibliographic items. Each dict: itemType/title/creators/... plus
         tags: [str], collection: name, file_path: optional (carried through).
         Validates tags against the configured conventions (raise if strict_tags)."""
-        existing = self.z.everything(self.z.top()) if dedup else []
+        existing = self.listing("top") if dedup else []
         doi_map, title_map = dedup_maps(existing)
 
         templates: dict[str, dict] = {}

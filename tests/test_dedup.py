@@ -92,6 +92,7 @@ class FakeZ:
 def _zot(existing):
     z = Zot.__new__(Zot)
     z.z = FakeZ(existing)
+    z.listing = lambda kind: existing
     z.conventions = None
     return z
 

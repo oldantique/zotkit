@@ -35,7 +35,7 @@ ITEMS = [
 
 def fake_zot(items=ITEMS):
     return types.SimpleNamespace(
-        z=types.SimpleNamespace(everything=lambda x: x, top=lambda: items),
+        listing=lambda kind: items,
         collection_key=lambda name: {"Quantum": "CQ"}.get(name),
         collection_names=lambda: {"CQ": "Quantum"},
     )

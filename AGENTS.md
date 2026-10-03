@@ -51,6 +51,8 @@ zotkit find --any TEXT [--abstract TEXT]  # metadata-wide (title+abstract+creato
                                      #   tags+extra); filters AND together. Non-
                                      #   visible matches get a `hit: field "..."` line.
                                      #   Existence check before create: --any <lastname>
+                                     #   1st call downloads the library; later calls
+                                     #   use a version-checked cache (still complete)
 zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
                                      #   unknown key -> one stderr line + exit 1
                                      #   (--verbose for the full API exception)

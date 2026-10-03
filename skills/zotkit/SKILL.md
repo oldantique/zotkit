@@ -44,6 +44,11 @@ zotkit find --abstract "surface code"      # abstract only (when --any is too no
 #   search — find covers metadata; a zero hit on an author name means not in the
 #   library. A zero hit on a CONCEPT term does NOT: some stored abstracts are
 #   short publisher one-liners that omit the paper's key terms.
+#   Speed: the first find/audit on a machine downloads the whole library (can take
+#   10–20 s for a few hundred items). After that, a local cache reconciled against
+#   the server makes calls take seconds, with no loss of completeness. Don't treat
+#   a slow first call as a hang. For a batch of new papers, `create`'s dry run
+#   already checks every item for duplicates (DOI, then title) in one pass.
 
 # look items up by key (read-only)
 zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id

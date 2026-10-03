@@ -42,6 +42,8 @@ README — keep docs and code consistent with it.
   VoR gate, the "source has no abstract" note + its status invariant,
   `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing),
   `test_find.py` (--any/--abstract matching, hit annotations, snippet shape),
+  `test_cache.py` (version-map reconciliation: add/change/delete, chunking,
+  corrupt-file and disabled fallbacks),
   `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
   `test_show.py` (one-line format, sanitized errors, --verbose),
   `test_export.py` (_rekey + provenance header + faked HTTP),
@@ -92,6 +94,12 @@ README — keep docs and code consistent with it.
   summary counts and everything downstream reads them, so a *reporting-only*
   finding (e.g. "the source has no abstract either") gets a note — never a new
   status, bucket, or exit code.
+- `zotkit/cache.py` — local cache of whole-library listings, reconciled against
+  the server's `format=versions` map on every call (ADR-0004). Anything that needs
+  every top-level item/attachment/collection goes through `Zot.listing(kind)`,
+  never `z.everything(z.top())` directly. Invariant: a cached answer must be as
+  complete as a fresh one (`find`'s zero hits are trusted), so no TTL and no
+  serving stale data on error.
 - `zotkit/export.py` — BibTeX export. Cite keys are ALWAYS rewritten to the
   Zotero item key (that's the command's purpose); entries are fetched raw over
   the Web API on purpose — do not "simplify" to pyzotero's `format='bibtex'`,

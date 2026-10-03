@@ -330,14 +330,17 @@ This project is not affiliated with or endorsed by Zotero.
 
 ## Limits & roadmap
 
-- `find` downloads the whole library and filters it client-side. That's by design:
-  server-side `q=` search has unreliable index coverage, and `find`'s zero-hit
-  answers must be trustworthy. The cost is transfer, about 0.5 MB of item JSON per
-  100 items, so each call takes seconds per hundred items (more on a slow link to
-  api.zotero.org). A few hundred items can take 10–20 s, and thousands can take
-  minutes. Every call re-downloads, so a loop of `find` calls pays that cost each
-  time. `create`'s dry run checks a whole batch for duplicates (DOI, then title)
-  against a single listing.
+- `find` filters the whole library client-side. That's by design: server-side
+  `q=` search has unreliable index coverage, and `find`'s zero-hit answers must be
+  trustworthy. The listing is cached locally and reconciled against the server's
+  version map on every call ([ADR-0004](docs/adr/0004-version-map-listing-cache.md)),
+  so only changed items are downloaded. A cached answer is as complete as a fresh
+  one. The **first** call downloads everything, about 0.5 MB of item JSON per 100
+  items, which can take 10–20 s for a few hundred items on a slow link. After that,
+  a call on an unchanged library takes a couple of seconds. The same cache serves
+  `audit` and `create`'s dedup. It lives in `~/.cache/zotkit` (`%LOCALAPPDATA%\zotkit`
+  on Windows; honors `$XDG_CACHE_HOME`) and holds your items' metadata, abstracts
+  included. Set `ZOTKIT_CACHE=0` to turn it off.
 - Group libraries should work for item operations (untested); WebDAV file sync is
   personal-libraries-only (a Zotero limitation).
 - `--doi`/`--arxiv` import covers arXiv + CrossRef; DataCite-only DOIs are not

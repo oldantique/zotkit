@@ -26,8 +26,8 @@ BUCKETS = {
 def audit(zot) -> dict[str, Any]:
     """→ {"total", "keys", "buckets": {bucket: [key, …]}} over every
     top-level scholarly item, in library order."""
-    tops = zot.z.everything(zot.z.top())
-    atts = zot.z.everything(zot.z.items(itemType="attachment"))
+    tops = zot.listing("top")
+    atts = zot.listing("attachments")
     pdf_parents = {a["data"].get("parentItem") for a in atts
                    if a["data"].get("contentType") == "application/pdf"}
     keys: list[str] = []

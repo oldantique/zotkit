@@ -368,7 +368,7 @@ def main(argv=None):
             # dedup check --apply will. One library fetch per invocation.
             doi_map, title_map = ({}, {})
             if not a.no_dedup:
-                doi_map, title_map = dedup_maps(zot.z.everything(zot.z.top()))
+                doi_map, title_map = dedup_maps(zot.listing("top"))
             dups = 0
             for d in items:
                 problems = lint_tags(d.get("tags", []), conventions=zot.conventions,

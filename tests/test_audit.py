@@ -27,10 +27,8 @@ ATTS = [
 
 
 def _fixture_zot():
-    return types.SimpleNamespace(z=types.SimpleNamespace(
-        everything=lambda x: x,
-        top=lambda: list(TOPS),
-        items=lambda itemType=None: list(ATTS)))
+    return types.SimpleNamespace(
+        listing=lambda kind: list({"top": TOPS, "attachments": ATTS}[kind]))
 
 
 def test_audit_buckets():
