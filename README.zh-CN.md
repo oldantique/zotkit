@@ -84,7 +84,9 @@ zotkit abstract --key AB12CD34 --source cnki --file abs.txt
 zotkit attach --key AB12CD34 --pdf 论文.pdf   # 上传 PDF
 zotkit fetch --key AB12CD34 --out downloads   # 下载 PDF(不给 --out 时默认存到
                                          #   ./downloads;若当前目录在 git 仓库里会
-                                         #   提示改用仓库外的明确路径)
+                                         #   提示改用仓库外的明确路径);--key 也可以是
+                                         #   附件自己的 key(只下该文件并注明父条目);
+                                         #   没下到任何文件时说明原因并以退出码 1 结束
 zotkit export --key AB12CD34 EF56GH78 -o refs.bib
                                          # 导出 BibTeX(cite key 一律改写成
                                          #   Zotero item key;key 也可从 stdin 逐行给)

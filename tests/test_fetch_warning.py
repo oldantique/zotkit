@@ -73,7 +73,8 @@ def test_fetch_prints_absolute_paths(tmp_path, monkeypatch, capsys):
     saved.write_text("x", encoding="utf-8")
 
     fake = types.SimpleNamespace(
-        fetch=lambda k, out: [Path("out") / "paper.pdf"],
+        fetch_detail=lambda k, out: {"saved": [Path("out") / "paper.pdf"],
+                                     "found": 1, "attachment": None},
         find=lambda *a, **k: [],
     )
     monkeypatch.setattr(cli, "Zot", lambda *a, **k: fake)

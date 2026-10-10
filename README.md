@@ -222,6 +222,12 @@ repository, it warns on stderr and suggests an explicit destination: loose PDF
 copies committed into a repo break a library-of-record setup, where the library is
 the one place a file lives.
 
+`--key` takes an item key or an attachment's own key (as seen in WebDAV filenames,
+`attach` output, or Zotero links). Given an attachment key, `fetch` downloads that
+one file and notes its parent on stderr. When nothing is saved, it says why and
+exits 1: the item has no stored file attachments, the downloads failed, or the key
+doesn't exist. Scripts can rely on the exit code.
+
 ### Enriching existing items
 
 `zotkit enrich --key K [K …]` completes incomplete items — missing abstracts,

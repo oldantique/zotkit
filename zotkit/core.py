@@ -502,14 +502,30 @@ class Zot:
         return any(k["data"].get("itemType") == "attachment"
                    for k in self.z.children(item_key))
 
-    def fetch(self, item_key: str, out_dir: str | os.PathLike = "downloads") -> list[Path]:
-        """Download an item's attachment files (from WebDAV when configured,
-        otherwise from Zotero Storage); returns saved paths."""
+    def file_attachments(self, key: str) -> tuple[list[dict], dict | None]:
+        """→ (attachments with a stored file to download, the item itself if
+        `key` IS an attachment). Agents pick up attachment keys from WebDAV
+        filenames, attach output, and Zotero links. An attachment has no
+        file-bearing children, so `fetch` used to report "0 files" for one.
+        The item is only looked up when the children list has no files, so
+        the normal path costs no extra request."""
+        atts = [ch for ch in self.z.children(key)
+                if ch["data"].get("itemType") == "attachment" and ch["data"].get("filename")]
+        if atts:
+            return atts, None
+        it = self.z.item(key)
+        if it["data"].get("itemType") == "attachment":
+            return ([it] if it["data"].get("filename") else []), it
+        return [], None
+
+    def fetch_detail(self, item_key: str, out_dir: str | os.PathLike = "downloads") -> dict:
+        """`fetch`, plus what the CLI needs to explain itself:
+        {"saved": [Path], "found": n file attachments, "attachment": the item
+        if `item_key` was an attachment key, else None}."""
+        atts, self_att = self.file_attachments(item_key)
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
         saved: list[Path] = []
-        atts = [ch for ch in self.z.children(item_key)
-                if ch["data"].get("itemType") == "attachment" and ch["data"].get("filename")]
         if "WEBDAV_URL" not in self.env:
             for ch in atts:
                 try:
@@ -517,16 +533,22 @@ class Zot:
                     saved.append(out / ch["data"]["filename"])
                 except Exception:
                     continue
-            return saved
-        base, auth = self._webdav()
-        with httpx.Client(auth=auth, timeout=120) as c:
-            for ch in atts:
-                r = c.get(f"{base}/{ch['key']}.zip")
-                if r.status_code != 200:
-                    continue
-                zipfile.ZipFile(io.BytesIO(r.content)).extractall(out)
-                saved.append(out / ch["data"]["filename"])
-        return saved
+        else:
+            base, auth = self._webdav()
+            with httpx.Client(auth=auth, timeout=120) as c:
+                for ch in atts:
+                    r = c.get(f"{base}/{ch['key']}.zip")
+                    if r.status_code != 200:
+                        continue
+                    zipfile.ZipFile(io.BytesIO(r.content)).extractall(out)
+                    saved.append(out / ch["data"]["filename"])
+        return {"saved": saved, "found": len(atts), "attachment": self_att}
+
+    def fetch(self, item_key: str, out_dir: str | os.PathLike = "downloads") -> list[Path]:
+        """Download an item's attachment files (from WebDAV when configured,
+        otherwise from Zotero Storage); returns saved paths. `item_key` may
+        also be an attachment's own key: that one file is downloaded."""
+        return self.fetch_detail(item_key, out_dir)["saved"]
 
     # ---------- backup ----------
     def backup(self, out_dir: str | os.PathLike | None = None) -> Path:

@@ -153,6 +153,13 @@ zotkit fetch --title "size and value" --out "$(mktemp -d)"
 #   land in ./downloads, and if the current directory is inside a repo the tool warns:
 #   loose PDF copies committed into a repo break the library-of-record setup (the
 #   library is the one place a file lives). Saved paths are printed absolute.
+#   --key accepts an attachment's own key too (from a WebDAV filename, attach
+#   output, or a Zotero link): it fetches that file and prints
+#     note: <ATTKEY> is an attachment of <PARENT>; fetching this attachment's file
+#   Use <PARENT> for anything item-level (show, tag, enrich). If nothing is saved,
+#   the reason is on stderr and the exit code is 1: "has no stored file
+#   attachments" means there is no PDF in the library to fetch (attach one, don't
+#   retry).
 
 # organize
 zotkit tag <itemKey> topic:qaoa prio:high      # add (validated); --rm to remove

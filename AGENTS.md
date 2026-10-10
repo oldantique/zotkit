@@ -77,6 +77,9 @@ zotkit abstract --key K --source SLUG   # store an OWNER-PROVIDED abstract with
 zotkit attach --from x.created.json --all
 zotkit fetch --key KEY --out downloads   # prefer an explicit --out OUTSIDE any git
                                      #   repo (default ./downloads; it warns in a repo)
+                                     #   KEY may be an attachment key (fetches that
+                                     #   file, notes the parent); nothing saved ->
+                                     #   reason on stderr + exit 1
 zotkit export --key K [K...] [-o refs.bib]   # BibTeX; cite key = Zotero item key
 zotkit tag KEY topic:foo | zotkit status KEY read | zotkit move KEY "Collection"
 zotkit backup | zotkit lint tag...

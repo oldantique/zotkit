@@ -62,6 +62,22 @@ _FETCH_REPO_WARNING = (
 )
 
 
+def _fetch_notes(key: str, r: dict) -> None:
+    """stderr lines explaining a fetch result that isn't "the item's files"."""
+    att = r["attachment"]
+    if att is not None:
+        parent = att["data"].get("parentItem")
+        whose = f"an attachment of {parent}" if parent else "a standalone attachment"
+        print(f"note: {key} is {whose}; fetching this attachment's file",
+              file=sys.stderr)
+    if r["found"] == 0:
+        what = "has no stored file" if att is not None else "has no stored file attachments"
+        print(f"error: {key} {what}", file=sys.stderr)
+    elif not r["saved"]:
+        print(f"error: {key}: {r['found']} file attachment(s) found, none could be "
+              "downloaded", file=sys.stderr)
+
+
 def _fetch_out_dir(out, cwd: Path) -> str:
     """Resolve `fetch --out`, warning when the implicit default lands in a repo."""
     if out is not None:
@@ -581,11 +597,22 @@ def main(argv=None):
     elif a.cmd == "fetch":
         out = _fetch_out_dir(a.out, Path.cwd())
         keys = [a.key] if a.key else [r["key"] for r in zot.find(a.title, None, a.collection)]
+        if not keys:
+            print("error: no items match", file=sys.stderr)
+            return 1
         n = 0
         for k in keys:
-            for p_ in zot.fetch(k, out):
+            try:
+                r = zot.fetch_detail(k, out)
+            except Exception as e:  # unknown key: one safe line, no library ID
+                print(f"error: {k}: {_short_api_error(e)}", file=sys.stderr)
+                continue
+            _fetch_notes(k, r)
+            for p_ in r["saved"]:
                 print(f"  saved: {Path(p_).resolve()}"); n += 1
         print(f"downloaded {n} file(s) to {Path(out).resolve()}")
+        if n == 0:  # "0 files, exit 0" was easy to miss in scripts
+            return 1
 
     elif a.cmd == "tag":
         if a.rm:
