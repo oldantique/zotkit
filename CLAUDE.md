@@ -28,10 +28,16 @@ README — keep docs and code consistent with it.
 3. Commit, push to `main`.
 4. Create the GitHub release via REST — `gh release create` has given a spurious
    scope error here, the API works:
-   `gh api repos/oldantique/zotkit/releases -X POST -f tag_name=vX.Y.Z -f name=vX.Y.Z -f body='...'`
+   `gh api repos/oldantique/zotkit/releases -X POST -f tag_name=vX.Y.Z -f name=vX.Y.Z -F body=@notes.md`
+   (draft the body in a file and leak-check it first; a release body is public)
 5. `.github/workflows/publish.yml` then publishes to PyPI automatically via
    **Trusted Publishing** (no tokens anywhere). Tags are plain `vX.Y.Z`.
-6. Verify: `pipx run --spec zotkit==X.Y.Z zotkit --version` once PyPI updates.
+6. Verify: `pipx run --spec zotkit==X.Y.Z --no-cache --pip-args="--no-cache-dir" zotkit --version`
+   once the publish run succeeds. Without `--no-cache-dir`, pip can reuse a stale
+   index and say "no matching distribution" for a version PyPI already serves. If
+   the publish fails (v0.9.0: Windows-only test), don't move the tag. Fix, release
+   the next patch version, and mark the failed release's body as not on PyPI.
+7. Close the GitHub issues the release shipped, with a comment naming the version.
 
 ## Tests
 
