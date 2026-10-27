@@ -320,3 +320,79 @@ def test_item_type_without_abstract_field_refused():
     with pytest.raises(md.MetadataError, match="no abstract field"):
         enrich.set_abstract(z, "K1", "x", "manual")
     assert z.z.updated is None
+
+
+# ---------- plan_enrich: journal abbreviation + issue-date ----------
+
+JA = dict(PRA_LIBRARY_ITEM, journalAbbreviation="")
+
+
+def _with_table(monkeypatch, **table):
+    from zotkit import journals
+    monkeypatch.setattr(journals, "_registered", table)
+
+
+def _abbr_plan(monkeypatch, item, fetched=PRA_ITEM, **kw):
+    return _plan(monkeypatch, item, fetched, rebuild=False)
+
+
+def test_registered_form_fills_an_empty_abbreviation(monkeypatch):
+    _with_table(monkeypatch, **{"physical review applied": "Phys. Rev. Appl."})
+    p = _abbr_plan(monkeypatch, JA)
+    assert p["fills"]["journalAbbreviation"] == "Phys. Rev. Appl."
+    assert p["status"] == "plan"
+
+
+def test_registered_form_replaces_a_nonstandard_one(monkeypatch):
+    _with_table(monkeypatch, **{"physical review applied": "Phys. Rev. Appl."})
+    p = _abbr_plan(monkeypatch, dict(JA, journalAbbreviation="Phys Rev Applied"))
+    assert p["fills"]["journalAbbreviation"] == "Phys. Rev. Appl."
+    assert any("→ 'Phys. Rev. Appl.' (registered" in n for n in p["notes"])
+
+
+def test_rule_derived_candidate_never_replaces_a_stored_value(monkeypatch, tmp_path):
+    ltwa = tmp_path / "ltwa.tsv"
+    ltwa.write_text("WORD\tABBREVIATION\tLANGUAGES\nphysical\tphys.\tEnglish\n"
+                    "review\trev.\tEnglish\napplied\tappl.\tEnglish\n", encoding="utf-8")
+    monkeypatch.setenv("ZOTKIT_LTWA", str(ltwa))
+    p = _abbr_plan(monkeypatch, dict(JA, journalAbbreviation="Phys. Rev. Applied"))
+    assert "journalAbbreviation" not in p["fills"]
+    assert any("rule-derived candidate 'Phys. Rev. Appl.' — left as is" in n
+               for n in p["notes"])
+    p = _abbr_plan(monkeypatch, JA)                       # …but fills an empty one
+    assert p["fills"]["journalAbbreviation"] == "Phys. Rev. Appl."
+    assert any("candidate (rule-derived), not a registered form" in n
+               for n in p["notes"])
+    p = _abbr_plan(monkeypatch, JA, dict(PRA_ITEM, journalAbbreviation="Phys Rev Appl"))
+    assert p["fills"]["journalAbbreviation"] == "Phys Rev Appl"  # CrossRef's beats a guess
+    # fetch_doi already filled CrossRef's empty value with the candidate: still noted
+    p = _abbr_plan(monkeypatch, JA, dict(PRA_ITEM, journalAbbreviation="Phys. Rev. Appl."))
+    assert any("candidate (rule-derived)" in n for n in p["notes"])
+
+
+def test_abbreviation_fix_needs_no_identifier(monkeypatch):
+    _with_table(monkeypatch, **{"physical review applied": "Phys. Rev. Appl."})
+    monkeypatch.setattr(md, "fetch_doi", lambda doi: pytest.fail("must not fetch"))
+    p = enrich.plan_enrich(_read_only_zot(dict(JA, DOI="")), "KEY00001")
+    assert p["status"] == "plan"
+    assert p["fills"] == {"journalAbbreviation": "Phys. Rev. Appl."}
+    assert any("needs-identifier" in n and "journal abbreviation only" in n
+               for n in p["notes"])
+
+
+def test_issue_date_line_is_appended_when_years_differ(monkeypatch):
+    fetched = dict(PRA_ITEM, extra="issue-date: 2022-01")
+    p = _abbr_plan(monkeypatch, dict(JA, date="2021-12-20"), fetched)
+    assert "issue-date: 2022-01" in p["extra_lines"]
+    p = _abbr_plan(monkeypatch, dict(JA, date="2022-01-03"), fetched)
+    assert not any(l.startswith("issue-date") for l in p["extra_lines"])
+    p = _abbr_plan(monkeypatch, dict(JA, date="2021-12-20",
+                                     extra="issue-date: 2022"), fetched)
+    assert not any(l.startswith("issue-date") for l in p["extra_lines"])  # append-only
+
+
+def test_issue_date_never_lands_on_a_preprint(monkeypatch):
+    fetched = dict(PRA_ITEM, extra="issue-date: 2022-01")
+    p = _abbr_plan(monkeypatch, dict(SSRN_PREPRINT, DOI="10.1103/x", date="2021"),
+                   fetched)
+    assert not any(l.startswith("issue-date") for l in p["extra_lines"])

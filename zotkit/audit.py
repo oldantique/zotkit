@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import journals
 from .enrich import _STAMP, _find_arxiv_id
 
 # top-level entries that aren't scholarly records
@@ -20,18 +21,30 @@ BUCKETS = {
     "missing-pdf": "missing PDF attachment",
     "unstamped-abstract": "abstract without abstract-source stamp",
     "stale-stamp": "abstract-source stamp but no abstract",
+    "journal-abbreviation": "journal abbreviation to fix (enrich can)",
 }
 
 
 def audit(zot) -> dict[str, Any]:
-    """→ {"total", "keys", "buckets": {bucket: [key, …]}} over every
-    top-level scholarly item, in library order."""
+    """→ {"total", "keys", "buckets": {bucket: [key, …]},
+    "journal_abbreviation": {key: {stored, expected, source, unknown}},
+    "journal_unverified": {publicationTitle: {keys, stored, candidate,
+    source, unknown}}} over every top-level scholarly item, in library order.
+
+    The journal-abbreviation bucket is what `enrich` would change: a stored
+    value that differs from the registered form, or an empty one a candidate
+    can fill. Every journal without a registered form is listed under
+    journal_unverified — whatever is stored, even a value equal to the
+    candidate, since agreeing with a rule-derived guess proves nothing. That
+    list is the "still to verify against the ISSN Portal" worklist."""
     tops = zot.listing("top")
     atts = zot.listing("attachments")
     pdf_parents = {a["data"].get("parentItem") for a in atts
                    if a["data"].get("contentType") == "application/pdf"}
     keys: list[str] = []
     buckets: dict[str, list[str]] = {b: [] for b in BUCKETS}
+    abbrev: dict[str, dict[str, Any]] = {}
+    unverified: dict[str, dict[str, Any]] = {}
     for it in tops:
         d = it["data"]
         if d.get("itemType") in _NON_SCHOLARLY:
@@ -50,4 +63,23 @@ def audit(zot) -> dict[str, Any]:
             buckets["unstamped-abstract"].append(key)
         if stamped and not abstract:
             buckets["stale-stamp"].append(key)
-    return {"total": len(keys), "keys": keys, "buckets": buckets}
+        title = (d.get("publicationTitle") or "").strip()
+        if journals.has_field(d) and title and not journals.is_non_latin(title):
+            want = journals.check(d)
+            stored = (d.get("journalAbbreviation") or "").strip()
+            registered = want is not None and want.source == journals.REGISTERED
+            if want and stored != want.value and (registered or not stored):
+                buckets["journal-abbreviation"].append(key)
+                abbrev[key] = {"stored": stored, "expected": want.value,
+                               "source": want.source, "unknown": list(want.unknown)}
+            if not registered:
+                u = unverified.setdefault(title, {
+                    "keys": [], "stored": [],
+                    "candidate": want.value if want else None,
+                    "source": want.source if want else None,
+                    "unknown": list(want.unknown) if want else []})
+                u["keys"].append(key)
+                if stored and stored not in u["stored"]:
+                    u["stored"].append(stored)
+    return {"total": len(keys), "keys": keys, "buckets": buckets,
+            "journal_abbreviation": abbrev, "journal_unverified": unverified}

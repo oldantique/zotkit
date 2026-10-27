@@ -56,6 +56,9 @@ zotkit find --any vaswani                # 全字段搜索:标题+摘要+作者+
 zotkit show AB12CD34 EF56GH78            # 按 key 查条目,一行一条(只读;
                                          #   --json 输出完整数据;key 不存在则
                                          #   报错到 stderr 且退出码为 1)
+zotkit cite AB12CD34 EF56GH78            # 短引用,一行一条:"Laughlin, Phys. Rev.
+                                         #   Lett. 50, 1395 (1983)";只读、本地;
+                                         #   年份优先取 Extra 里的 issue-date
 zotkit create --arxiv 2401.12345         # 抓 arXiv 元信息建条目(默认演练;
                                          #   --apply 执行并自动下载附上 PDF)
                                          # 已正式发表(带期刊 DOI)的文章会自动
@@ -79,9 +82,18 @@ zotkit enrich --key AB12CD34             # 就地补全已有条目的缺失字�
                                          #   对不上就拒绝(NEEDS OWNER),不写入)
                                          #   item key 永不改变——下游引用不受影响
 zotkit enrich --missing abstract --apply # 批量:只跑缺摘要的条目(还有 --missing doi
-                                         #   / --all;限速在内部,调用方无需分批睡眠)
+                                         #   / abbreviation / --all;限速在内部,
+                                         #   调用方无需分批睡眠)
 zotkit audit                             # 只读体检报告:缺摘要/缺 DOI/缺 PDF/
-                                         #   abstract-source 戳的健康度(--json 给 agent)
+                                         #   abstract-source 戳的健康度/期刊缩写
+                                         #   (--json 给 agent)
+                                         # 期刊缩写一律存带点的 ISO 4。只有登记形式
+                                         #   (随包的表,或 ZOTKIT_JOURNALS 指向的
+                                         #   自己核实过的表)能覆盖已存的值;按 LTWA
+                                         #   规则推出的只是候选,只填空字段。zotkit
+                                         #   不附带 LTWA,需要的话自己从 issn.org 下载,
+                                         #   用 ZOTKIT_LTWA 指过去。audit 会把没有
+                                         #   登记形式的期刊都列为「未核实」
 zotkit abstract --key AB12CD34 --source cnki --file abs.txt
                                          # 粘贴摘要并记录出处(owner 工具;文本自动
                                          #   清洗;已有摘要需 --force 才会替换)

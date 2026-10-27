@@ -92,6 +92,8 @@ zotkit find --id 2401.12345 10.1038/nature14539   # already in the library? one 
                                             #   per id: KEY or "absent" (local, fast)
 zotkit show AB12CD34 EF56GH78               # one line per key (read-only);
                                             #   --json for the full item data
+zotkit cite AB12CD34 EF56GH78               # short citations: "Laughlin, Phys. Rev.
+                                            #   Lett. 50, 1395 (1983)"
 
 zotkit create --arxiv 2401.12345            # fetch arXiv metadata, dry-run preview
 zotkit create --arxiv 2401.12345 --apply --tags field:ai   # create + download & attach the PDF
@@ -180,6 +182,42 @@ gates `enrich --rebuild-record`. Items whose abstract zotkit
 wrote also carry an `abstract-source: arxiv|crossref` line in Extra, naming where
 it actually came from.
 
+**Journal abbreviations**: `journalAbbreviation` is stored as dotted ISO 4
+("Phys. Rev. Lett."). Periods can be stripped when rendering but not reliably
+added back, and desktop citation styles, word-processor plugins and scripts read
+the stored value. CrossRef's own short title is unreliable: undotted for some
+publishers, the full title or empty for others. So zotkit uses one normaliser for
+`create`, `enrich`, `audit` and `cite`, with three sources in order of authority:
+
+1. **Registered**: the abbreviation registered by the ISSN network (the
+   "abbreviated key-title"), from a table shipped with zotkit. You can add rows
+   you have verified yourself in a local file of the same format
+   (`title<TAB>abbreviation`, one per line) named by `ZOTKIT_JOURNALS`; your rows
+   win. Only a registered form may replace a stored value.
+2. **Title**: a journal title that is visibly abbreviated already ("Appl. Phys.
+   Lett.") is taken as written.
+3. **Rule-derived**: ISO 4 word rules over the LTWA (List of Title Word
+   Abbreviations). zotkit does **not** ship the LTWA. The ISSN International
+   Centre maintains it and reserves its database rights. To enable this source,
+   download the list yourself from the [LTWA
+   page](https://www.issn.org/services/online-services/access-to-the-ltwa/) on
+   issn.org and point `ZOTKIT_LTWA` at the file. A rule-derived value is a
+   **candidate**, not a registered form. Word-by-word output sometimes differs
+   from the registered abbreviation ("Comptes Rendus Phys." vs the registered
+   "C. R. Phys."), and a word the LTWA doesn't list stays whole and is reported.
+
+Title and rule-derived values are both candidates. A candidate only fills an
+empty field, never replaces a stored value, and `create` prints a
+`candidate (rule-derived)` note when it stores one. A non-Latin-script title
+gets no abbreviation.
+
+**Issue year**: `date` often holds the online-first date, which can precede the
+volume's year (online December 2022, January 2023 issue). When CrossRef's print
+issue date has a different year, `create` and `enrich` append
+`issue-date: YYYY[-MM[-DD]]` to Extra, on journal articles and conference papers
+only, never preprints. `cite` uses that year. The key is deliberately not a CSL
+variable (`issued:` would change how the desktop client cites the item).
+
 ### Looking items up: `find`, `show` and `export`
 
 `zotkit find --any TEXT` matches a case-insensitive substring across title,
@@ -211,6 +249,15 @@ the remaining keys still print. This deliberately supersedes requests for a
 `find --key` flag and a `verify --manifest` subcommand: verifying a manifest is a
 loop over `show` on the project side, and manifest-file parsing is too
 project-specific to belong in zotkit.
+
+`zotkit cite K [K …]` prints one short citation per key, e.g.
+`Laughlin, Phys. Rev. Lett. 50, 1395 (1983)`. It shows the first author's surname
+(`A & B` for two authors, `A et al.` beyond), the ISO 4 journal from the
+normaliser above (else the stored abbreviation), volume, first page or article
+number, and the issue year when an `issue-date:` line records one. Preprints cite
+as `Author, arXiv:<id> (year)`. Keys can also come on stdin. It is read-only and
+local (the cached listing, no CrossRef). An unknown key errors on stderr and exits
+1, while the other keys still print.
 
 `zotkit export --key K [K …]` emits BibTeX for those items, to stdout or to `-o
 refs.bib`; keys are also accepted on stdin, one per line, so it composes with
@@ -273,13 +320,28 @@ because a wrong DOI would rewrite the record in place. It also refuses a
 repository DOI, an item that isn't a preprint, and an item that already carries a
 different journal DOI.
 
+`journalAbbreviation` is the one field enrich may correct rather than only fill.
+It replaces a stored value only with a registered form (see "Journal
+abbreviations" above). A candidate fills an empty field only when CrossRef has
+nothing for it. This part needs no DOI or arXiv id, since it reads the journal
+title. Enrich also appends a missing `issue-date:` line.
+
 Instead of `--key`, `--all` runs over every top-level scholarly item and
-`--missing abstract` / `--missing doi` (repeatable) over just the gaps —
-batching and arXiv/CrossRef rate limiting stay internal, so no pacing or
-batch-splitting on the caller's side. **`zotkit audit`** is the read-only
-companion: counts and key lists for missing abstracts, missing DOI/arXiv id,
-missing PDF attachments, and `abstract-source` stamp hygiene (`--json` for
-agents).
+`--missing abstract` / `--missing doi` / `--missing abbreviation` (repeatable)
+over just the gaps — batching and arXiv/CrossRef rate limiting stay internal, so
+no pacing or batch-splitting on the caller's side. **`zotkit audit`** is the
+read-only companion: counts and key lists for missing abstracts, missing DOI/arXiv
+id, missing PDF attachments, `abstract-source` stamp hygiene, and journal
+abbreviations (`--json` for agents). The journal check has two parts:
+
+- **To fix:** what enrich would change, each labelled `registered` or
+  `candidate (rule-derived)`.
+- **Unverified:** every journal without a registered form, whatever is stored.
+  This holds even when the stored value equals the rule-derived candidate,
+  because agreeing with a guess proves nothing. That list is the worklist for
+  checking abbreviations on the ISSN Portal (then add them to `ZOTKIT_JOURNALS`).
+  Items saved by the desktop client or the browser connector bypass zotkit, so a
+  periodic `audit` is how they get caught.
 
 For text enrich *can't* fetch — CNKI, publisher pages, your own summary —
 **`zotkit abstract --key K --source <slug>`** stores a pasted abstract

@@ -124,6 +124,18 @@ def _short_api_error(e: Exception) -> str:
     return f"not found ({code})" if code == 404 else f"API error ({code})"
 
 
+def _note_abbreviation_candidate(item: dict) -> None:
+    """Say so when create stores an unregistered journal abbreviation (it only
+    does that for a field CrossRef left empty): a candidate, not certified."""
+    from .journals import REGISTERED, check
+    want = check(item)
+    if (want and want.source != REGISTERED
+            and item.get("journalAbbreviation") == want.value):
+        lacks = f"; LTWA lacks: {', '.join(want.unknown)}" if want.unknown else ""
+        print(f"note: journalAbbreviation {want.value!r} is a candidate "
+              f"({want.source}), not a registered form{lacks}")
+
+
 def _find_ids(zot, a) -> int:
     """`find --id`: one stdout line per input, in input order, so each answer
     pairs with its id by position and by text. Absent is an answer, not an
@@ -267,6 +279,14 @@ def main(argv=None):
                    help="on errors, also print the full API exception "
                         "(includes the request URL with your library ID)")
 
+    p = sub.add_parser("cite", help="one-line short citation per item key, e.g. "
+                                    "'Laughlin, Phys. Rev. Lett. 50, 1395 (1983)' "
+                                    "(read-only, local)")
+    p.add_argument("keys", nargs="*", metavar="KEY",
+                   help="item keys (default: read them from stdin, one per line)")
+    p.add_argument("--style", choices=["short"], default="short",
+                   help="citation style (only 'short' so far)")
+
     p = sub.add_parser("create", help="create items from a JSON file, an arXiv id, "
                                       "or a DOI (dry unless --apply)")
     src = p.add_mutually_exclusive_group(required=True)
@@ -294,9 +314,12 @@ def main(argv=None):
     which.add_argument("--key", nargs="+", metavar="KEY")
     which.add_argument("--all", action="store_true",
                        help="every top-level scholarly item")
-    which.add_argument("--missing", action="append", choices=["abstract", "doi"],
-                       metavar="{abstract,doi}",
-                       help="items missing this (repeatable; union)")
+    which.add_argument("--missing", action="append",
+                       choices=["abstract", "doi", "abbreviation"],
+                       metavar="{abstract,doi,abbreviation}",
+                       help="items missing this (repeatable; union); "
+                            "abbreviation = journal abbreviation not ISO 4 "
+                            "(see audit)")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--rebuild-record", action="store_true",
                    help="also upgrade preprint items with a journal DOI to the "
@@ -322,7 +345,8 @@ def main(argv=None):
 
     p = sub.add_parser("audit", help="read-only health report: missing "
                                      "abstracts/identifiers/PDFs, "
-                                     "abstract-source stamp hygiene")
+                                     "abstract-source stamp hygiene, journal "
+                                     "abbreviations (to fix / unverified)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
 
     p = sub.add_parser("export", help="emit BibTeX for items, with each cite key "
@@ -386,6 +410,28 @@ def main(argv=None):
     elif a.cmd == "show":
         return _show(zot, a.keys, a.json, a.verbose)
 
+    elif a.cmd == "cite":
+        from .cite import short
+        keys = a.keys
+        if not keys:
+            if sys.stdin.isatty():
+                print("paste one item key per line, then Ctrl-D:", file=sys.stderr)
+            keys = [ln.strip() for ln in sys.stdin.read().splitlines() if ln.strip()]
+        if not keys:
+            print("error: no item keys given (cite K1 K2 … or pipe them on "
+                  "stdin, one per line)", file=sys.stderr)
+            return 1
+        items = {it["key"]: it["data"] for it in zot.listing("top")}
+        failed = 0
+        for key in keys:
+            if key in items:
+                print(short(items[key]))
+            else:
+                failed += 1
+                print(f"error: {key}: not a top-level item in the library",
+                      file=sys.stderr)
+        return 1 if failed else 0
+
     elif a.cmd == "create":
         pdfs: dict[str, tuple[str, str]] = {}  # title -> (arXiv id, pdf url)
         failures: list[tuple[str, str]] = []   # (identifier, why)
@@ -426,6 +472,7 @@ def main(argv=None):
                     item["collection"] = a.collection
                 if a.tags:
                     item["tags"] = [t.strip() for t in a.tags.split(",") if t.strip()]
+                _note_abbreviation_candidate(item)
             if not items:
                 return 1
         if not a.apply:
@@ -521,7 +568,8 @@ def main(argv=None):
             if a.all:
                 keys = rep["keys"]
             else:
-                bucket = {"abstract": "missing-abstract", "doi": "missing-identifier"}
+                bucket = {"abstract": "missing-abstract", "doi": "missing-identifier",
+                          "abbreviation": "journal-abbreviation"}
                 want = {k for m in a.missing for k in rep["buckets"][bucket[m]]}
                 keys = [k for k in rep["keys"] if k in want]  # library order
             print(f"selected {len(keys)} item(s) "
@@ -602,9 +650,29 @@ def main(argv=None):
             for b, label in BUCKETS.items():
                 ks = rep["buckets"][b]
                 print(f"\n{label}: {len(ks)}")
+                if b == "journal-abbreviation":
+                    for k in ks:
+                        j = rep["journal_abbreviation"][k]
+                        unk = (f"; LTWA lacks: {', '.join(j['unknown'])}"
+                               if j["unknown"] else "")
+                        tag = ("registered" if j["source"] == "registered"
+                               else f"candidate ({j['source']})")
+                        print(f"    {k}  {j['stored'] or '(empty)'!r} → "
+                              f"{j['expected']!r}  [{tag}{unk}]")
+                    continue
                 for i in range(0, len(ks), 8):
                     print("    " + " ".join(ks[i:i + 8]))
-            print("\nnext steps: zotkit enrich --missing abstract|doi; "
+            unv = rep["journal_unverified"]
+            print(f"\njournals without a registered abbreviation "
+                  f"(unverified, whatever is stored): {len(unv)}")
+            for title, u in sorted(unv.items()):
+                cand = (f"candidate {u['candidate']!r} ({u['source']})"
+                        if u["candidate"] else "no candidate (ZOTKIT_LTWA unset)")
+                unk = f"; LTWA lacks: {', '.join(u['unknown'])}" if u["unknown"] else ""
+                stored = ", ".join(map(repr, u["stored"])) or "(empty)"
+                print(f"    {title}  — stored {stored}; "
+                      f"{cand}{unk}; {len(u['keys'])} item(s)")
+            print("\nnext steps: zotkit enrich --missing abstract|doi|abbreviation; "
                   "zotkit abstract --key K --source <slug> for text "
                   "enrich can't fetch")
 

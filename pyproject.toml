@@ -32,3 +32,6 @@ zotkit = "zotkit.cli:main"
 
 [tool.setuptools]
 packages = ["zotkit"]
+
+[tool.setuptools.package-data]
+zotkit = ["data/*.tsv"]

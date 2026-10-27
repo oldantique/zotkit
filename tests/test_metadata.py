@@ -274,3 +274,72 @@ def test_batch_lookup_failure_keeps_preprint_with_warning(monkeypatch):
 def test_batch_bad_id_fails_alone_without_network():
     res = md.fetch_arxiv_batch(["!!not-an-id!!"])
     assert len(res) == 1 and "error" in res[0]
+
+
+# ---------- fetch_doi: journal abbreviation + issue-date line ----------
+# CrossRef is faked at md._get; the journal normaliser gets an injected table.
+
+def _crossref(monkeypatch, **msg):
+    base = {"type": "journal-article", "title": ["T"],
+            "author": [{"given": "A", "family": "B"}],
+            "container-title": ["Physical Review Letters"],
+            "short-container-title": ["Phys Rev Lett"],
+            "issued": {"date-parts": [[2022, 12, 20]]}}
+    base.update(msg)
+    resp = types.SimpleNamespace(status_code=200, json=lambda: {"message": base})
+    monkeypatch.setattr(md, "_get", lambda url, **kw: resp)
+    monkeypatch.setattr(md.journals, "_registered",
+                        {"physical review letters": "Phys. Rev. Lett."})
+
+
+def test_fetch_doi_writes_the_registered_abbreviation(monkeypatch):
+    _crossref(monkeypatch)
+    assert md.fetch_doi("10.1/x")["journalAbbreviation"] == "Phys. Rev. Lett."
+
+
+def test_fetch_doi_keeps_crossrefs_value_when_the_normaliser_has_no_opinion(monkeypatch):
+    _crossref(monkeypatch, **{"container-title": ["Unknown Letters"]})
+    assert md.fetch_doi("10.1/x")["journalAbbreviation"] == "Phys Rev Lett"
+
+
+def test_issue_date_line_when_the_issue_year_differs(monkeypatch):
+    _crossref(monkeypatch, **{"journal-issue": {"published-print": {"date-parts": [[2023, 1]]}}})
+    assert "issue-date: 2023-01" in md.fetch_doi("10.1/x")["extra"]
+
+
+def test_issue_date_falls_back_to_published_print(monkeypatch):
+    _crossref(monkeypatch, **{"published-print": {"date-parts": [[2023]]}})
+    assert "issue-date: 2023" in md.fetch_doi("10.1/x")["extra"]
+
+
+def test_no_issue_date_line_when_the_year_matches(monkeypatch):
+    _crossref(monkeypatch, **{"journal-issue": {"published-print": {"date-parts": [[2022, 12]]}}})
+    assert "issue-date" not in md.fetch_doi("10.1/x").get("extra", "")
+
+
+def test_no_issue_date_line_on_preprints(monkeypatch):
+    _crossref(monkeypatch, type="posted-content",
+              **{"published-print": {"date-parts": [[2023]]}})
+    assert "issue-date" not in md.fetch_doi("10.1/x").get("extra", "")
+
+
+def test_a_candidate_only_fills_an_empty_crossref_value(monkeypatch, tmp_path):
+    ltwa = tmp_path / "ltwa.tsv"
+    ltwa.write_text("WORD\tABBREVIATION\tLANGUAGES\nunknown\tunkn.\tEnglish\n"
+                    "letter\tlett.\tEnglish\n", encoding="utf-8")
+    monkeypatch.setenv("ZOTKIT_LTWA", str(ltwa))
+    _crossref(monkeypatch, **{"container-title": ["Unknown Letters"]})
+    assert md.fetch_doi("10.1/x")["journalAbbreviation"] == "Phys Rev Lett"
+    _crossref(monkeypatch, **{"container-title": ["Unknown Letters"],
+                              "short-container-title": []})
+    assert md.fetch_doi("10.1/x")["journalAbbreviation"] == "Unkn. Lett."
+
+
+def test_journal_record_upgrade_keeps_the_issue_date_line(monkeypatch):
+    _serve_feed(monkeypatch, "2401.00001",
+                "<arxiv:doi>10.1103/PhysRevLett.116.061102</arxiv:doi>")
+    monkeypatch.setattr(md, "fetch_doi",
+                        lambda doi: dict(PRL_ITEM, extra="issue-date: 2016-02"))
+    res = md.fetch_arxiv_batch(["2401.00001"])[0]
+    assert "issue-date: 2016-02" in res["item"]["extra"]
+    assert "arXiv: 2401.00001" in res["item"]["extra"]

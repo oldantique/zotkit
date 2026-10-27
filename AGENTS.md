@@ -62,6 +62,8 @@ zotkit find --id ID [ID...]          # existence check for arXiv ids/DOIs (or on
 zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
                                      #   unknown key -> one stderr line + exit 1
                                      #   (--verbose for the full API exception)
+zotkit cite KEY [KEY...]             # short citation per key (local, read-only):
+                                     #   "Laughlin, Phys. Rev. Lett. 50, 1395 (1983)"
 zotkit create --arxiv <id|url> ...   # fetch arXiv metadata; --apply attaches PDFs too
 zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
@@ -74,10 +76,15 @@ zotkit enrich --key K [K...]         # complete EXISTING items in place — neve
 zotkit enrich --key K --doi DOI --rebuild-record   # preprint → journal record when
                                      #   arXiv lacks the DOI; refused (NEEDS OWNER)
                                      #   unless title + first author match
-zotkit enrich --missing abstract|doi | --all   # batch enrich (rate limiting internal)
+zotkit enrich --missing abstract|doi|abbreviation | --all
+                                     # batch enrich (rate limiting internal)
                                      #   "NOTE abstract still missing: <source> has
                                      #   none" = source can't fill it, not "all fine"
-zotkit audit [--json]                # read-only library health report
+zotkit audit [--json]                # read-only library health report; journal
+                                     #   abbreviations: "registered" fixes vs
+                                     #   "candidate (rule-derived)", plus every
+                                     #   journal still unverified — a candidate is
+                                     #   never certified, don't present it as one
 zotkit abstract --key K --source SLUG   # store an OWNER-PROVIDED abstract with
                                      #   provenance; --force only on owner's say-so
 zotkit attach --from x.created.json --all

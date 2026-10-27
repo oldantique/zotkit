@@ -2,7 +2,7 @@
 name: zotkit
 description: >
   Use when the user wants to add, create, upload/attach, download/fetch, search, tag,
-  look up by item key, export BibTeX for, or organize references (papers, PDFs) in
+  look up by item key, cite, export BibTeX for, or organize references (papers, PDFs) in
   their Zotero library via the zotkit CLI —
   headless Zotero management through the Web API + WebDAV, no desktop app. Covers task
   recipes and safety rules. Requires zotkit installed and a configured .env (README).
@@ -75,6 +75,12 @@ zotkit show $(cat keys.txt) || echo "some keys are missing from the library"
 #   Errors are one sanitized stderr line (`error: KEY: not found (404)`) safe for
 #   CI logs; pass --verbose only when you need the full API exception.
 
+# short citations (read-only, local)
+zotkit cite AB12CD34 EF56GH78                  # one line per key, also keys on stdin
+#   → "Laughlin, Phys. Rev. Lett. 50, 1395 (1983)": first author (A & B; A et al.),
+#   ISO 4 journal, volume, first page/article number, issue year. Unknown key →
+#   stderr line + exit 1, the rest still print.
+
 # export BibTeX
 zotkit export --key AB12CD34 EF56GH78          # to stdout
 zotkit export --key AB12CD34 -o refs.bib       # or to a file
@@ -100,7 +106,8 @@ zotkit create --arxiv id1 id2 id3 --apply               # batch (space- or comma
 #   10.48550/*, SSRN 10.2139/*, bioRxiv, …) is NOT a journal DOI — those items
 #   stay preprints (SSRN's "SSRN Electronic Journal" is not a real journal),
 #   and the output states why. Do not "fix" either form by hand.
-#   Extra may also carry `abstract-source: arxiv|crossref` — leave that line alone
+#   Extra may also carry `abstract-source: arxiv|crossref` and `issue-date: …`
+#   lines — leave them alone
 zotkit create --doi 10.1038/nature14539 --apply --tags field:ai
 zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same way
 #   Check existence first with `find --id` (above). The dry run (same command,
@@ -146,10 +153,19 @@ zotkit enrich --key AB12CD34 --doi 10.1103/x.y --rebuild-record   # same, when a
 
 # batch enrich + library health
 zotkit audit                                   # read-only report: missing abstracts /
-zotkit audit --json                            #   DOIs / PDFs, abstract-source hygiene
+zotkit audit --json                            #   DOIs / PDFs, abstract-source hygiene,
+                                               #   journal abbreviations
 zotkit enrich --missing abstract --apply       # enrich only the gaps (also --missing doi,
-zotkit enrich --all                            #   repeatable; --all for everything)
+zotkit enrich --all                            #   --missing abbreviation; repeatable)
 #   batching + rate limits stay INTERNAL — never split the set or add sleeps
+#   journalAbbreviation is dotted ISO 4. Only a "registered" form (zotkit's table,
+#   or the user's own ZOTKIT_JOURNALS file) may replace a stored value. A
+#   "candidate (rule-derived)" from LTWA rules only fills an empty field. Audit's
+#   "unverified" list is every journal without a registered form, even when the
+#   stored value equals the candidate. Never tell the user a candidate is the
+#   official abbreviation, and don't hand-edit the field to match one.
+#   An `issue-date: YYYY-MM` line in Extra is zotkit's record of the print issue
+#   date (citation year) — leave it alone, like abstract-source.
 
 # store an abstract the user provides (CNKI, publisher page, their own words)
 zotkit abstract --key <itemKey> --source cnki --file abs.txt   # or pipe via stdin

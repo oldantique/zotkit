@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import __version__
+from . import __version__, journals
 
 # CrossRef's polite pool wants a reachable contact; $ZOTKIT_MAILTO overrides
 # the default (distributors of zotkit-based tools: please set your own).
@@ -362,12 +362,29 @@ def download_pdf(url: str, dest) -> None:
 
 # ---------- CrossRef DOI ----------
 
+def _date_parts(d: dict | None) -> str:
+    parts = (d or {}).get("date-parts", [[]])[0]
+    if not (parts and parts[0]):
+        return ""
+    return "-".join(f"{p:02d}" if i else str(p) for i, p in enumerate(parts))
+
+
 def _crossref_date(msg: dict) -> str:
     for k in ("issued", "published-print", "published-online", "created"):
-        parts = (msg.get(k) or {}).get("date-parts", [[]])[0]
-        if parts and parts[0]:
-            return "-".join(f"{p:02d}" if i else str(p) for i, p in enumerate(parts))
+        if _date_parts(msg.get(k)):
+            return _date_parts(msg.get(k))
     return ""
+
+
+def issue_date(msg: dict) -> str:
+    """The volume/issue date (print), which can trail the online-first date
+    that `date` gets: the citation year. '' when CrossRef has none."""
+    return (_date_parts((msg.get("journal-issue") or {}).get("published-print"))
+            or _date_parts(msg.get("published-print")))
+
+
+# item types that get an `issue-date:` Extra line (never preprints)
+ISSUE_DATE_TYPES = ("journalArticle", "conferencePaper")
 
 
 def fetch_doi(doi: str) -> dict:
@@ -423,10 +440,22 @@ def fetch_doi(doi: str) -> dict:
     container = _squash((msg.get("container-title") or [""])[0])
     if container:
         item[_CONTAINER_FIELD.get(itype, "publicationTitle")] = container
+    if itype == "journalArticle":
+        # a registered ISO 4 form (zotkit.journals) overrides CrossRef's short
+        # title, which is undotted for some publishers and the full title or
+        # empty for others; an unregistered candidate only fills an empty one
+        abbr = journals.normalise(container)
+        if abbr and (abbr.source == journals.REGISTERED
+                     or not item["journalAbbreviation"]):
+            item["journalAbbreviation"] = abbr.value
     if not item["title"]:
         raise MetadataError(f"CrossRef record for '{doi}' has no title — refusing to "
                             "create an empty item")
     item = {k: v for k, v in item.items() if v not in ("", [])}
     if item.get("abstractNote"):
         _add_extra(item, "abstract-source: crossref")
+    issued = issue_date(msg)
+    if (itype in ISSUE_DATE_TYPES and issued
+            and issued[:4] != item.get("date", "")[:4]):
+        _add_extra(item, f"issue-date: {issued}")
     return item

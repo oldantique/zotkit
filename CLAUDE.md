@@ -49,7 +49,9 @@ README — keep docs and code consistent with it.
   status invariant, `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing),
   `test_find.py` (--any/--abstract matching, hit annotations, snippet shape),
   `test_lookup.py` (`find --id`: id parsing, every place an item carries an
-  identifier, one line per input),
+  identifier, one line per input), `test_journals.py` (ISO 4 normaliser: source
+  order, LTWA word rules on a fixture — never the real LTWA, candidates vs
+  registered forms), `test_cite.py` (short-citation format, issue year),
   `test_cache.py` (version-map reconciliation: add/change/delete, chunking,
   corrupt-file and disabled fallbacks),
   `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
@@ -109,6 +111,13 @@ README — keep docs and code consistent with it.
   never `z.everything(z.top())` directly. Invariant: a cached answer must be as
   complete as a fresh one (`find`'s zero hits are trusted), so no TTL and no
   serving stale data on error.
+- `zotkit/journals.py` — the one ISO 4 journal-abbreviation normaliser (ADR-0005),
+  used by create/enrich/audit/cite. Invariant: only a *registered* form (the
+  shipped `zotkit/data/journal_abbreviations.tsv`, or a user's `ZOTKIT_JOURNALS`)
+  may replace a stored value or count as verified; LTWA-rule output is a
+  candidate that only fills empty fields. The LTWA itself is never committed or
+  shipped (ISSN database rights) — tests use a hand-written fixture, and the
+  table holds registered forms only, never rule output.
 - `zotkit/export.py` — BibTeX export. Cite keys are ALWAYS rewritten to the
   Zotero item key (that's the command's purpose); entries are fetched raw over
   the Web API on purpose — do not "simplify" to pyzotero's `format='bibtex'`,

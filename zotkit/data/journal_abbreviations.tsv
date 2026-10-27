@@ -1,0 +1,4 @@
+# Journal title -> registered ISO 4 abbreviation (the ISSN network's abbreviated
+# key-title), dotted. Registered forms only: never LTWA-rule output.
+# Lookups ignore case, accents, punctuation and a leading "The".
+title	iso4

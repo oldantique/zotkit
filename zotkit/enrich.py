@@ -16,8 +16,12 @@ Merge policy:
   difference is reported, not touched;
 - an `abstract-source:` stamp with no abstract means an owner deliberately
   removed the abstract — never re-add it (reported as NEEDS OWNER);
-- Extra only ever gains lines (arXiv: / abstract-source: / Repository:),
-  existing lines are never rewritten;
+- Extra only ever gains lines (arXiv: / abstract-source: / Repository: /
+  issue-date:), existing lines are never rewritten;
+- journalAbbreviation is the one field enrich may *correct*: to the
+  registered ISO 4 form (zotkit.journals). An unregistered candidate only
+  fills an empty field, and only when CrossRef has no value to offer. This
+  needs no DOI/arXiv id — it reads the title;
 - tags, collections, relations, and child items are never touched.
 
 `set_abstract` (the `zotkit abstract` command) is the owner's deliberate
@@ -34,6 +38,7 @@ import time
 import unicodedata
 from typing import Any
 
+from . import journals
 from . import metadata as md
 
 # fields the plain fill pass may write; everything else needs a dedicated rule
@@ -259,6 +264,44 @@ def set_abstract(zot, key: str, text: str, source: str, *,
             "replaced": replacing}
 
 
+_ISSUE_DATE = re.compile(r"^issue-date:\s*(\d{4}(?:-\d{2}){0,2})", re.MULTILINE)
+
+
+def _plan_abbreviation(d: dict, p: dict[str, Any]) -> None:
+    """journalAbbreviation per zotkit.journals: a registered form replaces any
+    other value; a candidate (rule-derived or as-written) only fills an empty
+    field CrossRef had nothing for. With no opinion, whatever the fill-empty
+    pass chose stands."""
+    want = journals.check(d)
+    if want is None:
+        return
+    stored = (d.get("journalAbbreviation") or "").strip()
+    if stored == want.value:
+        p["fills"].pop("journalAbbreviation", None)
+        return
+    lacks = (f" (LTWA lacks: {', '.join(want.unknown)} — kept whole)"
+             if want.unknown else "")
+    if not stored:
+        if want.source == journals.REGISTERED:
+            p["fills"]["journalAbbreviation"] = want.value
+        elif p["fills"].get("journalAbbreviation") in (None, "", want.value):
+            # CrossRef had nothing (fetch_doi may already have put the
+            # candidate there): store it, but never silently
+            p["fills"]["journalAbbreviation"] = want.value
+            p["notes"].append(f"journalAbbreviation: {want.value!r} is a "
+                              f"candidate ({want.source}), not a registered "
+                              f"form{lacks}")
+    elif want.source == journals.REGISTERED:
+        p["fills"]["journalAbbreviation"] = want.value
+        p["notes"].append(f"journalAbbreviation: {stored!r} → {want.value!r} "
+                          "(registered ISO 4)")
+    else:
+        p["fills"].pop("journalAbbreviation", None)
+        p["notes"].append(f"journalAbbreviation {stored!r} differs from the "
+                          f"{want.source} candidate {want.value!r} — left as "
+                          f"is{lacks}")
+
+
 def plan_enrich(zot, key: str, *, rebuild_record: bool = False,
                 doi: str | None = None) -> dict[str, Any]:
     """Compute what enriching `key` would change. Returns a plan dict:
@@ -290,8 +333,10 @@ def plan_enrich(zot, key: str, *, rebuild_record: bool = False,
             raise md.MetadataError(f"NEEDS OWNER: DOI {doi} may not be this "
                                    f"paper — {why}; nothing changed")
     if auth is None:
-        p["status"] = "needs-identifier"
-        p["notes"].append(f"SKIP needs-identifier: {skip}")
+        _plan_abbreviation(d, p)
+        p["notes"].append(f"SKIP needs-identifier: {skip}"
+                          + (" — journal abbreviation only" if p["fills"] else ""))
+        p["status"] = "plan" if p["fills"] else "needs-identifier"
         return p
     p["auth"], p["aid"], p["no_vor"] = auth, aid, no_vor
 
@@ -341,6 +386,9 @@ def plan_enrich(zot, key: str, *, rebuild_record: bool = False,
             p["notes"].append(f"creators differ from authoritative record "
                               f"({len(cur)} vs {len(authc)}) — left untouched")
 
+    if not (rebuild_record and d.get("itemType") == "preprint"):
+        _plan_abbreviation(d, p)
+
     # ---- version-of-record rebuild (explicit opt-in) ----
     if rebuild_record and d.get("itemType") == "preprint":
         if no_vor:
@@ -357,6 +405,14 @@ def plan_enrich(zot, key: str, *, rebuild_record: bool = False,
                                       else " " + d.get("archiveID", ""))
         if f"arxiv:{aid.lower()}" not in known.lower().replace(" ", ""):
             p["extra_lines"].append(f"arXiv: {aid}")
+
+    # ---- issue-date line (journal records only, never preprints) ----
+    m = _ISSUE_DATE.search(auth.get("extra", ""))
+    target = p["rebuild"] or d.get("itemType")
+    date = auth.get("date", "") if p["rebuild"] else d.get("date") or auth.get("date", "")
+    if (m and target in md.ISSUE_DATE_TYPES and m[1][:4] != date[:4]
+            and not _ISSUE_DATE.search(d.get("extra", ""))):
+        p["extra_lines"].append(f"issue-date: {m[1]}")
 
     p["status"] = ("plan" if (p["fills"] or p["creators"] is not None
                               or p["extra_lines"] or p["rebuild"])
