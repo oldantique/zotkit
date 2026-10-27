@@ -131,7 +131,7 @@ def _note_abbreviation_candidate(item: dict) -> None:
     want = check(item)
     if (want and want.source != REGISTERED
             and item.get("journalAbbreviation") == want.value):
-        lacks = f"; LTWA lacks: {', '.join(want.unknown)}" if want.unknown else ""
+        lacks = f"; no English LTWA entry: {', '.join(want.unknown)}" if want.unknown else ""
         print(f"note: journalAbbreviation {want.value!r} is a candidate "
               f"({want.source}), not a registered form{lacks}")
 
@@ -653,7 +653,7 @@ def main(argv=None):
                 if b == "journal-abbreviation":
                     for k in ks:
                         j = rep["journal_abbreviation"][k]
-                        unk = (f"; LTWA lacks: {', '.join(j['unknown'])}"
+                        unk = (f"; no English LTWA entry: {', '.join(j['unknown'])}"
                                if j["unknown"] else "")
                         tag = ("registered" if j["source"] == "registered"
                                else f"candidate ({j['source']})")
@@ -668,7 +668,7 @@ def main(argv=None):
             for title, u in sorted(unv.items()):
                 cand = (f"candidate {u['candidate']!r} ({u['source']})"
                         if u["candidate"] else "no candidate (ZOTKIT_LTWA unset)")
-                unk = f"; LTWA lacks: {', '.join(u['unknown'])}" if u["unknown"] else ""
+                unk = f"; no English LTWA entry: {', '.join(u['unknown'])}" if u["unknown"] else ""
                 stored = ", ".join(map(repr, u["stored"])) or "(empty)"
                 print(f"    {title}  — stored {stored}; "
                       f"{cand}{unk}; {len(u['keys'])} item(s)")

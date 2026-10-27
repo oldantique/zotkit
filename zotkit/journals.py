@@ -15,9 +15,14 @@ Sources, in order of authority:
 3. **rule-derived** — ISO 4 word rules over the LTWA (List of Title Word
    Abbreviations). zotkit does not ship the LTWA: the ISSN International
    Centre reserves its database rights, so the rules run only when
-   `ZOTKIT_LTWA` names a copy the user downloaded. Rule output is a candidate,
-   not a registered form — a word the LTWA doesn't list stays whole and is
-   reported, never guessed.
+   `ZOTKIT_LTWA` names a copy the user downloaded. Only entries whose
+   LANGUAGES include English or "Multiple languages" apply: the list is
+   multilingual, and accent folding would otherwise let a French `financ-` or
+   a Spanish `electróni-` abbreviate an English word. Rule output is a
+   candidate, not a registered form — a word with no English LTWA entry stays
+   whole and is reported, never guessed. Non-English titles ("Comptes Rendus.
+   Physique") therefore need the registered table; multi-word LTWA entries
+   (`compte rendu`) are not matched either.
 
 Only a registered form is authoritative: callers may let it replace a
 stored value. A `title` or `rule-derived` answer is a candidate — it may fill
@@ -109,9 +114,10 @@ def parse_table(text: str) -> dict[str, str]:
 
 @dataclass
 class Ltwa:
-    exact: dict[str, list[tuple[str, bool]]]    # word -> [(abbr, english)]
-    stems: dict[str, list[tuple[str, bool]]]    # "financ" for "financ-"
-    abbrs: set[str] = field(default_factory=set)  # every listed abbreviation
+    exact: dict[str, str]                       # English word -> abbreviation
+    stems: dict[str, str]                       # "electron" for "electron-"
+    abbrs: set[str] = field(default_factory=set)  # every listed abbreviation,
+                                                  #   any language
 
 
 _ltwa: dict[str, Ltwa | None] = {}
@@ -119,14 +125,15 @@ _ltwa: dict[str, Ltwa | None] = {}
 
 def load_ltwa(path: str) -> Ltwa:
     """Parse the ISSN LTWA export (WORD / ABBREVIATION / LANGUAGES; tab-,
-    semicolon- or comma-separated). An empty or "n.a." abbreviation means
+    semicolon- or comma-separated), keeping only English / "Multiple
+    languages" entries for matching. An empty or "n.a." abbreviation means
     the word is never abbreviated."""
     with open(path, encoding="utf-8-sig", newline="") as f:
         head = f.readline()
         delim = "\t" if "\t" in head else ";" if ";" in head else ","
         rows = csv.reader(f, delimiter=delim)
-        exact: dict[str, list] = {}
-        stems: dict[str, list] = {}
+        exact: dict[str, str] = {}
+        stems: dict[str, str] = {}
         abbrs: set[str] = set()
         for row in rows:
             if len(row) < 2 or not row[0].strip():
@@ -137,12 +144,12 @@ def load_ltwa(path: str) -> Ltwa:
             english = len(row) > 2 and ("English" in row[2] or "Multiple" in row[2])
             if abbr:
                 abbrs.add(_fold(abbr))
-            if word.startswith("-"):
-                continue                          # suffix patterns (compounds)
+            if not english or word.startswith("-") or " " in word:
+                continue          # other languages; suffix and multi-word entries
             if word.endswith("-"):
-                stems.setdefault(_fold(word[:-1]), []).append((abbr, english))
+                stems.setdefault(_fold(word[:-1]), abbr)
             else:
-                exact.setdefault(_fold(word), []).append((abbr, english))
+                exact.setdefault(_fold(word), abbr)
     return Ltwa(exact, stems, abbrs)
 
 
@@ -155,23 +162,19 @@ def _ltwa_from_env() -> Ltwa | None:
     return _ltwa[path]
 
 
-def _pick(cands: list[tuple[str, bool]]) -> str:
-    return sorted(cands, key=lambda c: not c[1])[0][0]   # English rows first
-
-
 def _word(w: str, ltwa: Ltwa) -> str | None:
     """Abbreviation of one word, the word itself when the LTWA says to keep it
-    whole, or None when the LTWA doesn't list it."""
+    whole, or None when no English LTWA entry covers it."""
     f = _fold(w)
     for cand in (f, f[:-1] if f.endswith("s") else None,
                  f[:-2] if f.endswith("es") else None):
         if cand and cand in ltwa.exact:
-            abbr = _pick(ltwa.exact[cand])
+            abbr = ltwa.exact[cand]
             break
     else:
         for n in range(len(f), 0, -1):            # longest stem wins
             if f[:n] in ltwa.stems:
-                abbr = _pick(ltwa.stems[f[:n]])
+                abbr = ltwa.stems[f[:n]]
                 break
         else:
             return None

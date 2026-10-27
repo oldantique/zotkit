@@ -203,8 +203,12 @@ publishers, the full title or empty for others. So zotkit uses one normaliser fo
    page](https://www.issn.org/services/online-services/access-to-the-ltwa/) on
    issn.org and point `ZOTKIT_LTWA` at the file. A rule-derived value is a
    **candidate**, not a registered form. Word-by-word output sometimes differs
-   from the registered abbreviation ("Comptes Rendus Phys." vs the registered
-   "C. R. Phys."), and a word the LTWA doesn't list stays whole and is reported.
+   from the registered abbreviation ("Physica A" is registered, the rules give
+   "Phys. A: Stat. Mech. Appl."). Only LTWA entries tagged English or "Multiple
+   languages" apply. Without that restriction, the French `financ-` would
+   abbreviate "Finance". A word with no such entry stays whole and is reported,
+   so titles in other languages ("Comptes Rendus. Physique") need the registered
+   table.
 
 Title and rule-derived values are both candidates. A candidate only fills an
 empty field, never replaces a stored value, and `create` prints a

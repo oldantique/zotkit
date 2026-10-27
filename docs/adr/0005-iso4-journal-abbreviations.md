@@ -26,14 +26,22 @@ authority:
 Why this shape:
 
 - **The LTWA is a word list, not the authority.** Word-by-word output differs
-  from some registered forms. "Comptes Rendus. Physique" comes out as
-  "Comptes Rendus Phys." against the registered "C. R. Phys.". "Physica A:
+  from some registered forms. "Comptes Rendus. Physique" stays whole (its
+  words are French, see below) against the registered "C. R. Phys.". "Physica A:
   Statistical Mechanics and its Applications" comes out as "Phys. A: Stat.
   Mech. Appl." against the registered "Physica A". So rule output is a
   *candidate*. It fills an empty field but never replaces a stored value.
   `audit` lists every journal without a registered form as unverified, even
   when the stored value equals the candidate, because agreement with a guess
   proves nothing. Only a registered form may overwrite.
+- **Only English and "Multiple languages" LTWA entries apply.** The list is
+  multilingual, and accent folding (which matching needs) lets other
+  languages' entries reach English words. French `financ-` would turn "Finance"
+  into "Financ.", and Spanish `electróni-` would turn "Electronics" into
+  "Electrón.". A word with no such entry stays whole and is reported. Titles in
+  other languages, and the LTWA's multi-word entries (`compte rendu` →
+  `c. r.`), are left to the registered table instead of a language-guessing
+  fallback.
 - **zotkit does not redistribute the LTWA.** The ISSN International Centre
   maintains it, and its legal notice reserves database rights. We found no
   explicit grant to redistribute it, in full or in part. The package ships

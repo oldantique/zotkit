@@ -279,7 +279,7 @@ def _plan_abbreviation(d: dict, p: dict[str, Any]) -> None:
     if stored == want.value:
         p["fills"].pop("journalAbbreviation", None)
         return
-    lacks = (f" (LTWA lacks: {', '.join(want.unknown)} — kept whole)"
+    lacks = (f" (no English LTWA entry: {', '.join(want.unknown)} — kept whole)"
              if want.unknown else "")
     if not stored:
         if want.source == journals.REGISTERED:

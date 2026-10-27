@@ -19,8 +19,14 @@ report\trep.\tEnglish
 progress\tprog.\tEnglish
 instrument\tinstrum.\tEnglish
 scientific\tsci.\tEnglish
-financ-\tfinanc.\tEnglish
-financ-\tfin.\tFrench
+financ-\tfinanc.\tFrench
+portfolio\tportf.\tSpanish
+electróni-\telectrón.\tSpanish
+electron-\telectron.\tEnglish
+nature\tnat.\tMultiple languages
+management\tmanag.\tEnglish
+circuit\t\tFrench
+compte rendu\tc. r.\tFrench
 pacific\tpac.\tEnglish
 quantum\t\tEnglish
 technology\ttechnol.\tEnglish
@@ -52,12 +58,10 @@ def rule(title, ltwa):
     ("Journal of Physics A: Mathematical and General", "J. Phys. A: Math. Gen."),
     ("Reports on Progress in Physics", "Rep. Prog. Phys."),     # plural → singular's entry
     ("Review of Scientific Instruments", "Rev. Sci. Instrum."),
-    ("The Journal of Finance", "J. Financ."),                   # leading article dropped;
-                                                                #   English stem row wins
-    ("Pacific-Basin Finance Journal", "Pac.-Basin Financ. J."),  # per hyphen part
+    ("Pacific-Basin Physics Journal", "Pac.-Basin Phys. J."),   # per hyphen part
     ("Quantum Technology", "Quantum Technol."),                 # empty entry = keep whole
     ("IEEE Transactions on Computer-Aided Design", "IEEE Trans. Comput.-Aided Des."),
-    ("Comptes Rendus. Physique", "Comptes Rendus Phys."),       # a separator, not a dot
+    ("Physics Reports. Letters", "Phys. Rep. Lett."),           # a separator, not a dot
 ])
 def test_iso4_word_rules(ltwa, title, want):
     assert rule(title, ltwa) == want
@@ -73,6 +77,21 @@ def test_unlisted_words_stay_whole_and_are_reported(ltwa):
     assert r == Abbrev("New J. Phys.", RULE, ("New",))
 
 
+@pytest.mark.parametrize("title, want, unknown", [
+    # leading article dropped; "financ-" is a French entry, not an English one
+    ("The Journal of Finance", "J. Finance", ("Finance",)),
+    ("Journal of Portfolio Management", "J. Portfolio Manag.", ("Portfolio",)),
+    # accent folding must not let Spanish "electróni-" reach an English word
+    ("Nature Electronics", "Nat. Electron.", ()),
+    # French-only words stay whole; the multi-word "compte rendu" isn't matched —
+    # a title like this needs the registered table ("C. R. Phys.")
+    ("Comptes Rendus. Physique", "Comptes Rendus Physique",
+     ("Comptes", "Rendus", "Physique")),
+])
+def test_only_english_ltwa_entries_apply(ltwa, title, want, unknown):
+    assert apply_rules(title, ltwa) == Abbrev(want, RULE, unknown)
+
+
 def test_acronyms_and_dotted_words_pass_through(ltwa):
     assert rule("EPJ Quantum Technology", ltwa) == "EPJ Quantum Technol."
     assert rule("SciPost Physics", ltwa) == "SciPost Phys."
@@ -81,7 +100,7 @@ def test_acronyms_and_dotted_words_pass_through(ltwa):
 def test_ltwa_export_with_semicolons_loads(tmp_path):
     p = tmp_path / "ltwa.csv"
     p.write_text("WORD;ABBREVIATION;LANGUAGES\nphysics;phys.;English\n", encoding="utf-8")
-    assert journals.load_ltwa(str(p)).exact["physics"] == [("phys.", True)]
+    assert journals.load_ltwa(str(p)).exact["physics"] == "phys."
 
 
 # ---------- the normaliser: source order and no-opinion cases ----------
@@ -93,6 +112,7 @@ TABLE = journals.parse_table(
 
 
 def test_registered_form_beats_the_rules(ltwa):
+    assert apply_rules("Comptes Rendus. Physique", ltwa).value != "C. R. Phys."
     assert normalise("Comptes rendus - Physique", table=TABLE, ltwa=ltwa) == \
         Abbrev("C. R. Phys.", REGISTERED)
 

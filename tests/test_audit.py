@@ -108,5 +108,5 @@ def test_cli_labels_candidates(monkeypatch, capsys, tmp_path):
         [_journal("EMPTY111", "New Journal of Physics", "")]))
     cli.main(["audit"])
     out = capsys.readouterr().out
-    assert "EMPTY111  '(empty)' → 'New J. Phys.'  [candidate (rule-derived); LTWA lacks: New]" in out
+    assert "EMPTY111  '(empty)' → 'New J. Phys.'  [candidate (rule-derived); no English LTWA entry: New]" in out
     assert "journals without a registered abbreviation (unverified, whatever is stored): 1" in out
