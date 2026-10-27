@@ -45,9 +45,11 @@ README — keep docs and code consistent with it.
   (a file named after a version guarantees an archaeology layer per release):
   `test_metadata.py` (abstract cleaner + two-layer version-of-record predicate
   + `fetch_arxiv_batch` against a canned feed), `test_enrich.py` (`plan_enrich`
-  VoR gate, the "source has no abstract" note + its status invariant,
-  `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing),
+  VoR gate, the `--doi` same-paper gate, the "source has no abstract" note + its
+  status invariant, `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing),
   `test_find.py` (--any/--abstract matching, hit annotations, snippet shape),
+  `test_lookup.py` (`find --id`: id parsing, every place an item carries an
+  identifier, one line per input),
   `test_cache.py` (version-map reconciliation: add/change/delete, chunking,
   corrupt-file and disabled fallbacks),
   `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),

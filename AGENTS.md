@@ -51,9 +51,14 @@ zotkit find --any TEXT [--abstract TEXT]  # metadata-wide (title+abstract+creato
                                      #   tags+extra); filters AND together. Non-
                                      #   visible matches get a `hit: field "..."` line.
                                      #   Existence check when there's no arXiv id/DOI:
-                                     #   --any <lastname> (with ids: create's dry run)
+                                     #   --any <lastname> (with ids: find --id)
                                      #   1st call downloads the library; later calls
                                      #   use a version-checked cache (still complete)
+zotkit find --id ID [ID...]          # existence check for arXiv ids/DOIs (or on
+                                     #   stdin): one line per input, in order,
+                                     #   "ID · KEY · itemType" or "ID · absent".
+                                     #   Local, no remote fetch; exit 1 only for
+                                     #   an input that is neither id nor DOI
 zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
                                      #   unknown key -> one stderr line + exit 1
                                      #   (--verbose for the full API exception)
@@ -63,11 +68,12 @@ zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
                                      # dedup (DOI/title) is the default: the dry run
                                      #   prints "already in library as <KEY>" for
-                                     #   items --apply would skip; --no-dedup forces.
-                                     #   With ids in hand this dry run IS the
-                                     #   existence check: no find loop first
+                                     #   items --apply would skip; --no-dedup forces
 zotkit enrich --key K [K...]         # complete EXISTING items in place — never
                                      #   delete+recreate (item keys must stay stable)
+zotkit enrich --key K --doi DOI --rebuild-record   # preprint → journal record when
+                                     #   arXiv lacks the DOI; refused (NEEDS OWNER)
+                                     #   unless title + first author match
 zotkit enrich --missing abstract|doi | --all   # batch enrich (rate limiting internal)
                                      #   "NOTE abstract still missing: <source> has
                                      #   none" = source can't fill it, not "all fine"

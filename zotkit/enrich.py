@@ -28,8 +28,10 @@ Network requests reuse zotkit.metadata's fetchers and its per-host rate limit.
 """
 from __future__ import annotations
 
+import difflib
 import re
 import time
+import unicodedata
 from typing import Any
 
 from . import metadata as md
@@ -89,8 +91,9 @@ def _real_creators(creators: list[dict]) -> list[dict]:
             if any(v for k, v in c.items() if k != "creatorType")]
 
 
-def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None,
-                                           str | None, str | None]:
+def _fetch_authoritative(d: dict, doi_override: str | None = None
+                         ) -> tuple[dict | None, str | None, str | None,
+                                    str | None, str | None]:
     """→ (authoritative record, arXiv id, no-VoR reason, skip reason, source).
 
     `source` names which upstream(s) could have supplied an abstract for this
@@ -101,8 +104,12 @@ def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None,
     wins; arXiv otherwise (that fetch itself may upgrade to a journal record
     per v0.4.2 rules — equally welcome here). A repository DOI (SSRN & co.)
     still resolves in CrossRef, so its record is fetched for fill-missing,
-    but the no-VoR reason marks it as never being grounds for a rebuild."""
-    doi = (d.get("DOI") or "").strip()
+    but the no-VoR reason marks it as never being grounds for a rebuild.
+
+    `doi_override` (`enrich --doi`) is used in place of the item's DOI, and a
+    disguised repository record behind it is an error rather than a quiet
+    fall-through to arXiv: the user asked for that DOI's record."""
+    doi = (doi_override or d.get("DOI") or "").strip()
     aid = _find_arxiv_id(d)
     if doi and not md.is_repository_doi(doi):
         auth = md.fetch_doi(doi)
@@ -118,6 +125,9 @@ def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None,
                     auth["abstractNote"] = pre["abstractNote"]
                     md._add_extra(auth, "abstract-source: arxiv")
             return auth, aid, None, None, src
+        if doi_override:
+            raise md.MetadataError(f"NEEDS OWNER: DOI {doi}: {reason} — not a "
+                                   "version of record; nothing changed")
         if not aid:
             return auth, aid, f"DOI {doi}: {reason}", None, "crossref"
         # repository record in disguise but the item has an arXiv identity:
@@ -134,6 +144,60 @@ def _fetch_authoritative(d: dict) -> tuple[dict | None, str | None, str | None,
         return (auth, aid, f"DOI {doi} is a repository DOI, not a journal one",
                 None, "crossref")
     return None, None, None, "no DOI or arXiv id on the item", None
+
+
+_NUMBERING = re.compile(r"^(?:[ivx]+|\d+)$")
+
+
+def _title_key(s: str | None) -> str:
+    """Title/surname comparison form: markup and LaTeX dropped (so arXiv's
+    `$\\mathbb{Z}_2$` and CrossRef's `Z<sub>2</sub>` both become `z2`),
+    accents folded, punctuation runs collapsed to one space."""
+    s = re.sub(r"<[^>]+>|\\[a-zA-Z]+|[{}$_^]", "", s or "")
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", s)
+                if not unicodedata.combining(ch))
+    return re.sub(r"\W+", " ", s.casefold()).strip()
+
+
+def _first_surname(creators: list[dict]) -> str:
+    for c in _real_creators(creators):
+        if c.get("creatorType", "author") == "author":
+            return _title_key(c.get("lastName")
+                              or (c.get("name") or "").rsplit(" ", 1)[-1])
+    return ""
+
+
+def _same_paper(d: dict, auth: dict) -> str | None:
+    """Why the record behind a user-supplied DOI may not be item `d`'s paper,
+    or None. Titles must agree up to small edits (or one extend the other, as
+    a journal subtitle does), with identical numbering ("Part II" is another
+    paper), and the first authors' surnames must be equal."""
+    a, b = _title_key(d.get("title")), _title_key(auth.get("title"))
+    nums = lambda t: sorted(w for w in t.split() if _NUMBERING.match(w))
+    close = (difflib.SequenceMatcher(None, a, b).ratio() >= 0.9
+             or (min(len(a), len(b)) >= 20 and (a.startswith(b) or b.startswith(a))))
+    if not (a and b and close and nums(a) == nums(b)):
+        return (f'titles differ: item "{d.get("title", "")}" vs DOI record '
+                f'"{auth.get("title", "")}"')
+    fa, fb = _first_surname(d.get("creators", [])), _first_surname(auth.get("creators", []))
+    if not (fa and fb):
+        return "no first author to compare on " + ("the item" if not fa else "the DOI record")
+    if fa != fb:
+        return f"first authors differ: item {fa!r} vs DOI record {fb!r}"
+    return None
+
+
+def _supplied_doi_refusal(d: dict, doi: str) -> str | None:
+    """Why `enrich --doi` must not use `doi` on item `d` at all, or None."""
+    if d.get("itemType") != "preprint":
+        return (f"--doi upgrades a preprint to its journal record; this item is "
+                f"a {d.get('itemType')}")
+    if md.is_repository_doi(doi):
+        return f"DOI {doi} is a repository DOI, not a journal one"
+    cur = (d.get("DOI") or "").strip()
+    if cur and not md.is_repository_doi(cur) and cur.lower() != doi.lower():
+        return f"the item already has DOI {cur} — refusing to replace it"
+    return None
 
 
 def _no_abstract_note(source: str | None, doi: str, aid: str | None) -> str:
@@ -195,19 +259,36 @@ def set_abstract(zot, key: str, text: str, source: str, *,
             "replaced": replacing}
 
 
-def plan_enrich(zot, key: str, *, rebuild_record: bool = False) -> dict[str, Any]:
+def plan_enrich(zot, key: str, *, rebuild_record: bool = False,
+                doi: str | None = None) -> dict[str, Any]:
     """Compute what enriching `key` would change. Returns a plan dict:
     status 'plan' (something to do), 'up-to-date', 'needs-identifier',
     'stale-stamp', with fills / creators / extra_lines / rebuild / notes.
     Raises MetadataError (lookup) or pyzotero errors (bad key) — callers
-    turn those into per-item failures."""
+    turn those into per-item failures.
+
+    `doi` (with `rebuild_record`) is a user-supplied journal DOI for a
+    preprint whose arXiv record doesn't name one. Nothing vouches for it the
+    way the item's own record would, so it must pass `_same_paper`; any
+    refusal is a NEEDS OWNER MetadataError, never a partial plan."""
     item = zot.z.item(key)
     d = item["data"]
     p: dict[str, Any] = {"key": key, "title": d.get("title", ""), "item": item,
                          "fills": {}, "extra_lines": [], "creators": None,
                          "rebuild": None, "notes": [], "abstract_source": None}
 
-    auth, aid, no_vor, skip, ab_source = _fetch_authoritative(d)
+    if doi:
+        doi = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", doi.strip(),
+                     flags=re.IGNORECASE)
+        why = _supplied_doi_refusal(d, doi)
+        if why:
+            raise md.MetadataError(f"NEEDS OWNER: {why}; nothing changed")
+    auth, aid, no_vor, skip, ab_source = _fetch_authoritative(d, doi)
+    if doi:
+        why = _same_paper(d, auth)
+        if why:
+            raise md.MetadataError(f"NEEDS OWNER: DOI {doi} may not be this "
+                                   f"paper — {why}; nothing changed")
     if auth is None:
         p["status"] = "needs-identifier"
         p["notes"].append(f"SKIP needs-identifier: {skip}")

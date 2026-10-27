@@ -45,9 +45,10 @@ zotkit doctor
 
 ```bash
 zotkit find --title "boson sampling"     # 搜索(也可 --tag / --collection)
+zotkit find --id 2401.12345 10.1038/nature14539   # 有 arXiv id/DOI 时这样查重:
+                                         #   每个 id 输出一行,KEY 或 absent;本地查,
+                                         #   不访问 arXiv/CrossRef;id 也可从 stdin 逐行读入
 zotkit find --any vaswani                # 全字段搜索:标题+摘要+作者+标签+extra;
-                                         #   有 arXiv id/DOI 时,create 的 dry run 本身就是查重
-                                         #   (整批一次,DOI 再标题),不必先 find
                                          #   没有 arXiv id/DOI 时,建条目前用 --any <一作姓氏> 查重
                                          #   首次调用会下载全库(几百条约 10–20 秒),之后走本地
                                          #   缓存,每次先和服务器版本号核对,结果仍完整;
@@ -72,7 +73,10 @@ zotkit create --file papers.json         # 从 JSON 批量建条目(默认演练
                                          #   确要重复创建才加 --no-dedup
 zotkit enrich --key AB12CD34             # 就地补全已有条目的缺失字段(摘要/DOI/
                                          #   被截断的作者表;--rebuild-record 可把
-                                         #   已见刊的 preprint 就地升级为期刊记录)
+                                         #   已见刊的 preprint 就地升级为期刊记录;
+                                         #   arXiv 没给期刊 DOI 时用 --key K --doi <DOI>
+                                         #   --rebuild-record 手动提供,标题和一作姓氏
+                                         #   对不上就拒绝(NEEDS OWNER),不写入)
                                          #   item key 永不改变——下游引用不受影响
 zotkit enrich --missing abstract --apply # 批量:只跑缺摘要的条目(还有 --missing doi
                                          #   / --all;限速在内部,调用方无需分批睡眠)

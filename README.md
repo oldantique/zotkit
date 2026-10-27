@@ -88,6 +88,8 @@ zotkit find --any vaswani                   # metadata-wide: title, abstract,
                                             #   creators, tags, extra ("All
                                             #   Fields & Tags"); --abstract
                                             #   for the abstract field only
+zotkit find --id 2401.12345 10.1038/nature14539   # already in the library? one line
+                                            #   per id: KEY or "absent" (local, fast)
 zotkit show AB12CD34 EF56GH78               # one line per key (read-only);
                                             #   --json for the full item data
 
@@ -139,13 +141,20 @@ daemon-free CLI — no translation-server). CrossRef requests identify themselve
 to the polite pool with a contact address; that should be reachable, so if you
 distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
 
-**Duplicates**: with arXiv ids or DOIs in hand, the existence check *is* the
-`create --arxiv/--doi` dry run. It checks the whole batch in one call, by exact DOI
-and then by normalized title, and prints
+**Duplicates**: with arXiv ids or DOIs in hand, the existence check is
+`zotkit find --id <id…>` (or the ids on stdin, one per line). It answers locally,
+with no arXiv/CrossRef lookup, and prints exactly one line per input, in input
+order: `<id> · <KEY> · <itemType>` or `<id> · absent` (plus `· also <KEY>` when
+the library holds duplicates). arXiv ids match with the version stripped, via
+archiveID, an Extra `arXiv:` line, the arxiv.org url, or arXiv's own
+`10.48550/arXiv.*` DOI; DOIs match case-insensitively, including a `DOI:` line in
+Extra. Absent is an answer, not an error: the exit code is 1 only for an input
+that is neither an arXiv id nor a DOI. `create --arxiv/--doi` checks again before
+writing: its dry run and `--apply` check the whole batch by exact DOI and then by
+normalized title, and print
 `!! already in library as <KEY> — --apply will skip it (use --no-dedup to force)`
-for each item already there. No separate `find` is needed, and a loop of one
-`find` per candidate only repeats work the dry run already does. `--apply` runs the
-same check and names the existing key in its skip messages. `--no-dedup` turns the
+for each item already there. The title match also catches a copy that was filed
+without its identifier, which `find --id` cannot see. `--no-dedup` turns that
 check off and creates the item regardless. Without an identifier (a local PDF,
 hand-built `--file` JSON), or to answer "do we have anything by X?", use
 `zotkit find --any <first-author-lastname>`. That is one call across title,
@@ -253,7 +262,16 @@ since nothing was writable, and `audit` keeps listing it).
 `--rebuild-record` additionally upgrades a preprint whose paper has since been
 published (journal DOI present) to the journal record **in the same item**:
 itemType, published title/date/venue/volume/pages — with `arXiv: <id>` appended
-to Extra and attachments untouched.
+to Extra and attachments untouched. When arXiv doesn't name the journal DOI,
+supply it: `zotkit enrich --key K --doi <DOI> --rebuild-record` (one key, dry by
+default). Nothing vouches for a hand-supplied DOI the way the item's own arXiv
+record would, so it has to pass a same-paper check: the titles agree up to small
+edits (or the journal adds a subtitle) with the same numbering ("Part II" is
+another paper), and the first authors' surnames are equal. Otherwise enrich
+refuses with a NEEDS OWNER line and writes nothing, and there is no override,
+because a wrong DOI would rewrite the record in place. It also refuses a
+repository DOI, an item that isn't a preprint, and an item that already carries a
+different journal DOI.
 
 Instead of `--key`, `--all` runs over every top-level scholarly item and
 `--missing abstract` / `--missing doi` (repeatable) over just the gaps —

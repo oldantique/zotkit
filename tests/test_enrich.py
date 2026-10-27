@@ -74,6 +74,85 @@ def test_no_identifier_skips_without_fetching(monkeypatch):
     assert p["status"] == "needs-identifier"
 
 
+# ---------- plan_enrich: a user-supplied DOI (enrich --doi) ----------
+
+ARXIV_PREPRINT = dict(SSRN_PREPRINT, title="Topological $\\mathbb{Z}_2$ order in "
+                      "a driven lattice", DOI="10.48550/arXiv.2401.12345",
+                      archiveID="arXiv:2401.12345", repository="arXiv",
+                      creators=[{"creatorType": "author", "firstName": "A.",
+                                 "lastName": "Müller"}])
+JOURNAL = {"itemType": "journalArticle", "DOI": "10.1103/x.1",
+           "title": "Topological Z<sub>2</sub> Order in a Driven Lattice",
+           "publicationTitle": "Physical Review B",
+           "creators": [{"creatorType": "author", "firstName": "Anna",
+                         "lastName": "Muller"}]}
+
+
+def _plan_doi(monkeypatch, item_data, fetched, doi="10.1103/x.1"):
+    seen = []
+    monkeypatch.setattr(md, "fetch_doi", lambda d: seen.append(d) or dict(fetched))
+    monkeypatch.setattr(md, "fetch_arxiv_batch",
+                        lambda ids: [{"item": {"abstractNote": ""}}])
+    p = enrich.plan_enrich(_read_only_zot(item_data), "KEY00001",
+                           rebuild_record=True, doi=doi)
+    return p, seen
+
+
+def test_supplied_doi_rebuilds_when_title_and_first_author_match(monkeypatch):
+    p, seen = _plan_doi(monkeypatch, ARXIV_PREPRINT, JOURNAL,
+                        doi="https://doi.org/10.1103/X.1")
+    assert seen == ["10.1103/X.1"]  # the supplied DOI, not the item's arXiv one
+    assert p["rebuild"] == "journalArticle"
+    assert "arXiv: 2401.12345" in p["extra_lines"]  # identity survives the rebuild
+
+
+def test_journal_subtitle_extension_still_matches(monkeypatch):
+    sub = dict(JOURNAL, title=JOURNAL["title"] + ": Theory and Experiment")
+    assert _plan_doi(monkeypatch, ARXIV_PREPRINT, sub)[0]["rebuild"]
+
+
+@pytest.mark.parametrize("fetched, why", [
+    (dict(JOURNAL, title="Something Else Entirely"), "titles differ"),
+    (dict(JOURNAL, title=JOURNAL["title"] + " II"), "titles differ"),
+    (dict(JOURNAL, creators=[{"creatorType": "author", "lastName": "Smith"}]),
+     "first authors differ"),
+    (dict(JOURNAL, creators=[]), "no first author"),
+    (dict(JOURNAL, itemType="preprint"), "not a version of record"),
+])
+def test_mismatched_doi_record_is_refused(monkeypatch, fetched, why):
+    with pytest.raises(md.MetadataError, match=f"NEEDS OWNER.*{why}"):
+        _plan_doi(monkeypatch, ARXIV_PREPRINT, fetched)
+
+
+@pytest.mark.parametrize("item, doi, why", [
+    (ARXIV_PREPRINT, "10.2139/ssrn.1", "repository DOI"),
+    (dict(ARXIV_PREPRINT, DOI="10.1038/other"), "10.1103/x.1", "already has DOI"),
+    (dict(ARXIV_PREPRINT, itemType="journalArticle"), "10.1103/x.1", "upgrades a preprint"),
+])
+def test_refused_before_any_fetch(monkeypatch, item, doi, why):
+    monkeypatch.setattr(md, "fetch_doi", lambda d: pytest.fail("must not fetch"))
+    with pytest.raises(md.MetadataError, match=f"NEEDS OWNER.*{why}"):
+        enrich.plan_enrich(_read_only_zot(item), "KEY00001",
+                           rebuild_record=True, doi=doi)
+
+
+def test_same_doi_already_on_the_item_is_not_a_conflict(monkeypatch):
+    item = dict(ARXIV_PREPRINT, DOI="10.1103/X.1")
+    assert _plan_doi(monkeypatch, item, JOURNAL)[0]["rebuild"]
+
+
+@pytest.mark.parametrize("argv", [
+    ["--key", "K1", "--doi", "10.1/x"],                       # no --rebuild-record
+    ["--key", "K1", "K2", "--doi", "10.1/x", "--rebuild-record"],
+    ["--all", "--doi", "10.1/x", "--rebuild-record"],
+])
+def test_cli_doi_needs_one_key_and_rebuild_record(monkeypatch, capsys, argv):
+    from zotkit import cli
+    monkeypatch.setattr(cli, "Zot", lambda *a, **k: types.SimpleNamespace())
+    assert cli.main(["enrich", *argv]) == 1
+    assert "--doi needs exactly one --key" in capsys.readouterr().err
+
+
 # ---------- plan_enrich: "the source has no abstract" is reported ----------
 #
 # Regression for the silent path: an item with no abstract whose source also

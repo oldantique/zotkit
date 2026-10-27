@@ -39,9 +39,9 @@ zotkit find --abstract "surface code"      # abstract only (when --any is too no
 #   filters AND together, e.g. --any vaswani --collection "ML". When the match is
 #   in a field the one-line output doesn't show, an indented line explains it:
 #     hit: abstract "...context around the match..."   /   hit: creator "Bultink"
-#   "Is this paper already in the library?" With an arXiv id or DOI, don't search
-#   at all: the `create --arxiv/--doi` dry run IS the check (see the create recipe
-#   below). Without one (a local PDF, hand-built JSON), or for "anything by X?",
+#   "Is this paper already in the library?" With arXiv ids or DOIs, use find --id
+#   (next recipe), never a dry run or a find loop. Without one (a local PDF,
+#   hand-built JSON), or for "anything by X?",
 #   `find --any <first-author-lastname>` is the check. Do not guess title wordings,
 #   and don't ask for PDF full-text search: find covers metadata. A zero hit on an
 #   author name means not in the library. A zero hit on a CONCEPT term does NOT: some stored abstracts are
@@ -50,6 +50,18 @@ zotkit find --abstract "surface code"      # abstract only (when --any is too no
 #   10–20 s for a few hundred items). After that, a local cache reconciled against
 #   the server makes calls take seconds, with no loss of completeness. Don't treat
 #   a slow first call as a hang.
+
+# existence check by identifier (read-only, local — no arXiv/CrossRef calls)
+zotkit find --id 2401.12345 10.1038/nature14539 2310.00001v2
+zotkit find --id < ids.txt                     # or one id per line on stdin
+#   exactly one line per input, in input order:
+#     2401.12345 · AB12CD34 · journalArticle
+#     10.1038/nature14539 · absent
+#     2310.00001v2 · EF56GH78 · preprint · also IJ90KL12   (library has duplicates)
+#   versions are ignored and arXiv ids also match journal records that carry them
+#   in Extra; DOIs are case-insensitive. "absent" is an answer (exit 0); exit 1
+#   only when an input is neither an arXiv id nor a DOI (that line says "invalid").
+#   Use the KEY with show/tag/enrich; create only the absent ones.
 
 # look items up by key (read-only)
 zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id
@@ -91,12 +103,12 @@ zotkit create --arxiv id1 id2 id3 --apply               # batch (space- or comma
 #   Extra may also carry `abstract-source: arxiv|crossref` — leave that line alone
 zotkit create --doi 10.1038/nature14539 --apply --tags field:ai
 zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same way
-#   EXISTENCE CHECK = the dry run (same command, no --apply). One call checks the
-#   whole batch (exact DOI, then normalized title) and prints, for each item
-#   already there:
+#   Check existence first with `find --id` (above). The dry run (same command,
+#   no --apply) checks again, by exact DOI and then normalized title, and prints
+#   for each item already there:
 #     !! already in library as AB12CD34 — --apply will skip it (use --no-dedup to force)
-#   Do NOT run one `find --any` per candidate first. That loop repeats the dry
-#   run's work and is what made agents time out.
+#   Do NOT run one `find --any` per candidate. That loop is what made agents
+#   time out.
 #   DOI mode never downloads a PDF (paywalls) — attach one manually afterwards;
 #   unknown CrossRef types error out: fall back to --file for those
 
@@ -116,6 +128,11 @@ zotkit create --file x.json --apply
 # complete EXISTING items in place (dry-run first, then --apply)
 zotkit enrich --key AB12CD34 EF56GH78
 zotkit enrich --key AB12CD34 --rebuild-record --apply   # preprint→journal record upgrade
+zotkit enrich --key AB12CD34 --doi 10.1103/x.y --rebuild-record   # same, when arXiv
+#   doesn't name the journal DOI and you have it. One key; dry first. Refused with
+#   "NEEDS OWNER: … may not be this paper" unless the DOI record's title and first
+#   author match the item. There is no override: show both titles to the user,
+#   don't hunt for another DOI to make it pass.
 #   To update an existing item, ALWAYS enrich — NEVER delete and recreate it: the
 #   item key must stay stable (downstream manifests reference it). enrich only
 #   fills empty fields (existing values are never overwritten), extends author

@@ -124,6 +124,43 @@ def _short_api_error(e: Exception) -> str:
     return f"not found ({code})" if code == 404 else f"API error ({code})"
 
 
+def _find_ids(zot, a) -> int:
+    """`find --id`: one stdout line per input, in input order, so each answer
+    pairs with its id by position and by text. Absent is an answer, not an
+    error; exit 1 only for an input that is not an arXiv id or DOI."""
+    from .lookup import lookup_ids
+    if a.title or a.tag or a.collection or a.any or a.abstract:
+        print("error: --id does not combine with the other find filters",
+              file=sys.stderr)
+        return 1
+    ids = [w.strip() for arg in a.id for w in arg.split(",") if w.strip()]
+    if not a.id:
+        if sys.stdin.isatty():
+            print("paste one arXiv id or DOI per line, then Ctrl-D:", file=sys.stderr)
+        ids = [ln.strip() for ln in sys.stdin.read().splitlines() if ln.strip()]
+    if not ids:
+        print("error: no ids given (use --id ID1 ID2 … or pipe them on stdin, "
+              "one per line)", file=sys.stderr)
+        return 1
+    found = absent = bad = 0
+    for r in lookup_ids(zot.listing("top"), ids):
+        if "error" in r:
+            bad += 1
+            print(f"{r['input']} · invalid")
+            print(f"error: {r['error']}", file=sys.stderr)
+        elif r["matches"]:
+            found += 1
+            (key, itype), *more = r["matches"]
+            dup = f" · also {', '.join(k for k, _ in more)}" if more else ""
+            print(f"{r['input']} · {key} · {itype}{dup}")
+        else:
+            absent += 1
+            print(f"{r['input']} · absent")
+    print(f"{found} in library, {absent} absent"
+          + (f", {bad} invalid" if bad else ""), file=sys.stderr)
+    return 1 if bad else 0
+
+
 def _show(zot, keys, as_json: bool, verbose: bool = False) -> int:
     """One line per key (or --json dumps of the full item data). Bad keys are
     reported to stderr and don't stop the rest; exit 1 if any key failed."""
@@ -216,6 +253,11 @@ def main(argv=None):
     p.add_argument("--abstract", metavar="TEXT",
                    help="same match, abstract field only — a noise-reduction "
                         "variant of --any")
+    p.add_argument("--id", nargs="*", metavar="ID",
+                   help="arXiv ids / DOIs (space- or comma-separated; none = "
+                        "read them from stdin, one per line): prints one line "
+                        "per input, 'ID · KEY · itemType' or 'ID · absent'. "
+                        "Local and read-only — no arXiv/CrossRef lookup")
 
     p = sub.add_parser("show", help="one-line summary per item key (read-only)")
     p.add_argument("keys", nargs="+", metavar="KEY")
@@ -259,6 +301,11 @@ def main(argv=None):
     p.add_argument("--rebuild-record", action="store_true",
                    help="also upgrade preprint items with a journal DOI to the "
                         "journal record, in place (version of record)")
+    p.add_argument("--doi", metavar="DOI",
+                   help="with one --key and --rebuild-record: the journal DOI "
+                        "of a preprint whose arXiv record doesn't name one; "
+                        "refused unless the DOI's title and first author match "
+                        "the item")
 
     p = sub.add_parser("abstract", help="set/replace one item's abstract with "
                                         "provenance (owner's tool — may replace "
@@ -331,6 +378,8 @@ def main(argv=None):
     zot = Zot()
 
     if a.cmd == "find":
+        if a.id is not None:
+            return _find_ids(zot, a)
         _print_items(zot.find(a.title, a.tag, a.collection,
                               any_text=a.any, abstract=a.abstract))
 
@@ -460,6 +509,10 @@ def main(argv=None):
 
     elif a.cmd == "enrich":
         from .enrich import apply_plan, plan_enrich
+        if a.doi and not (a.key and len(a.key) == 1 and a.rebuild_record):
+            print("error: --doi needs exactly one --key and --rebuild-record",
+                  file=sys.stderr)
+            return 1
         if a.key:
             keys = a.key
         else:  # --all / --missing: pick the work set from a read-only audit
@@ -478,7 +531,8 @@ def main(argv=None):
                   "up-to-date": 0, "failed": 0}
         for key in keys:
             try:
-                p_ = plan_enrich(zot, key, rebuild_record=a.rebuild_record)
+                p_ = plan_enrich(zot, key, rebuild_record=a.rebuild_record,
+                                 doi=a.doi)
             except Exception as e:  # bad key, metadata lookup failure, …
                 counts["failed"] += 1
                 print(f"{key}  FAILED: {e}", file=sys.stderr)
