@@ -48,6 +48,12 @@ Why this shape:
   only the registered-form table, and the rule engine works on a file the user
   supplies. Tests run on a few hand-written rows in LTWA format, never on the
   list itself.
+- **The shipped table is NLM's MEDLINE abbreviations with periods restored.**
+  These are the registered forms. NLM's own disambiguators are not copied:
+  place qualifiers ("Ann Phys (N Y)", "Front Phys (Beijing)") are dropped, by
+  the owner's decision of 2026-10-27. A user comparing against NLM will see
+  that difference on purpose. Where NLM and LTWA disagree, NLM wins
+  ("Manage. Sci.", "J. Finance").
 - **No opinion is a valid answer.** If a title is in no table, no LTWA file is
   configured, or the title is in a non-Latin script, the normaliser returns
   None. Callers then keep what is stored, or what CrossRef offered. That is

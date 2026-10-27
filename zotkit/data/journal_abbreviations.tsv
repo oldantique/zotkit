@@ -1,4 +1,70 @@
 # Journal title -> registered ISO 4 abbreviation (the ISSN network's abbreviated
-# key-title), dotted. Registered forms only: never LTWA-rule output.
-# Lookups ignore case, accents, punctuation and a leading "The".
-title	iso4
+# key-title), dotted. Registered forms only: never LTWA-rule output (ADR-0005).
+# Rows are NLM MEDLINE abbreviations with ISO 4 periods restored. NLM's own
+# disambiguators are not copied: place qualifiers such as "(N Y)" or
+# "(Beijing)" are dropped, so Annals of Physics is "Ann. Phys.".
+# Lookups ignore case, accents, punctuation and a leading "The". Add your own
+# verified rows in a file named by ZOTKIT_JOURNALS (same format; yours win).
+title	iso4	source
+ACM Transactions on Graphics	ACM Trans. Graph.	nlm
+Advanced Quantum Technologies	Adv. Quantum Technol.	nlm
+Advances in Physics	Adv. Phys.	nlm
+AIP Conference Proceedings	AIP Conf. Proc.	nlm
+Annals of Physics	Ann. Phys.	nlm
+Annual Review of Condensed Matter Physics	Annu. Rev. Condens. Matter Phys.	nlm
+Applied Economics Letters	Appl. Econ. Lett.	nlm
+Applied Physics Letters	Appl. Phys. Lett.	nlm
+Applied Physics Reviews	Appl. Phys. Rev.	nlm
+China Journal of Accounting Research	China J. Account. Res.	nlm
+Chinese Physics B	Chin. Phys. B	nlm
+Communications Physics	Commun. Phys.	nlm
+Comptes Rendus. Physique	C. R. Phys.	nlm
+Economic Modelling	Econ. Model.	nlm
+EPJ Quantum Technology	EPJ Quantum Technol.	nlm
+Frontiers of Physics	Front. Phys.	nlm
+IEEE Journal of Selected Topics in Quantum Electronics	IEEE J. Sel. Top. Quantum Electron.	nlm
+IEEE Transactions on Applied Superconductivity	IEEE Trans. Appl. Supercond.	nlm
+IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems	IEEE Trans. Comput.-Aided Des. Integr. Circuits Syst.	nlm
+Information Fusion	Inf. Fusion	nlm
+International Review of Financial Analysis	Int. Rev. Financ. Anal.	nlm
+Journal of Applied Physics	J. Appl. Phys.	nlm
+Journal of Empirical Finance	J. Empir. Finance	nlm
+Journal of Financial and Quantitative Analysis	J. Financ. Quant. Anal.	nlm
+Journal of Financial Economics	J. Financ. Econ.	nlm
+Journal of Mathematical Physics	J. Math. Phys.	nlm
+Journal of Physics A: Mathematical and General	J. Phys. A: Math. Gen.	nlm
+Journal of Physics D: Applied Physics	J. Phys. D: Appl. Phys.	nlm
+Management Science	Manage. Sci.	nlm
+Nature Communications	Nat. Commun.	nlm
+Nature Electronics	Nat. Electron.	nlm
+Nature Materials	Nat. Mater.	nlm
+Nature	Nature	nlm
+Nature Photonics	Nat. Photonics	nlm
+Nature Physics	Nat. Phys.	nlm
+Nature Reviews Physics	Nat. Rev. Phys.	nlm
+New Journal of Physics	New J. Phys.	nlm
+npj Quantum Information	npj Quantum Inf.	nlm
+Physica A: Statistical Mechanics and its Applications	Physica A	nlm
+Physical Chemistry Chemical Physics	Phys. Chem. Chem. Phys.	nlm
+Physical Review A	Phys. Rev. A	nlm
+Physical Review Applied	Phys. Rev. Appl.	nlm
+Physical Review B	Phys. Rev. B	nlm
+Physical Review D	Phys. Rev. D	nlm
+Physical Review E	Phys. Rev. E	nlm
+Physical Review Letters	Phys. Rev. Lett.	nlm
+Physical Review Research	Phys. Rev. Res.	nlm
+Physical Review X	Phys. Rev. X	nlm
+Proceedings of the National Academy of Sciences	Proc. Natl. Acad. Sci. U.S.A.	nlm
+PRX Quantum	PRX Quantum	nlm
+Quantum	Quantum	nlm
+Quantum Science and Technology	Quantum Sci. Technol.	nlm
+Reports on Progress in Physics	Rep. Prog. Phys.	nlm
+Review of Financial Studies	Rev. Financ. Stud.	nlm
+Review of Scientific Instruments	Rev. Sci. Instrum.	nlm
+Reviews of Modern Physics	Rev. Mod. Phys.	nlm
+Science Advances	Sci. Adv.	nlm
+Science Bulletin	Sci. Bull.	nlm
+Science	Science	nlm
+Scientific Reports	Sci. Rep.	nlm
+SciPost Physics	SciPost Phys.	nlm
+The Journal of Finance	J. Finance	nlm

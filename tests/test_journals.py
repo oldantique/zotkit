@@ -151,8 +151,14 @@ def test_shipped_table_parses():
             ).read_text(encoding="utf-8")
     rows = [ln for ln in text.splitlines()
             if ln.strip() and not ln.startswith("#") and not ln.startswith("title\t")]
-    assert all(len(r.split("\t")) in (2, 3) for r in rows)
-    assert len(journals.parse_table(text)) >= len(rows)
+    cells = [r.split("\t") for r in rows]
+    assert all(len(c) == 3 and c[1].strip() and c[2] in ("nlm", "issn-portal")
+               for c in cells)                  # registered forms only, sourced
+    assert len({c[0] for c in cells}) == len(cells)
+    table = journals.parse_table(text)
+    assert table[journals._title_key("Comptes Rendus. Physique")] == "C. R. Phys."
+    assert table[journals._title_key("Physica A: Statistical Mechanics and its "
+                                     "Applications")] == "Physica A"
 
 
 def test_check_only_for_types_with_the_field(ltwa):
