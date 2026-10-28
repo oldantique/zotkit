@@ -173,9 +173,32 @@ def _find_ids(zot, a) -> int:
     return 1 if bad else 0
 
 
+def _attachment_rows(zot, item) -> list[dict] | str:
+    """The item's attachments for `show`, or why they couldn't be listed (a
+    lookup failure never fails the key)."""
+    try:
+        return zot.attachment_rows(item)
+    except Exception as e:
+        return _short_api_error(e)
+
+
+def _verify(zot, att_key: str, path) -> bool:
+    """`attach --verify`: True when the stored copy matches the local file."""
+    why = zot.verify_attachment(att_key, path) if att_key else "attachment key unknown"
+    if why:
+        print(f"error: verify failed for attachment {att_key}: {why} — delete it "
+              "or retry", file=sys.stderr)
+        return False
+    print(f"verified: {att_key} matches {Path(path).name}")
+    return True
+
+
 def _show(zot, keys, as_json: bool, verbose: bool = False) -> int:
-    """One line per key (or --json dumps of the full item data). Bad keys are
-    reported to stderr and don't stop the rest; exit 1 if any key failed."""
+    """One line per key, then one indented line per attachment: filename,
+    contentType, md5, and whether the file is stored — nothing downloaded
+    (or --json dumps of the full item data, with an `attachments` list).
+    Bad keys are reported to stderr and don't stop the rest; exit 1 if any
+    key failed."""
     failed = 0
     datas = []
     for key in keys:
@@ -188,8 +211,11 @@ def _show(zot, keys, as_json: bool, verbose: bool = False) -> int:
             if verbose:
                 print(str(e).strip(), file=sys.stderr)
             continue
+        rows = _attachment_rows(zot, item)
         if as_json:
-            datas.append(d)
+            datas.append(dict(d, attachments=[
+                {k: v for k, v in r.items() if k != "status"} for r in rows]
+                if isinstance(rows, list) else None))
             continue
         who = " ".join(x for x in (_first_author(d), _year(d)) if x)
         title = str(d.get("title") or "")
@@ -197,6 +223,11 @@ def _show(zot, keys, as_json: bool, verbose: bool = False) -> int:
             title = title[:59] + "…"
         print(f"{key} · {d.get('itemType', '')} · {who} · {title} · "
               f"{_identifier(d)}")
+        if isinstance(rows, str):
+            print(f"  attachments: could not list ({rows})")
+        for r in rows if isinstance(rows, list) else []:
+            print(f"  attachment {r['key']} · {r['filename'] or '—'} · "
+                  f"{r['contentType'] or '—'} · md5 {r['md5'] or '—'} · {r['status']}")
     if as_json:
         print(json.dumps(datas, ensure_ascii=False, indent=2))
     return 1 if failed else 0
@@ -358,7 +389,14 @@ def main(argv=None):
                    help="write the BibTeX here instead of stdout")
 
     p = sub.add_parser("attach", help="attach a local file to an item (WebDAV or Zotero Storage)")
-    p.add_argument("--key"); p.add_argument("--pdf")
+    p.add_argument("--key")
+    p.add_argument("--file", "--pdf", dest="file", metavar="FILE",
+                   help="the file to attach, any type (--pdf is an alias)")
+    p.add_argument("--title", help="with --key: the attachment's title "
+                                   "(default: the filename)")
+    p.add_argument("--verify", action="store_true",
+                   help="download each upload back and compare md5; exit 1 on a "
+                        "mismatch (nothing is deleted)")
     p.add_argument("--from", dest="src", help="a .created.json list (batch)")
     p.add_argument("--all", action="store_true")
 
@@ -542,7 +580,7 @@ def main(argv=None):
                     except MetadataError as e:
                         failures.append((aid, f"item {key} created, but PDF failed: {e}"))
                         print(f"error: item {key} created, but PDF failed: {e}\n"
-                              f"  attach manually: zotkit attach --key {key} --pdf <file>",
+                              f"  attach manually: zotkit attach --key {key} --file <file>",
                               file=sys.stderr)
                         continue
                     info = zot.attach(key, pdf)
@@ -550,7 +588,7 @@ def main(argv=None):
         if a.doi and new:
             hint = new[0]["key"] if len(new) == 1 else "<key>"
             print("no PDF downloaded (publisher PDFs are usually paywalled) — "
-                  f"attach one with: zotkit attach --key {hint} --pdf <file>")
+                  f"attach one with: zotkit attach --key {hint} --file <file>")
         if len(wanted) > 1:
             print(f"batch: created {len(new)}, skipped {dup} dup, failed {len(failures)}")
         return 1 if failures else 0
@@ -699,11 +737,16 @@ def main(argv=None):
         return 1 if failed else 0
 
     elif a.cmd == "attach":
-        if a.key and a.pdf:
-            print(zot.attach(a.key, a.pdf))
+        if a.title and not (a.key and a.file):
+            ap.error("--title needs --key + --file")
+        if a.key and a.file:
+            res = zot.attach(a.key, a.file, title=a.title)
+            print(res)
+            if a.verify and not _verify(zot, res["attachment_key"], a.file):
+                return 1
         elif a.src:
             rows = json.load(open(a.src, encoding="utf-8"))
-            done = 0
+            done = bad = 0
             for m in rows:
                 if not m.get("file_path") or not Path(m["file_path"]).exists():
                     print(f"  SKIP no file: {str(m.get('title'))[:55]}"); continue
@@ -712,10 +755,13 @@ def main(argv=None):
                 if not a.all and done >= 1:
                     break
                 print(f"- {str(m.get('title'))[:60]}")
-                zot.attach(m["key"], m["file_path"]); done += 1
+                res = zot.attach(m["key"], m["file_path"]); done += 1
+                if a.verify and not _verify(zot, res["attachment_key"], m["file_path"]):
+                    bad += 1
             print(f"attached {done}")
+            return 1 if bad else 0
         else:
-            ap.error("attach needs --key + --pdf, or --from <created.json>")
+            ap.error("attach needs --key + --file, or --from <created.json>")
 
     elif a.cmd == "fetch":
         out = _fetch_out_dir(a.out, Path.cwd())

@@ -53,7 +53,8 @@ zotkit find --any vaswani                # 全字段搜索:标题+摘要+作者+
                                          #   首次调用会下载全库(几百条约 10–20 秒),之后走本地
                                          #   缓存,每次先和服务器版本号核对,结果仍完整;
                                          #   ZOTKIT_CACHE=0 可关闭
-zotkit show AB12CD34 EF56GH78            # 按 key 查条目,一行一条(只读;
+zotkit show AB12CD34 EF56GH78            # 按 key 查条目,一行一条,下面列出附件的
+                                         #   文件名、md5、文件是否已存(只读,不下载;
                                          #   --json 输出完整数据;key 不存在则
                                          #   报错到 stderr 且退出码为 1)
 zotkit cite AB12CD34 EF56GH78            # 短引用,一行一条:"Laughlin, Phys. Rev.
@@ -97,7 +98,8 @@ zotkit audit                             # 只读体检报告:缺摘要/缺 DOI/
 zotkit abstract --key AB12CD34 --source cnki --file abs.txt
                                          # 粘贴摘要并记录出处(owner 工具;文本自动
                                          #   清洗;已有摘要需 --force 才会替换)
-zotkit attach --key AB12CD34 --pdf 论文.pdf   # 上传 PDF
+zotkit attach --key AB12CD34 --file 论文.pdf  # 上传附件(任意类型,--pdf 为别名;
+                                         #   --title 设附件标题,--verify 上传后下载比对)
 zotkit fetch --key AB12CD34 --out downloads   # 下载 PDF(不给 --out 时默认存到
                                          #   ./downloads;若当前目录在 git 仓库里会
                                          #   提示改用仓库外的明确路径);--key 也可以是

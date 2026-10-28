@@ -78,7 +78,8 @@ zotkit find --any vaswani                   # metadata-wide: title, abstract,
                                             #   for the abstract field only
 zotkit find --id 2401.12345 10.1038/nature14539   # already in the library? one line
                                             #   per id: KEY or "absent" (local, fast)
-zotkit show AB12CD34 EF56GH78               # one line per key (read-only);
+zotkit show AB12CD34 EF56GH78               # one line per key + its attachments with
+                                            #   md5 (read-only, nothing downloaded);
                                             #   --json for the full item data
 zotkit cite AB12CD34 EF56GH78               # short citations: "Laughlin, Phys. Rev.
                                             #   Lett. 50, 1395 (1983)"
@@ -105,7 +106,9 @@ zotkit audit                                # read-only health report: what's mi
 zotkit abstract --key AB12CD34 --source cnki --file abs.txt   # paste an abstract
                                             #   with provenance (owner's tool)
 
-zotkit attach --key AB12CD34 --pdf paper.pdf     # single attach
+zotkit attach --key AB12CD34 --file paper.pdf    # single attach (any file type; --pdf
+                                                 #   is an alias); --title names it,
+                                                 #   --verify downloads it back to check
 zotkit fetch --key AB12CD34 --out downloads      # download attachments (same auto-detection)
 
 zotkit export --key AB12CD34 EF56GH78 -o refs.bib   # BibTeX; cite key = item key
@@ -240,7 +243,20 @@ existence key.
 
 `zotkit show K [K …]` is the read-only lookup by item key: one line per key —
 `KEY · itemType · FirstAuthor Year · Title · DOI-or-arXiv-id` — or `--json` for the
-full item data. An unknown key is reported on stderr as a single sanitized line
+full item data. Under each item, one indented line per attachment:
+
+```
+  attachment ATTKEY01 · paper.pdf · application/pdf · md5 9e107d9d372bb6826bd81d3542a419d6 · stored
+```
+
+The md5 is the attachment item's own, so "is this local file already in the
+library?" is a comparison against `md5sum`, with no download. The last field says
+whether the file is on the server (`stored` / `missing`), `linked` for linked
+files and URLs, or `unknown (…)` when the check couldn't tell. The check is one
+WebDAV `HEAD` per attachment, or, on Zotero Storage, one request that stops at the
+download redirect. Given an attachment's own key, `show` prints its line too.
+`--json` adds the same facts as an `attachments` list on each item.
+An unknown key is reported on stderr as a single sanitized line
 (`error: KEY: not found (404)` — no request URL, so nothing private lands in CI
 logs; `--verbose` restores the full API exception) and the exit code is 1, while
 the remaining keys still print. This deliberately supersedes requests for a
@@ -281,6 +297,14 @@ the one place a file lives.
 one file and notes its parent on stderr. When nothing is saved, it says why and
 exits 1: the item has no stored file attachments, the downloads failed, or the key
 doesn't exist. Scripts can rely on the exit code.
+
+`attach --key K --file F` uploads any file type (`--pdf` is kept as an alias). The
+attachment's title defaults to the filename; `--title "Talk slides"` sets it
+instead. `--verify` downloads each upload back and compares md5 with the local
+file. On a mismatch or a failed download it names the attachment key on stderr
+and exits 1, and deletes nothing: delete the attachment or retry. On Zotero
+Storage, `--title` and `--verify` have not been tested against a real storage
+library yet.
 
 ### Enriching existing items
 

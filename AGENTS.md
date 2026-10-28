@@ -59,7 +59,10 @@ zotkit find --id ID [ID...]          # existence check for arXiv ids/DOIs (or on
                                      #   "ID · KEY · itemType" or "ID · absent".
                                      #   Local, no remote fetch; exit 1 only for
                                      #   an input that is neither id nor DOI
-zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
+zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each,
+                                     #   plus one line per attachment: filename,
+                                     #   contentType, md5, stored/missing/linked
+                                     #   (no download — compare md5 to a local file)
                                      #   unknown key -> one stderr line + exit 1
                                      #   (--verbose for the full API exception)
 zotkit cite KEY [KEY...]             # short citation per key (local, read-only):
@@ -88,6 +91,9 @@ zotkit audit [--json]                # read-only library health report; journal
 zotkit abstract --key K --source SLUG   # store an OWNER-PROVIDED abstract with
                                      #   provenance; --force only on owner's say-so
 zotkit attach --from x.created.json --all
+zotkit attach --key K --file F [--title T] [--verify]   # any file type (--pdf =
+                                     #   alias); --verify: download back, md5
+                                     #   compare, exit 1 + key on mismatch
 zotkit fetch --key KEY --out downloads   # prefer an explicit --out OUTSIDE any git
                                      #   repo (default ./downloads; it warns in a repo)
                                      #   KEY may be an attachment key (fetches that

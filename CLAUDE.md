@@ -55,9 +55,11 @@ README — keep docs and code consistent with it.
   `test_cache.py` (version-map reconciliation: add/change/delete, chunking,
   corrupt-file and disabled fallbacks),
   `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
-  `test_show.py` (one-line format, sanitized errors, --verbose),
+  `test_show.py` (one-line format, attachment lines, sanitized errors, --verbose),
   `test_export.py` (_rekey + provenance header + faked HTTP),
   `test_fetch.py` (attachment-key resolution, why-nothing-saved errors + exit 1),
+  `test_attach.py` (show's stored/missing/linked check without a download,
+  `attach --title` / `--verify` on both storage branches against faked HTTP),
   `test_fetch_warning.py` (git-worktree detection on tmp repos), and
   `test_lint.py` (lint_tags accepts both str and Zotero-native {"tag": ...}
   shapes). Run with `pip install -e ".[dev]" && pytest`. pytest is a dev extra

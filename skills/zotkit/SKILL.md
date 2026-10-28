@@ -66,6 +66,11 @@ zotkit find --id < ids.txt                     # or one id per line on stdin
 # look items up by key (read-only)
 zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id
 zotkit show AB12CD34 EF56GH78 --json           # full item data instead of one-liners
+#   Under each item, one line per attachment (nothing is downloaded):
+#     attachment ATTKEY01 · paper.pdf · application/pdf · md5 <32 hex> · stored
+#   "Is this local file already in the library?" → compare `md5sum file` with
+#   that md5. Do NOT fetch attachments to find out. Last field: stored / missing
+#   (no file on the server) / linked / unknown (…). --json: `attachments` list.
 #   THE use case: verifying a manifest of item keys. Loop `show` over the keys and
 #   check the exit code — it is 1 if ANY key was unknown (each bad key is reported on
 #   stderr; the good ones still print), 0 when every key resolved:
@@ -178,8 +183,14 @@ zotkit abstract --key <itemKey> --source cnki --file abs.txt   # or pipe via std
 #   --force may ONLY be used when the user explicitly says to replace.
 
 # upload / attach PDFs (WebDAV or Zotero Storage — auto-detected from .env)
-zotkit attach --key <itemKey> --pdf /abs/paper.pdf
+zotkit attach --key <itemKey> --file /abs/paper.pdf     # any file type (--pdf = alias)
+zotkit attach --key <itemKey> --file /abs/talk.pdf --title "Talk slides" --verify
 zotkit attach --from x.created.json --all      # batch; skips already-attached
+#   --title sets the attachment's title (default: the filename) — don't rename
+#   files first. --verify downloads each upload back and compares md5; on a
+#   mismatch it prints `error: verify failed for attachment <KEY>: …` and exits 1.
+#   It deletes nothing: tell the user, then delete that attachment or retry.
+#   Never hand-write an attach → fetch → compare loop; use --verify.
 
 # download / fetch PDFs (same auto-detection)
 zotkit fetch --key <itemKey> --out /abs/path/outside/any/repo

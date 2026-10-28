@@ -27,12 +27,19 @@ def _pyzotero_404(key):
                      f"?format=json\nMethod: GET\nResponse: Not found")
 
 
-def fake_zot(items):
+def fake_zot(items, rows=None):
     def item(key):
         if key not in items:
             raise _pyzotero_404(key)
         return {"key": key, "version": 1, "data": dict(items[key])}
-    return types.SimpleNamespace(z=types.SimpleNamespace(item=item))
+
+    def attachment_rows(it):
+        r = (rows or {}).get(it["key"], [])
+        if isinstance(r, Exception):
+            raise r
+        return r
+    return types.SimpleNamespace(z=types.SimpleNamespace(item=item),
+                                 attachment_rows=attachment_rows)
 
 
 def test_one_line_format(capsys):
@@ -120,3 +127,35 @@ def test_bad_key_in_json_mode_still_exits_1(capsys):
     assert rc == 1
     assert len(json.loads(cap.out)) == 1
     assert "BAD1" in cap.err
+
+
+# ---------- attachments (#14): listed under the item, nothing downloaded ----------
+
+ROWS = [{"key": "ATT00001", "filename": "paper.pdf", "contentType": "application/pdf",
+         "linkMode": "imported_file", "md5": "9e107d9d372bb6826bd81d3542a419d6",
+         "stored": True, "status": "stored"},
+        {"key": "ATT00002", "filename": "", "contentType": "", "linkMode": "linked_url",
+         "md5": "", "stored": None, "status": "linked"}]
+
+
+def test_attachment_lines_under_the_item(capsys):
+    rc = cli._show(fake_zot({"K1": PAPER}, {"K1": ROWS}), ["K1"], False)
+    lines = capsys.readouterr().out.splitlines()
+    assert rc == 0
+    assert lines[1] == ("  attachment ATT00001 · paper.pdf · application/pdf · "
+                        "md5 9e107d9d372bb6826bd81d3542a419d6 · stored")
+    assert lines[2] == "  attachment ATT00002 · — · — · md5 — · linked"
+
+
+def test_attachments_in_json(capsys):
+    cli._show(fake_zot({"K1": PAPER}, {"K1": ROWS}), ["K1"], True)
+    (d,) = json.loads(capsys.readouterr().out)
+    assert d["attachments"][0] == {k: v for k, v in ROWS[0].items() if k != "status"}
+    assert d["attachments"][1]["stored"] is None
+
+
+def test_attachment_lookup_failure_does_not_fail_the_key(capsys):
+    rc = cli._show(fake_zot({"K1": PAPER}, {"K1": _pyzotero_404("K1")}), ["K1"], False)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "  attachments: could not list (" in out and USER_ID not in out

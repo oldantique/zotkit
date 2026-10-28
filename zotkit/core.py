@@ -460,9 +460,11 @@ class Zot:
             raise KeyError(f"{e.args[0]} missing from .env — attachment operations "
                            "need WEBDAV_URL/WEBDAV_USER/WEBDAV_PASS") from None
 
-    def attach(self, item_key: str, file_path: str | os.PathLike) -> dict:
+    def attach(self, item_key: str, file_path: str | os.PathLike,
+               title: str | None = None) -> dict:
         """Attach a local file to an item. Bytes go to WebDAV (<key>.zip + .prop)
-        when WEBDAV_* is configured, otherwise to Zotero Storage via the Web API."""
+        when WEBDAV_* is configured, otherwise to Zotero Storage via the Web API.
+        `title` names the attachment item (default: the filename)."""
         f = Path(file_path)
         if "WEBDAV_URL" not in self.env:
             resp = self.z.attachment_simple([str(f)], item_key)
@@ -473,12 +475,16 @@ class Zot:
             key = ""
             if isinstance(entry, dict):
                 key = entry.get("key") or entry.get("data", {}).get("key", "")
+            if title and key:  # attachment_simple has no title parameter
+                it = self.z.item(key)
+                it["data"]["title"] = title
+                self.z.update_item(it)
             return {"attachment_key": key, "filename": f.name, "storage": "zotero"}
         filename, md5 = f.name, _md5_file(f)
         mtime = int(os.path.getmtime(f) * 1000)
         ctype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         tmpl = self.z.item_template("attachment", "imported_file")
-        tmpl.update({"parentItem": item_key, "title": filename, "filename": filename,
+        tmpl.update({"parentItem": item_key, "title": title or filename, "filename": filename,
                      "contentType": ctype, "md5": md5, "mtime": mtime})
         resp = self.z.create_items([tmpl])
         if resp.get("failed"):
@@ -497,6 +503,86 @@ class Zot:
         if not ok:
             raise RuntimeError(f"WebDAV PUT failed: zip={r1.status_code} prop={r2.status_code}")
         return {"attachment_key": key, "filename": filename, "storage": "webdav"}
+
+    def _storage_file_url(self, att_key: str) -> str:
+        z = self.z
+        return f"{z.endpoint.rstrip('/')}/{z.library_type}/{z.library_id}/items/{att_key}/file"
+
+    def _file_client(self) -> httpx.Client:
+        auth = self._webdav()[1] if "WEBDAV_URL" in self.env else None
+        return httpx.Client(auth=auth, timeout=120)
+
+    def _stored(self, c: httpx.Client, att_key: str) -> str:
+        """"stored" / "missing" / "unknown (…)" for one attachment's file,
+        without downloading it. WebDAV: HEAD <key>.zip. Zotero Storage: GET
+        /file without following the redirect (302 = a file exists; HEAD
+        answers 200 either way)."""
+        try:
+            if "WEBDAV_URL" in self.env:
+                r = c.head(f"{self._webdav()[0]}/{att_key}.zip")
+                ok = r.status_code == 200
+            else:
+                r = c.get(self._storage_file_url(att_key), follow_redirects=False,
+                          headers={"Zotero-API-Key": self.z.api_key})
+                ok = r.status_code == 302
+        except httpx.HTTPError:
+            return "unknown (network error)"
+        if ok:
+            return "stored"
+        return "missing" if r.status_code == 404 else f"unknown (HTTP {r.status_code})"
+
+    def attachment_rows(self, item: dict) -> list[dict]:
+        """`show`'s view of an item's attachments (or of the attachment itself):
+        key, filename, contentType, linkMode, md5 from the API data, and
+        whether the file is on the server — nothing is downloaded."""
+        if item["data"].get("itemType") == "attachment":
+            atts = [item]
+        else:
+            atts = [ch for ch in self.z.everything(self.z.children(item["key"]))
+                    if ch["data"].get("itemType") == "attachment"]
+        rows = []
+        with self._file_client() as c:
+            for a in atts:
+                d = a["data"]
+                link = d.get("linkMode", "")
+                status = "linked" if link.startswith("linked_") else self._stored(c, a["key"])
+                rows.append({"key": a["key"], "filename": d.get("filename", ""),
+                             "contentType": d.get("contentType", ""), "linkMode": link,
+                             "md5": d.get("md5") or "",
+                             "stored": {"stored": True, "missing": False}.get(status),
+                             "status": status})
+        return rows
+
+    def verify_attachment(self, att_key: str, file_path: str | os.PathLike) -> str | None:
+        """Download a stored attachment back and compare it with the local
+        file: None when the md5s match, else why not. Raw bytes on both
+        branches (pyzotero's file() parses some content types)."""
+        f = Path(file_path)
+        want = _md5_file(f)
+        try:
+            with self._file_client() as c:
+                if "WEBDAV_URL" in self.env:
+                    r = c.get(f"{self._webdav()[0]}/{att_key}.zip")
+                    if r.status_code != 200:
+                        return f"download returned HTTP {r.status_code}"
+                    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                        names = z.namelist()
+                        data = z.read(f.name if f.name in names else names[0])
+                else:
+                    r = c.get(self._storage_file_url(att_key), follow_redirects=False,
+                              headers={"Zotero-API-Key": self.z.api_key})
+                    if r.status_code != 302:
+                        return f"download returned HTTP {r.status_code}"
+                    # the redirect goes to the file host: no API key there
+                    r = httpx.get(r.headers["location"], timeout=120,
+                                  follow_redirects=True)
+                    if r.status_code != 200:
+                        return f"download returned HTTP {r.status_code}"
+                    data = r.content
+        except (httpx.HTTPError, zipfile.BadZipFile, IndexError) as e:
+            return f"download failed ({type(e).__name__})"
+        got = hashlib.md5(data).hexdigest()
+        return None if got == want else f"stored md5 {got} differs from local {want}"
 
     def has_attachment(self, item_key: str) -> bool:
         return any(k["data"].get("itemType") == "attachment"
