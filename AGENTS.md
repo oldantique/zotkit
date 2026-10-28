@@ -60,10 +60,11 @@ zotkit find --id ID [ID...]          # existence check for arXiv ids/DOIs (or on
                                      #   "ID · KEY · itemType" or "ID · absent".
                                      #   Local, no remote fetch; exit 1 only for
                                      #   an input that is neither id nor DOI
-zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each,
-                                     #   plus one line per attachment: filename,
-                                     #   contentType, md5, stored/missing/linked
-                                     #   (no download — compare md5 to a local file)
+zotkit show KEY [KEY...] [--json] [--attachments]   # read-only lookup by key,
+                                     #   one line each; --attachments adds a line
+                                     #   per attachment: filename, contentType, md5,
+                                     #   stored/missing/linked (no download — compare
+                                     #   md5 to a local file; costs a request per key)
                                      #   unknown key -> one stderr line + exit 1
                                      #   (--verbose for the full API exception)
 zotkit cite KEY [KEY...]             # short citation per key (local, read-only):

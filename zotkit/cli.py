@@ -253,12 +253,14 @@ def _verify(zot, att_key: str, path) -> bool:
     return True
 
 
-def _show(zot, keys, as_json: bool, verbose: bool = False) -> int:
-    """One line per key, then one indented line per attachment: filename,
-    contentType, md5, and whether the file is stored — nothing downloaded
-    (or --json dumps of the full item data, with an `attachments` list).
-    Bad keys are reported to stderr and don't stop the rest; exit 1 if any
-    key failed."""
+def _show(zot, keys, as_json: bool, verbose: bool = False, *,
+          attachments: bool = False) -> int:
+    """One line per key (or --json dumps of the full item data). With
+    `attachments`, one indented line per attachment: filename, contentType,
+    md5, and whether the file is stored — nothing downloaded (in --json, an
+    `attachments` list). Off by default: it costs requests per key, and
+    agents run `show` over whole reference lists. Bad keys are reported to
+    stderr and don't stop the rest; exit 1 if any key failed."""
     failed = 0
     datas = []
     for key in keys:
@@ -271,11 +273,11 @@ def _show(zot, keys, as_json: bool, verbose: bool = False) -> int:
             if verbose:
                 print(str(e).strip(), file=sys.stderr)
             continue
-        rows = _attachment_rows(zot, item)
+        rows = _attachment_rows(zot, item) if attachments else []
         if as_json:
             datas.append(dict(d, attachments=[
                 {k: v for k, v in r.items() if k != "status"} for r in rows]
-                if isinstance(rows, list) else None))
+                if isinstance(rows, list) else None) if attachments else d)
             continue
         who = " ".join(x for x in (_first_author(d), _year(d)) if x)
         title = str(d.get("title") or "")
@@ -384,6 +386,10 @@ def main(argv=None):
     p.add_argument("keys", nargs="+", metavar="KEY")
     p.add_argument("--json", action="store_true",
                    help="dump the full item data instead of one-liners")
+    p.add_argument("--attachments", action="store_true",
+                   help="also list each attachment: filename, contentType, md5, "
+                        "and whether the file is stored (no download; one more "
+                        "request per key, so off by default)")
     p.add_argument("--verbose", action="store_true",
                    help="on errors, also print the full API exception "
                         "(includes the request URL with your library ID)")
@@ -529,7 +535,7 @@ def main(argv=None):
                               any_text=a.any, abstract=a.abstract))
 
     elif a.cmd == "show":
-        return _show(zot, a.keys, a.json, a.verbose)
+        return _show(zot, a.keys, a.json, a.verbose, attachments=a.attachments)
 
     elif a.cmd == "cite":
         from .cite import short

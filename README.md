@@ -81,9 +81,9 @@ zotkit find --any vaswani                   # metadata-wide: title, abstract,
                                             #   for the abstract field only
 zotkit find --id 2401.12345 10.1038/nature14539   # already in the library? one line
                                             #   per id: KEY or "absent" (local, fast)
-zotkit show AB12CD34 EF56GH78               # one line per key + its attachments with
-                                            #   md5 (read-only, nothing downloaded);
-                                            #   --json for the full item data
+zotkit show AB12CD34 EF56GH78               # one line per key (read-only); --json for
+                                            #   the full item data; --attachments adds
+                                            #   each attachment's md5 (no download)
 zotkit cite AB12CD34 EF56GH78               # short citations: "Laughlin, Phys. Rev.
                                             #   Lett. 50, 1395 (1983)"
 
@@ -260,7 +260,8 @@ existence key.
 
 `zotkit show K [K …]` is the read-only lookup by item key: one line per key —
 `KEY · itemType · FirstAuthor Year · Title · DOI-or-arXiv-id` — or `--json` for the
-full item data. Under each item, one indented line per attachment:
+full item data. With `--attachments`, one indented line per attachment follows
+each item:
 
 ```
   attachment ATTKEY01 · paper.pdf · application/pdf · md5 9e107d9d372bb6826bd81d3542a419d6 · stored
@@ -271,8 +272,10 @@ library?" is a comparison against `md5sum`, with no download. The last field say
 whether the file is on the server (`stored` / `missing`), `linked` for linked
 files and URLs, or `unknown (…)` when the check couldn't tell. The check is one
 WebDAV `HEAD` per attachment, or, on Zotero Storage, one request that stops at the
-download redirect. Given an attachment's own key, `show` prints its line too.
-`--json` adds the same facts as an `attachments` list on each item.
+download redirect, which is why it is opt-in: plain `show` stays one request per
+key for whole reference lists. Given an attachment's own key, `show --attachments`
+prints its line too. With `--json`, the same facts come as an `attachments` list
+on each item.
 An unknown key is reported on stderr as a single sanitized line
 (`error: KEY: not found (404)` — no request URL, so nothing private lands in CI
 logs; `--verbose` restores the full API exception) and the exit code is 1, while

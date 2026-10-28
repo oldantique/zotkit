@@ -139,7 +139,8 @@ ROWS = [{"key": "ATT00001", "filename": "paper.pdf", "contentType": "application
 
 
 def test_attachment_lines_under_the_item(capsys):
-    rc = cli._show(fake_zot({"K1": PAPER}, {"K1": ROWS}), ["K1"], False)
+    rc = cli._show(fake_zot({"K1": PAPER}, {"K1": ROWS}), ["K1"], False,
+                   attachments=True)
     lines = capsys.readouterr().out.splitlines()
     assert rc == 0
     assert lines[1] == ("  attachment ATT00001 · paper.pdf · application/pdf · "
@@ -148,15 +149,29 @@ def test_attachment_lines_under_the_item(capsys):
 
 
 def test_attachments_in_json(capsys):
-    cli._show(fake_zot({"K1": PAPER}, {"K1": ROWS}), ["K1"], True)
+    cli._show(fake_zot({"K1": PAPER}, {"K1": ROWS}), ["K1"], True, attachments=True)
     (d,) = json.loads(capsys.readouterr().out)
     assert d["attachments"][0] == {k: v for k, v in ROWS[0].items() if k != "status"}
     assert d["attachments"][1]["stored"] is None
 
 
 def test_attachment_lookup_failure_does_not_fail_the_key(capsys):
-    rc = cli._show(fake_zot({"K1": PAPER}, {"K1": _pyzotero_404("K1")}), ["K1"], False)
+    rc = cli._show(fake_zot({"K1": PAPER}, {"K1": _pyzotero_404("K1")}), ["K1"], False,
+                   attachments=True)
     out = capsys.readouterr().out
     assert rc == 0
     assert "  attachments: could not list (" in out and USER_ID not in out
 
+
+
+def test_attachments_are_opt_in(capsys):
+    # show runs over whole reference lists: by default it costs one request
+    # per key, as before, and prints no attachment lines
+    def no_lookup(it):
+        raise AssertionError("attachments looked up without --attachments")
+    zot = fake_zot({"K1": PAPER})
+    zot.attachment_rows = no_lookup
+    assert cli._show(zot, ["K1"], False) == 0
+    assert cli._show(zot, ["K1"], True) == 0
+    out = capsys.readouterr().out
+    assert "attachment" not in out

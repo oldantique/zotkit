@@ -53,10 +53,10 @@ zotkit find --any vaswani                # 全字段搜索:标题+摘要+作者+
                                          #   首次调用会下载全库(几百条约 10–20 秒),之后走本地
                                          #   缓存,每次先和服务器版本号核对,结果仍完整;
                                          #   ZOTKIT_CACHE=0 可关闭
-zotkit show AB12CD34 EF56GH78            # 按 key 查条目,一行一条,下面列出附件的
-                                         #   文件名、md5、文件是否已存(只读,不下载;
-                                         #   --json 输出完整数据;key 不存在则
-                                         #   报错到 stderr 且退出码为 1)
+zotkit show AB12CD34 EF56GH78            # 按 key 查条目,一行一条(只读;
+                                         #   --json 输出完整数据;--attachments 再列出
+                                         #   附件的文件名、md5、文件是否已存,不下载;
+                                         #   key 不存在则报错到 stderr 且退出码为 1)
 zotkit cite AB12CD34 EF56GH78            # 短引用,一行一条:"Laughlin, Phys. Rev.
                                          #   Lett. 50, 1395 (1983)";只读、本地;
                                          #   年份优先取 Extra 里的 issue-date

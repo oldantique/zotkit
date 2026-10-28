@@ -66,11 +66,14 @@ zotkit find --id < ids.txt                     # or one id per line on stdin
 # look items up by key (read-only)
 zotkit show AB12CD34                           # KEY · itemType · Author Year · Title · id
 zotkit show AB12CD34 EF56GH78 --json           # full item data instead of one-liners
-#   Under each item, one line per attachment (nothing is downloaded):
+zotkit show AB12CD34 --attachments             # + one line per attachment (no download):
 #     attachment ATTKEY01 · paper.pdf · application/pdf · md5 <32 hex> · stored
+#   --attachments costs an extra request per key: use it for the file question,
+#   not when verifying a long list of keys.
 #   "Is this local file already in the library?" → compare `md5sum file` with
 #   that md5. Do NOT fetch attachments to find out. Last field: stored / missing
-#   (no file on the server) / linked / unknown (…). --json: `attachments` list.
+#   (no file on the server) / linked / unknown (…). With --json: an
+#   `attachments` list on each item.
 #   THE use case: verifying a manifest of item keys. Loop `show` over the keys and
 #   check the exit code — it is 1 if ANY key was unknown (each bad key is reported on
 #   stderr; the good ones still print), 0 when every key resolved:
