@@ -83,7 +83,10 @@ zotkit enrich --missing abstract|doi|abbreviation | --all
                                      # batch enrich (rate limiting internal)
                                      #   "NOTE abstract still missing: <source> has
                                      #   none" = source can't fill it, not "all fine"
-zotkit audit [--json]                # read-only library health report; journal
+zotkit audit [--json]                # read-only library health report; items
+                                     #   whose only PDFs are SI / peer-review files
+                                     #   get their own bucket (article PDF missing);
+                                     #   journal
                                      #   abbreviations: "registered" fixes vs
                                      #   "candidate (rule-derived)", plus every
                                      #   journal still unverified — a candidate is

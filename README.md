@@ -354,7 +354,13 @@ over just the gaps — batching and arXiv/CrossRef rate limiting stay internal, 
 no pacing or batch-splitting on the caller's side. **`zotkit audit`** is the
 read-only companion: counts and key lists for missing abstracts, missing DOI/arXiv
 id, missing PDF attachments, `abstract-source` stamp hygiene, and journal
-abbreviations (`--json` for agents). The journal check has two parts:
+abbreviations (`--json` for agents). An item whose only PDFs are supplementary
+material (Supplementary Information, a Peer Review File, Nature's `…_MOESM1_ESM`,
+Science's `…_sm.pdf`) is listed separately as "only supplementary PDFs", since its
+article PDF is still missing. The check reads the attachment's title, or its
+filename when the title is just the filename. If it misjudges an article PDF,
+give that attachment a plain title such as "Full Text PDF". The journal check has
+two parts:
 
 - **To fix:** what enrich would change, each labelled `registered` or
   `candidate (rule-derived)`.

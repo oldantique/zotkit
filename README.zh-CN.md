@@ -85,7 +85,8 @@ zotkit enrich --key AB12CD34             # 就地补全已有条目的缺失字�
 zotkit enrich --missing abstract --apply # 批量:只跑缺摘要的条目(还有 --missing doi
                                          #   / abbreviation / --all;限速在内部,
                                          #   调用方无需分批睡眠)
-zotkit audit                             # 只读体检报告:缺摘要/缺 DOI/缺 PDF/
+zotkit audit                             # 只读体检报告:缺摘要/缺 DOI/缺 PDF
+                                         #   (只有补充材料 PDF 的条目单独列出)/
                                          #   abstract-source 戳的健康度/期刊缩写
                                          #   (--json 给 agent)
                                          # 期刊缩写一律存带点的 ISO 4。只有登记形式

@@ -162,6 +162,9 @@ zotkit enrich --key AB12CD34 --doi 10.1103/x.y --rebuild-record   # same, when a
 zotkit audit                                   # read-only report: missing abstracts /
 zotkit audit --json                            #   DOIs / PDFs, abstract-source hygiene,
                                                #   journal abbreviations
+#   "only supplementary PDFs": the item has SI / peer-review PDFs but no article
+#   PDF — treat it like missing a PDF. If an article PDF was misjudged (its title
+#   looks like SI), the owner can give the attachment a plain title ("Full Text PDF").
 zotkit enrich --missing abstract --apply       # enrich only the gaps (also --missing doi,
 zotkit enrich --all                            #   --missing abbreviation; repeatable)
 #   batching + rate limits stay INTERNAL — never split the set or add sleeps

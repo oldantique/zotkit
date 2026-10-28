@@ -1,7 +1,9 @@
 """Offline tests for zotkit.audit bucketing, on a fixture library."""
 import types
 
-from zotkit.audit import audit
+import pytest
+
+from zotkit.audit import audit, is_supplementary
 
 
 def _top(key, itype="journalArticle", ab="", extra="", doi="", url=""):
@@ -110,3 +112,53 @@ def test_cli_labels_candidates(monkeypatch, capsys, tmp_path):
     out = capsys.readouterr().out
     assert "EMPTY111  '(empty)' → 'New J. Phys.'  [candidate (rule-derived); no English LTWA entry: New]" in out
     assert "journals without a registered abbreviation (unverified, whatever is stored): 1" in out
+
+
+# ---------- supplementary-only PDFs (#13) ----------
+# titles/filenames as they occur in real libraries
+
+def _pdf(key, parent, title, filename=None):
+    return {"key": key, "data": {"itemType": "attachment", "parentItem": parent,
+                                 "contentType": "application/pdf", "title": title,
+                                 "filename": filename or title}}
+
+
+@pytest.mark.parametrize("title, filename", [
+    ("Hart2021_Peer_Review_File.pdf", None),
+    ("Peer Review File", "Peer Review File.pdf"),
+    ("41586_2024_8347_MOESM1_ESM.pdf", None),
+    ("science.adz8659_sm", "science.adz8659_sm.pdf"),
+    ("Supplemental_Material", "Supplemental_Material.pdf"),
+    ("SupplementalMaterial.pdf", None),
+    ("supp_pub", "supp_pub.pdf"),
+    ("Millisecond_coherence_Supp_mat_additions_in_red.pdf", None),
+    ("SUPPLEMENTARY INFORMATION", "Mutus - 2014 - Strong coupling.pdf"),  # renamed file
+    ("Supporting Information", "ja123456_si_001.pdf"),
+])
+def test_supplementary_attachments(title, filename):
+    assert is_supplementary(_pdf("A", "P", title, filename)["data"])
+
+
+@pytest.mark.parametrize("title, filename", [
+    ("Acharya - 2023 - Suppressing quantum errors by scaling a surface co.pdf", None),
+    ("Full Text PDF", "Supplementary.pdf"),        # a plain title overrides
+    ("PDF", "Gustavsson - 2016 - Suppressing relaxation.pdf"),
+    ("Smith - 2023 - Supporting quantum memories.pdf", None),
+    ("Preprint PDF", "2401.00001v2.pdf"),
+    ("已提交版本", "Chen 等 - 2016 - Measuring and Suppressing Quantum State Leakage.pdf"),
+])
+def test_article_attachments(title, filename):
+    assert not is_supplementary(_pdf("A", "P", title, filename)["data"])
+
+
+def test_only_supplementary_bucket():
+    tops = [_top("SIONLY11", ab="a", doi="10.1/a"), _top("BOTH1111", ab="a", doi="10.1/b"),
+            _top("NOPDF111", ab="a", doi="10.1/c")]
+    atts = [_pdf("A1", "SIONLY11", "Peer Review File", "Peer Review File.pdf"),
+            _pdf("A2", "BOTH1111", "Full Text PDF", "paper.pdf"),
+            _pdf("A3", "BOTH1111", "Supplementary Information")]
+    zot = types.SimpleNamespace(
+        listing=lambda kind: list({"top": tops, "attachments": atts}[kind]))
+    b = audit(zot)["buckets"]
+    assert b["only-supplementary-pdf"] == ["SIONLY11"]
+    assert b["missing-pdf"] == ["NOPDF111"]          # meaning unchanged

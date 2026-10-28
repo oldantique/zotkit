@@ -46,7 +46,7 @@ README — keep docs and code consistent with it.
   + `fetch_arxiv_batch` against a canned feed + the CrossRef → DataCite fallback
   and its type/field mapping), `test_enrich.py` (`plan_enrich`
   VoR gate, the `--doi` same-paper gate, the "source has no abstract" note + its
-  status invariant, `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing),
+  status invariant, `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing, supplementary-PDF titles from real libraries),
   `test_find.py` (--any/--abstract matching, hit annotations, snippet shape),
   `test_lookup.py` (`find --id`: id parsing, every place an item carries an
   identifier, one line per input), `test_journals.py` (ISO 4 normaliser: source

@@ -6,6 +6,7 @@ attachment sweep (a per-item /children walk would be one request per item);
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from . import journals
@@ -14,11 +15,30 @@ from .enrich import _STAMP, _find_arxiv_id
 # top-level entries that aren't scholarly records
 _NON_SCHOLARLY = {"attachment", "note", "annotation"}
 
+# a supplementary PDF's title or filename: "Supplementary Information",
+# "Supplemental_Material", "supp_pub", "Peer Review File", Nature's
+# "…_MOESM1_ESM", Science's "…_sm.pdf". "supp" must stand alone, or
+# "Suppressing quantum errors…" (an article filename) would match.
+_SUPPLEMENTARY = re.compile(
+    r"supplement|(?<![a-z])supp(?![a-z])|peer[\s_-]*review|supporting[\s_-]*info"
+    r"|MOESM\d|[_.-]sm(?![a-z])", re.IGNORECASE)
+
+
+def is_supplementary(att: dict) -> bool:
+    """A PDF attachment that is supplementary material, judged by its title —
+    or by its filename when the title is just the filename (Zotero can rename
+    an SI file after its parent, so the title is the better signal). Giving a
+    misjudged article PDF a plain title ("Full Text PDF") overrides this."""
+    title = (att.get("title") or "").strip()
+    name = title if title and title != att.get("filename") else att.get("filename", "")
+    return bool(_SUPPLEMENTARY.search(name or ""))
+
 # bucket key -> human label, in report order
 BUCKETS = {
     "missing-abstract": "missing abstract",
     "missing-identifier": "missing DOI / arXiv id",
     "missing-pdf": "missing PDF attachment",
+    "only-supplementary-pdf": "only supplementary PDFs (article PDF missing)",
     "unstamped-abstract": "abstract without abstract-source stamp",
     "stale-stamp": "abstract-source stamp but no abstract",
     "journal-abbreviation": "journal abbreviation to fix (enrich can)",
@@ -39,8 +59,9 @@ def audit(zot) -> dict[str, Any]:
     list is the "still to verify against the ISSN Portal" worklist."""
     tops = zot.listing("top")
     atts = zot.listing("attachments")
-    pdf_parents = {a["data"].get("parentItem") for a in atts
-                   if a["data"].get("contentType") == "application/pdf"}
+    pdfs = [a["data"] for a in atts if a["data"].get("contentType") == "application/pdf"]
+    pdf_parents = {d.get("parentItem") for d in pdfs}
+    article_parents = {d.get("parentItem") for d in pdfs if not is_supplementary(d)}
     keys: list[str] = []
     buckets: dict[str, list[str]] = {b: [] for b in BUCKETS}
     abbrev: dict[str, dict[str, Any]] = {}
@@ -59,6 +80,8 @@ def audit(zot) -> dict[str, Any]:
             buckets["missing-identifier"].append(key)
         if key not in pdf_parents:
             buckets["missing-pdf"].append(key)
+        elif key not in article_parents:
+            buckets["only-supplementary-pdf"].append(key)
         if abstract and not stamped:
             buckets["unstamped-abstract"].append(key)
         if stamped and not abstract:
