@@ -46,7 +46,11 @@ opens the file normally.
 ## Download flow
 
 `GET K.zip`, extract the single member. (`K.prop` can be used to verify the MD5
-after extraction.)
+after extraction.) `attach --verify` does exactly this right after an upload and
+compares the member's MD5 with the local file.
+
+To ask whether a file is stored without downloading it (`show --attachments`):
+`HEAD K.zip` → 200 stored, 404 missing.
 
 ## Notes and caveats
 
