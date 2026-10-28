@@ -6,9 +6,8 @@ agent helping a user *use* zotkit on their library, read [AGENTS.md](AGENTS.md) 
 ## Scope
 
 This repo is the **Python package only** (headless Zotero Web-API + WebDAV CLI/library).
-The Zotero Reader plugin is a separate repo,
-[oldantique/zotkit-reader](https://github.com/oldantique/zotkit-reader) — see
-[docs/adr/0003](docs/adr/0003-split-reader-plugin-into-its-own-repo.md).
+The Zotero Reader plugin that once lived here moved out (ADR-0003) and is no longer
+maintained or linked (ADR-0006) — out of scope for this repo.
 Data conventions (version of record, abstract-source stamp) are documented in
 README — keep docs and code consistent with it.
 

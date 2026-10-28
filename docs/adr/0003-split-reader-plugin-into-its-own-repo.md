@@ -1,7 +1,8 @@
 # The Reader plugin moves to its own repository
 
 Status: accepted (2026-07-27) — **supersedes [ADR-0001](0001-zotkit-family-monorepo.md)**;
-moves the *scope* of [ADR-0002](0002-deterministic-write-layer.md) to the new repo
+moves the *scope* of [ADR-0002](0002-deterministic-write-layer.md) to the new repo; its product-family
+README framing is retired by [ADR-0006](0006-drop-reader-plugin-cross-link.md) (2026-10-28)
 
 ADR-0001 accepted the Zotero Reader add-on from PR #1 into this repo and repositioned
 zotkit as a two-component product family. That decision was correct for what the
