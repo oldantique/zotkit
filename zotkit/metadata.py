@@ -458,6 +458,16 @@ def _crossref_date(msg: dict) -> str:
     return ""
 
 
+def _crossref_publisher(msg: dict, itype: str) -> str:
+    """The value for the type's publisher field. A thesis's university or a
+    report's institution is CrossRef's `institution`: its `publisher` there is
+    the distributor (OSTI for US lab reports, a university library), so it is
+    never used for those two types."""
+    if itype in ("thesis", "report"):
+        return ((msg.get("institution") or [{}])[0]).get("name", "")
+    return msg.get("publisher", "")
+
+
 def issue_date(msg: dict) -> str:
     """The volume/issue date (print), which can trail the online-first date
     that `date` gets: the citation year. '' when CrossRef has none."""
@@ -523,7 +533,7 @@ def fetch_doi(doi: str) -> dict:
         "volume": msg.get("volume", ""),
         "issue": msg.get("issue", ""),
         "pages": msg.get("page") or msg.get("article-number", ""),
-        _PUBLISHER_FIELD.get(itype, "publisher"): _squash(msg.get("publisher", "")),
+        _PUBLISHER_FIELD.get(itype, "publisher"): _squash(_crossref_publisher(msg, itype)),
         "language": msg.get("language", ""),
         "ISSN": (msg.get("ISSN") or [""])[0],
         "ISBN": (msg.get("ISBN") or [""])[0],

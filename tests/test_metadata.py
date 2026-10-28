@@ -478,13 +478,35 @@ def test_datacite_preprint_is_never_a_version_of_record(monkeypatch):
     assert md.repository_record_reason(item)
 
 
-def test_crossref_dissertation_publisher_lands_in_university(monkeypatch):
+def test_crossref_dissertation_takes_the_institution_not_the_library(monkeypatch):
     msg = {"message": {"type": "dissertation", "title": ["A Thesis"],
-                       "publisher": "Example University",
+                       "publisher": "Example University Libraries",
+                       "institution": [{"name": "Example University", "acronym": ["EU"]}],
                        "issued": {"date-parts": [[2020]]}}}
     _fake_http(monkeypatch, {"api.crossref.org": (200, msg)})
     item = md.fetch_doi("10.9999/diss.7")
     assert item["university"] == "Example University" and "publisher" not in item
+
+
+def test_crossref_lab_report_takes_the_lab_not_the_distributor(monkeypatch):
+    # the shape of an OSTI-registered report (10.2172/*)
+    msg = {"message": {"type": "report", "title": ["A Lab Report"],
+                       "publisher": "Office of Scientific and Technical Information (OSTI)",
+                       "institution": [{"name": "Example National Laboratory (ENL)",
+                                        "acronym": ["ENL"]},
+                                       {"name": "Example Office of Science (SC)"}],
+                       "issued": {"date-parts": [[2010]]}}}
+    _fake_http(monkeypatch, {"api.crossref.org": (200, msg)})
+    item = md.fetch_doi("10.9999/report.11")
+    assert item["institution"] == "Example National Laboratory (ENL)"
+
+
+def test_crossref_report_without_institution_leaves_the_field_empty(monkeypatch):
+    msg = {"message": {"type": "report", "title": ["A Report"],
+                       "publisher": "Office of Scientific and Technical Information (OSTI)",
+                       "issued": {"date-parts": [[2010]]}}}
+    _fake_http(monkeypatch, {"api.crossref.org": (200, msg)})
+    assert "institution" not in md.fetch_doi("10.9999/report.12")
 
 
 def test_no_editor_role_on_types_without_one(monkeypatch):
