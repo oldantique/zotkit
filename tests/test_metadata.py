@@ -409,7 +409,7 @@ def test_text_dissertation_dated_by_publication_year(monkeypatch):
         "types": {"resourceTypeGeneral": "Text", "resourceType": "Dissertation"},
         "creators": [{"name": "Poe, Ann", "nameType": "Personal"}],
         "titles": [{"title": "Codes"}], "publisher": "Example Institute",
-        "publicationYear": 1997,
+        "publicationYear": 1997, "version": "Final",
         "dates": [{"date": "2004-07-16", "dateType": "Available"}]})
     _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
                              "api.datacite.org": (200, rec)})
@@ -419,6 +419,7 @@ def test_text_dissertation_dated_by_publication_year(monkeypatch):
     assert item["creators"][0] == {"creatorType": "author", "firstName": "Ann",
                                    "lastName": "Poe"}
     assert "extra" not in item                          # no abstract, no stamp
+    assert "versionNumber" not in item                  # theses have no such field
 
 
 def test_datacite_software_uses_zotero_field_names(monkeypatch):

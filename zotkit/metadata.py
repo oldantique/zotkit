@@ -85,6 +85,7 @@ _PUBLISHER_FIELD = {
 # Zotero schema has no "editor" role (an invalid role fails the whole create)
 _PRIMARY_CREATOR = {"computerProgram": "programmer"}
 _NO_EDITOR = {"computerProgram", "dataset", "thesis"}
+_VERSIONED = {"computerProgram", "dataset", "standard"}
 
 # where CrossRef's container-title belongs, per Zotero itemType
 _CONTAINER_FIELD = {
@@ -596,7 +597,8 @@ def fetch_datacite(doi: str) -> dict:
         "issue": container.get("issue", ""),
         "pages": pages,
         _PUBLISHER_FIELD.get(itype, "publisher"): _squash(publisher),
-        "versionNumber": a.get("version") or "",
+        # only types that have the field (a thesis's "Final" is no version)
+        "versionNumber": (a.get("version") or "") if itype in _VERSIONED else "",
         "language": a.get("language") or "",
         "libraryCatalog": "DataCite",
     }
