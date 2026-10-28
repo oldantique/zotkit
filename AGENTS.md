@@ -65,7 +65,7 @@ zotkit show KEY [KEY...] [--json]    # read-only lookup by key, one line each;
 zotkit cite KEY [KEY...]             # short citation per key (local, read-only):
                                      #   "Laughlin, Phys. Rev. Lett. 50, 1395 (1983)"
 zotkit create --arxiv <id|url> ...   # fetch arXiv metadata; --apply attaches PDFs too
-zotkit create --doi <doi> ...        # fetch CrossRef metadata (no PDF; attach manually)
+zotkit create --doi <doi> ...        # fetch CrossRef/DataCite metadata (no PDF; attach manually)
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
                                      # dedup (DOI/title) is the default: the dry run

@@ -106,7 +106,7 @@ zotkit create --arxiv id1 id2 id3 --apply               # batch (space- or comma
 #   10.48550/*, SSRN 10.2139/*, bioRxiv, …) is NOT a journal DOI — those items
 #   stay preprints (SSRN's "SSRN Electronic Journal" is not a real journal),
 #   and the output states why. Do not "fix" either form by hand.
-#   Extra may also carry `abstract-source: arxiv|crossref` and `issue-date: …`
+#   Extra may also carry `abstract-source: arxiv|crossref|datacite` and `issue-date: …`
 #   lines — leave them alone
 zotkit create --doi 10.1038/nature14539 --apply --tags field:ai
 zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same way
@@ -117,7 +117,9 @@ zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same wa
 #   Do NOT run one `find --any` per candidate. That loop is what made agents
 #   time out.
 #   DOI mode never downloads a PDF (paywalls) — attach one manually afterwards;
-#   unknown CrossRef types error out: fall back to --file for those
+#   a DOI CrossRef doesn't know is looked up at DataCite (theses, datasets,
+#   software); unknown types, and DOIs in neither registry (e.g. CNKI), error
+#   out: fall back to --file for those. arXiv DOIs (10.48550/arXiv.*) → use --arxiv
 
 # create items (JSON list; dry-run first, then --apply; saves x.created.json)
 zotkit create --file x.json

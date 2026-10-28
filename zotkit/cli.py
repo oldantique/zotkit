@@ -297,7 +297,8 @@ def main(argv=None):
                           "request, and with --apply also downloads + attaches the PDFs")
     src.add_argument("--doi", metavar="DOI", nargs="+",
                      help="DOIs (or doi.org URLs) — several allowed, space- or "
-                          "comma-separated; fetches metadata from CrossRef")
+                          "comma-separated; fetches metadata from CrossRef, or "
+                          "DataCite when CrossRef has no record")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--no-dedup", action="store_true")
     p.add_argument("--loose-tags", action="store_true", help="warn instead of error on tag violations")

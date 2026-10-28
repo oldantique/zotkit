@@ -87,7 +87,7 @@ zotkit create --arxiv 2401.12345            # fetch arXiv metadata, dry-run prev
 zotkit create --arxiv 2401.12345 --apply --tags field:ai   # create + download & attach the PDF
 zotkit create --arxiv 2401.12345 1706.03762 math/0211159 --apply   # batch: one metadata
                                             #   request, PDFs politely spaced ≥3 s apart
-zotkit create --doi 10.1038/nature14539     # fetch CrossRef metadata by DOI (no PDF —
+zotkit create --doi 10.1038/nature14539     # fetch CrossRef/DataCite metadata (no PDF —
                                             #   usually paywalled; attach manually after)
 
 zotkit create --file papers.json            # batch from JSON: dry-run preview —
@@ -121,7 +121,12 @@ zotkit lint field:physics topic:new-idea    # offline tag check
 `--arxiv` takes ids or abs/pdf URLs (several, space- or comma-separated) and maps
 the full record (all authors, abstract, date, DOI); `--doi` maps CrossRef records
 (journal articles, conference papers, books, chapters, …) and refuses to guess on
-CrossRef types it doesn't know. Both accept `--collection` and `--tags`, and
+CrossRef types it doesn't know. A DOI CrossRef has no record for is looked up at
+DataCite (theses, datasets, software, repository records), under the same rule:
+only types with a faithful Zotero equivalent, anything else errors with a pointer
+to `--file`. A DOI in neither registry (e.g. one registered with CNKI) says so.
+arXiv's own DOIs (`10.48550/arXiv.*`) are refused with a pointer to `--arxiv`,
+which builds the better record. Both accept `--collection` and `--tags`, and
 `--no-pdf` skips the arXiv PDFs. Rate limiting is built into the request layer —
 batches use one arXiv metadata request and space PDF downloads per arXiv's terms
 of use, so callers (humans or agents) never pace themselves. A bad id fails
@@ -165,9 +170,10 @@ mistaken for a journal one: DOIs under the preprint servers' own prefixes
 OSF, ChemRxiv, TechRxiv, Preprints.org) don't trigger the upgrade, and neither
 does a CrossRef record that turns out to be a repository posting in disguise
 (SSRN registers working papers as articles in a fake "SSRN Electronic
-Journal") — those stay preprints, with the reason stated. The same predicate
+Journal"), nor a DOI that names a dataset or software deposit — those stay
+preprints, with the reason stated. The same predicate
 gates `enrich --rebuild-record`. Items whose abstract zotkit
-wrote also carry an `abstract-source: arxiv|crossref` line in Extra, naming where
+wrote also carry an `abstract-source: arxiv|crossref|datacite` line in Extra, naming where
 it actually came from.
 
 **Journal abbreviations**: `journalAbbreviation` is stored as dotted ISO 4
@@ -279,7 +285,7 @@ doesn't exist. Scripts can rely on the exit code.
 ### Enriching existing items
 
 `zotkit enrich --key K [K …]` completes incomplete items — missing abstracts,
-DOIs, truncated author lists — from the same arXiv/CrossRef sources, **in
+DOIs, truncated author lists — from the same arXiv/CrossRef/DataCite sources, **in
 place**. The item key never changes (keys are the stable handle downstream
 tooling references; delete-and-recreate is not an option), and writes carry the
 item version, so a concurrent edit fails that item loudly instead of clobbering.
@@ -423,8 +429,8 @@ This project is not affiliated with or endorsed by Zotero.
   included. Set `ZOTKIT_CACHE=0` to turn it off.
 - Group libraries should work for item operations (untested); WebDAV file sync is
   personal-libraries-only (a Zotero limitation).
-- `--doi`/`--arxiv` import covers arXiv + CrossRef; DataCite-only DOIs are not
-  yet supported ([#4](https://github.com/oldantique/zotkit/issues/4)).
+- `--doi`/`--arxiv` import covers arXiv, CrossRef and DataCite; DOIs from other
+  registration agencies (CNKI, mEDRA, …) need `--file`.
 - Not planned: arbitrary-URL scraping (translation-server territory), SSRN/CNKI
   scraping, and an overwrite mode for `enrich` — fill-empty-only is the contract.
 - Planned work is tracked as [GitHub issues](https://github.com/oldantique/zotkit/issues).

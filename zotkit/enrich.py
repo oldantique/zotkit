@@ -1,4 +1,4 @@
-"""zotkit.enrich — complete existing items in place from arXiv/CrossRef.
+"""zotkit.enrich — complete existing items in place from arXiv/CrossRef/DataCite.
 
 The core invariant: **the item key never changes**. Item keys are referenced by
 downstream manifests, so delete-and-recreate is never acceptable; every change
@@ -96,15 +96,20 @@ def _real_creators(creators: list[dict]) -> list[dict]:
             if any(v for k, v in c.items() if k != "creatorType")]
 
 
+def _doi_source(auth: dict) -> str:
+    return "datacite" if auth.get("libraryCatalog") == "DataCite" else "crossref"
+
+
 def _fetch_authoritative(d: dict, doi_override: str | None = None
                          ) -> tuple[dict | None, str | None, str | None,
                                     str | None, str | None]:
     """→ (authoritative record, arXiv id, no-VoR reason, skip reason, source).
 
     `source` names which upstream(s) could have supplied an abstract for this
-    item — "crossref", "arxiv", or "crossref+arxiv" when the CrossRef path
-    also tried arXiv. It is reporting-only: a caller that finds no abstract
-    anywhere can say *which* source came up empty instead of staying silent.
+    item — "crossref" (or "datacite", whichever held the DOI), "arxiv", or
+    "crossref+arxiv" when the DOI path also tried arXiv. It is
+    reporting-only: a caller that finds no abstract anywhere can say *which*
+    source came up empty instead of staying silent.
     A journal DOI — per metadata's two-layer version-of-record predicate —
     wins; arXiv otherwise (that fetch itself may upgrade to a journal record
     per v0.4.2 rules — equally welcome here). A repository DOI (SSRN & co.)
@@ -120,10 +125,10 @@ def _fetch_authoritative(d: dict, doi_override: str | None = None
         auth = md.fetch_doi(doi)
         reason = md.repository_record_reason(auth)
         if reason is None:
-            src = "crossref"
+            src = _doi_source(auth)
             # CrossRef abstracts are often absent; borrow arXiv's when we can
             if not auth.get("abstractNote") and aid and not d.get("abstractNote"):
-                src = "crossref+arxiv"
+                src += "+arxiv"
                 r = md.fetch_arxiv_batch([aid])[0]
                 pre = r.get("item") or {}
                 if pre.get("abstractNote"):
@@ -134,7 +139,7 @@ def _fetch_authoritative(d: dict, doi_override: str | None = None
             raise md.MetadataError(f"NEEDS OWNER: DOI {doi}: {reason} — not a "
                                    "version of record; nothing changed")
         if not aid:
-            return auth, aid, f"DOI {doi}: {reason}", None, "crossref"
+            return auth, aid, f"DOI {doi}: {reason}", None, _doi_source(auth)
         # repository record in disguise but the item has an arXiv identity:
         # fall through — the arXiv record is the better preprint source
     if aid:
@@ -147,7 +152,7 @@ def _fetch_authoritative(d: dict, doi_override: str | None = None
     if doi:  # repository-prefix DOI, no arXiv id (the pure-SSRN case)
         auth = md.fetch_doi(doi)
         return (auth, aid, f"DOI {doi} is a repository DOI, not a journal one",
-                None, "crossref")
+                None, _doi_source(auth))
     return None, None, None, "no DOI or arXiv id on the item", None
 
 
@@ -208,12 +213,13 @@ def _supplied_doi_refusal(d: dict, doi: str) -> str | None:
 def _no_abstract_note(source: str | None, doi: str, aid: str | None) -> str:
     """The note for an item that still has no abstract because the source had
     none — the case that used to pass in silence and read as 'up-to-date'."""
-    if source == "crossref+arxiv":
-        where = "neither CrossRef nor arXiv has one"
+    name = "DataCite" if (source or "").startswith("datacite") else "CrossRef"
+    if (source or "").endswith("+arxiv"):
+        where = f"neither {name} nor arXiv has one"
     elif source == "arxiv":
         where = f"arXiv has none for {aid}"
     else:
-        where = f"CrossRef has none for DOI {doi}"
+        where = f"{name} has none for DOI {doi}"
     return f"NOTE abstract still missing: {where} — try another source"
 
 

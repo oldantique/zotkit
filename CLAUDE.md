@@ -43,7 +43,8 @@ README — keep docs and code consistent with it.
 - `tests/` is the offline pytest suite, filed **by module, never by release**
   (a file named after a version guarantees an archaeology layer per release):
   `test_metadata.py` (abstract cleaner + two-layer version-of-record predicate
-  + `fetch_arxiv_batch` against a canned feed), `test_enrich.py` (`plan_enrich`
+  + `fetch_arxiv_batch` against a canned feed + the CrossRef → DataCite fallback
+  and its type/field mapping), `test_enrich.py` (`plan_enrich`
   VoR gate, the `--doi` same-paper gate, the "source has no abstract" note + its
   status invariant, `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing),
   `test_find.py` (--any/--abstract matching, hit annotations, snippet shape),

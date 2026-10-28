@@ -68,8 +68,8 @@ zotkit create --arxiv 2401.12345         # 抓 arXiv 元信息建条目(默认�
                                          #   前缀)不算期刊 DOI,不会误触发升级
 zotkit create --arxiv id1 id2 id3 --apply  # 批量:元信息合并一次请求,
                                          #   PDF 下载自动按 arXiv 限速间隔
-zotkit create --doi 10.1038/nature14539  # 按 DOI 从 CrossRef 抓元信息(不下 PDF;
-                                         #   同样可一次给多个 DOI)
+zotkit create --doi 10.1038/nature14539  # 按 DOI 抓元信息:先查 CrossRef,没有再查 DataCite
+                                         #   (论文/数据集/软件;不下 PDF;同样可一次给多个 DOI)
 zotkit create --file papers.json         # 从 JSON 批量建条目(默认演练,加 --apply 才执行)
                                          # 建条目默认按 DOI / 标题查重并跳过重复项;
                                          #   演练输出会直接标出「已在库中,key 是哪个」,

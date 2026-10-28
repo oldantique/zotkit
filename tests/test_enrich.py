@@ -396,3 +396,38 @@ def test_issue_date_never_lands_on_a_preprint(monkeypatch):
     p = _abbr_plan(monkeypatch, dict(SSRN_PREPRINT, DOI="10.1103/x", date="2021"),
                    fetched)
     assert not any(l.startswith("issue-date") for l in p["extra_lines"])
+
+
+# ---------- DataCite (#4): arXiv's own DOIs stay on the arXiv path ----------
+
+def test_arxiv_doi_preprint_never_reaches_a_doi_registry(monkeypatch):
+    # many libraries store arXiv's DataCite DOI on preprints; enrich must keep
+    # reading arXiv for them, never CrossRef/DataCite (or it would re-stamp
+    # an arxiv-sourced abstract as datacite)
+    def no_doi_lookup(*a, **kw):
+        raise AssertionError("DOI registry consulted")
+    monkeypatch.setattr(md, "fetch_doi", no_doi_lookup)
+    monkeypatch.setattr(md, "fetch_datacite", no_doi_lookup)
+    item = {"itemType": "preprint", "title": "Attention Is All You Need",
+            "abstractNote": "The dominant models.", "creators": [],
+            "DOI": "10.48550/arXiv.1706.03762", "date": "2017-06-12",
+            "extra": "abstract-source: arxiv", "url": "x", "archiveID": "arXiv:1706.03762",
+            "repository": "arXiv", "tags": [], "collections": [], "relations": {}}
+    seen = []
+    monkeypatch.setattr(md, "fetch_arxiv_batch", lambda ids: seen.append(ids) or [
+        {"id": ids[0], "item": {"itemType": "preprint", "title": item["title"],
+                                "abstractNote": "The dominant models.",
+                                "date": "2017-06-12", "creators": []}}])
+    p = enrich.plan_enrich(_read_only_zot(item), "KEY00001")
+    assert seen == [["1706.03762"]]
+    assert p["status"] == "up-to-date" and p["fills"] == {}
+
+
+def test_datacite_source_named_in_the_no_abstract_note(monkeypatch):
+    thesis = {"itemType": "thesis", "title": "Codes", "DOI": "10.9999/thesis.2",
+              "libraryCatalog": "DataCite", "creators": []}
+    have = {"itemType": "thesis", "title": "Codes", "abstractNote": "",
+            "DOI": "10.9999/thesis.2", "creators": [], "extra": "", "url": "x",
+            "tags": [], "collections": [], "relations": {}, "university": "U"}
+    p = _plan(monkeypatch, have, thesis, rebuild=False)
+    assert any("DataCite has none for DOI 10.9999/thesis.2" in n for n in p["notes"])

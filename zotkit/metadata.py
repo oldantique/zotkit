@@ -1,4 +1,4 @@
-"""zotkit.metadata — identifier → item-JSON fetchers (arXiv, CrossRef DOI).
+"""zotkit.metadata — identifier → item-JSON fetchers (arXiv, CrossRef/DataCite DOI).
 
 Each fetcher returns a plain item dict in the exact shape `zotkit create --file`
 consumes, so the CLI runs every source through the same lint/dry-run/create path.
@@ -12,7 +12,7 @@ item record; abstracts already in a library are never touched.
 
 Rate limiting lives here, in the request layer: every request through `_get`
 waits out the per-host minimum interval (arXiv's terms: 1 request / 3 s on a
-single connection; CrossRef polite pool: 1 s). Callers — CLI users, agents,
+single connection; CrossRef polite pool and DataCite: 1 s). Callers — CLI users, agents,
 batch loops — never need to pace themselves.
 """
 from __future__ import annotations
@@ -55,6 +55,37 @@ CROSSREF_TYPES = {
     "standard": "standard",
 }
 
+# DataCite resourceTypeGeneral values with a faithful Zotero equivalent; the
+# same rule as CROSSREF_TYPES (anything else errors). "Text" counts as a
+# thesis only when the record's own resourceType says so.
+DATACITE_TYPES = {
+    "JournalArticle": "journalArticle",
+    "ConferencePaper": "conferencePaper",
+    "Preprint": "preprint",
+    "Book": "book",
+    "BookChapter": "bookSection",
+    "Report": "report",
+    "Dissertation": "thesis",
+    "Dataset": "dataset",
+    "Software": "computerProgram",
+    "Standard": "standard",
+}
+
+# Zotero's type-specific name for the publisher field. create/enrich copy only
+# fields the type's template has, so "publisher" on a thesis would be dropped.
+_PUBLISHER_FIELD = {
+    "thesis": "university",
+    "report": "institution",
+    "computerProgram": "company",
+    "dataset": "repository",
+    "preprint": "repository",
+}
+
+# the primary creator type where it isn't "author", and the types whose
+# Zotero schema has no "editor" role (an invalid role fails the whole create)
+_PRIMARY_CREATOR = {"computerProgram": "programmer"}
+_NO_EDITOR = {"computerProgram", "dataset", "thesis"}
+
 # where CrossRef's container-title belongs, per Zotero itemType
 _CONTAINER_FIELD = {
     "journalArticle": "publicationTitle",
@@ -70,7 +101,8 @@ class MetadataError(RuntimeError):
 
 # minimum seconds between requests to the same host (arXiv terms of use: 3 s,
 # covering the export API and PDF downloads; CrossRef polite pool: 1 s)
-_MIN_INTERVAL = {"export.arxiv.org": 3.0, "arxiv.org": 3.0, "api.crossref.org": 1.0}
+_MIN_INTERVAL = {"export.arxiv.org": 3.0, "arxiv.org": 3.0, "api.crossref.org": 1.0,
+                 "api.datacite.org": 1.0}
 _next_ok: dict[str, float] = {}
 
 
@@ -239,10 +271,14 @@ def is_repository_doi(doi: str) -> bool:
 
 
 def repository_record_reason(item: dict) -> str | None:
-    """Layer 2: reason string if a fetched CrossRef item is a repository
-    posting in disguise (so NOT a version of record), None if genuine."""
+    """Layer 2: reason string if a fetched DOI record is a repository
+    posting in disguise, or a data/code deposit (so NOT a version of
+    record), None if genuine."""
     if item.get("itemType") == "preprint":
-        return "CrossRef type is posted-content (a repository posting)"
+        return "the record's type is a preprint (a repository posting)"
+    if item.get("itemType") in ("dataset", "computerProgram"):
+        # a DataCite DOI can name the paper's data or code deposit
+        return f"the DOI names a {item['itemType']} record, not a publication"
     for field in _CONTAINER_FIELD.values():
         container = _squash(item.get(field, ""))
         if container.casefold() in _REPOSITORY_CONTAINERS:
@@ -387,13 +423,22 @@ def issue_date(msg: dict) -> str:
 ISSUE_DATE_TYPES = ("journalArticle", "conferencePaper")
 
 
+_ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.IGNORECASE)
+
+
 def fetch_doi(doi: str) -> dict:
-    """CrossRef works API → item dict. Unknown CrossRef types are an error."""
+    """DOI → item dict: CrossRef's works API, or DataCite's when CrossRef has
+    no record (theses, datasets, software, repository records). Unknown work
+    types are an error. arXiv's own DataCite DOIs are refused: the arXiv path
+    builds the better record (and does the version-of-record upgrade)."""
     doi = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", doi.strip(), flags=re.IGNORECASE)
+    m = _ARXIV_DOI.match(doi)
+    if m:
+        raise MetadataError(f"'{doi}' is arXiv's DOI for a preprint — use "
+                            f"create --arxiv {m.group(1)}")
     r = _get(f"https://api.crossref.org/works/{quote(doi, safe='')}")
     if r.status_code == 404:
-        raise MetadataError(f"CrossRef has no record for DOI '{doi}' — check the DOI "
-                            "(DataCite-only DOIs, e.g. Zenodo/arXiv, are not in CrossRef)")
+        return fetch_datacite(doi)
     if r.status_code != 200:
         raise MetadataError(f"CrossRef API returned HTTP {r.status_code} for '{doi}'")
     msg = r.json()["message"]
@@ -407,6 +452,8 @@ def fetch_doi(doi: str) -> dict:
 
     creators = []
     for role, ztype in (("author", "author"), ("editor", "editor")):
+        if ztype == "editor" and itype in _NO_EDITOR:
+            continue
         for a in msg.get(role, []):
             if a.get("family"):
                 creators.append({"creatorType": ztype,
@@ -430,7 +477,7 @@ def fetch_doi(doi: str) -> dict:
         "volume": msg.get("volume", ""),
         "issue": msg.get("issue", ""),
         "pages": msg.get("page") or msg.get("article-number", ""),
-        "publisher": _squash(msg.get("publisher", "")),
+        _PUBLISHER_FIELD.get(itype, "publisher"): _squash(msg.get("publisher", "")),
         "language": msg.get("language", ""),
         "ISSN": (msg.get("ISSN") or [""])[0],
         "ISBN": (msg.get("ISBN") or [""])[0],
@@ -458,4 +505,112 @@ def fetch_doi(doi: str) -> dict:
     if (itype in ISSUE_DATE_TYPES and issued
             and issued[:4] != item.get("date", "")[:4]):
         _add_extra(item, f"issue-date: {issued}")
+    return item
+
+
+# ---------- DataCite DOI ----------
+
+def _datacite_type(types: dict) -> str | None:
+    general = types.get("resourceTypeGeneral", "")
+    if general == "Text" and re.search(r"\b(?:thesis|dissertation)\b",
+                                       types.get("resourceType") or "", re.I):
+        return "thesis"
+    return DATACITE_TYPES.get(general)
+
+
+def _datacite_creator(c: dict, ctype: str) -> dict:
+    if c.get("familyName"):
+        return {"creatorType": ctype, "firstName": _squash(c.get("givenName", "")),
+                "lastName": _squash(c["familyName"])}
+    name = _squash(c.get("name", ""))
+    if c.get("nameType") == "Personal" and ", " in name:
+        last, first = name.split(", ", 1)
+        return {"creatorType": ctype, "firstName": first, "lastName": last}
+    return {"creatorType": ctype, "name": name}
+
+
+def fetch_datacite(doi: str) -> dict:
+    """DataCite REST API → item dict, same shape as fetch_doi's CrossRef
+    record. Called by fetch_doi when CrossRef has no record."""
+    r = _get(f"https://api.datacite.org/dois/{quote(doi, safe='')}")
+    if r.status_code == 404:
+        raise MetadataError(f"DOI '{doi}' is not in CrossRef or DataCite — check the "
+                            "DOI, or create this item via --file")
+    if r.status_code != 200:
+        raise MetadataError(f"DataCite API returned HTTP {r.status_code} for '{doi}'")
+    a = r.json()["data"]["attributes"]
+
+    types = a.get("types") or {}
+    itype = _datacite_type(types)
+    if not itype:
+        raise MetadataError(
+            f"DataCite type '{types.get('resourceTypeGeneral', '')}' has no zotkit "
+            "mapping — supported: " + ", ".join(sorted(DATACITE_TYPES))
+            + ". Create this item via --file instead.")
+
+    primary = _PRIMARY_CREATOR.get(itype, "author")
+    creators = [_datacite_creator(c, primary) for c in a.get("creators") or []
+                if c.get("familyName") or c.get("name")]
+    if itype not in _NO_EDITOR:
+        creators += [_datacite_creator(c, "editor") for c in a.get("contributors") or []
+                     if c.get("contributorType") == "Editor"
+                     and (c.get("familyName") or c.get("name"))]
+
+    titles = a.get("titles") or []
+    main = next((t for t in titles if not t.get("titleType")), titles[0] if titles else {})
+    title = _squash(main.get("title", ""))
+    subtitle = _squash(next((t.get("title", "") for t in titles
+                             if t.get("titleType") == "Subtitle"), ""))
+    if subtitle and subtitle.lower() not in title.lower():
+        title = f"{title}: {subtitle}"
+
+    abstract = next((d.get("description", "") for d in a.get("descriptions") or []
+                     if d.get("descriptionType") == "Abstract"), "")
+    # "Issued" is the publication date; others ("Available": when a scan went
+    # online) can be decades later, so fall back to publicationYear, not them
+    date = next((d.get("date", "") for d in a.get("dates") or []
+                 if d.get("dateType") == "Issued"), "") or str(a.get("publicationYear") or "")
+
+    publisher = a.get("publisher") or ""
+    if isinstance(publisher, dict):          # the API's publisher=true form
+        publisher = publisher.get("name", "")
+    if itype == "thesis":
+        # the degree-granting institution, when the record names it; the
+        # publisher can be a research group or a repository
+        host = next((c.get("name", "") for c in a.get("contributors") or []
+                     if c.get("contributorType") == "HostingInstitution"), "")
+        publisher = host or publisher
+
+    container = a.get("container") or {}
+    pages = "-".join(p for p in (container.get("firstPage", ""),
+                                 container.get("lastPage", "")) if p)
+    item = {
+        "itemType": itype,
+        "title": title,
+        "creators": creators,
+        "abstractNote": _clean_abstract(abstract),
+        "date": date,
+        "DOI": doi,
+        "url": a.get("url") or f"https://doi.org/{doi}",
+        "volume": container.get("volume", ""),
+        "issue": container.get("issue", ""),
+        "pages": pages,
+        _PUBLISHER_FIELD.get(itype, "publisher"): _squash(publisher),
+        "versionNumber": a.get("version") or "",
+        "language": a.get("language") or "",
+        "libraryCatalog": "DataCite",
+    }
+    ctitle = _squash(container.get("title", ""))
+    if ctitle:
+        item[_CONTAINER_FIELD.get(itype, "publicationTitle")] = ctitle
+    if itype == "journalArticle":
+        abbr = journals.normalise(ctitle)
+        if abbr:
+            item["journalAbbreviation"] = abbr.value
+    if not item["title"]:
+        raise MetadataError(f"DataCite record for '{doi}' has no title — refusing to "
+                            "create an empty item")
+    item = {k: v for k, v in item.items() if v not in ("", [])}
+    if item.get("abstractNote"):
+        _add_extra(item, "abstract-source: datacite")
     return item

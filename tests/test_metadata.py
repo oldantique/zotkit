@@ -343,3 +343,174 @@ def test_journal_record_upgrade_keeps_the_issue_date_line(monkeypatch):
     res = md.fetch_arxiv_batch(["2401.00001"])[0]
     assert "issue-date: 2016-02" in res["item"]["extra"]
     assert "arXiv: 2401.00001" in res["item"]["extra"]
+
+
+# ---------- DataCite: fetch_doi's fallback when CrossRef has no record ----------
+# Records are hand-written in the shape api.datacite.org/dois/<doi> returns.
+
+def _datacite(attrs):
+    return {"data": {"attributes": attrs}}
+
+
+THESIS = _datacite({
+    "types": {"resourceTypeGeneral": "Dissertation", "resourceType": "Thesis"},
+    "creators": [{"name": "Doe, Jane", "nameType": "Personal",
+                  "givenName": "Jane", "familyName": "Doe"}],
+    "contributors": [{"name": "Example University", "contributorType": "HostingInstitution"},
+                     {"name": "Roe, Richard", "contributorType": "Supervisor"}],
+    "titles": [{"title": "Cold Atoms in Shaken Lattices"}],
+    "publisher": "Theory Group, Department of Physics, Example University",
+    "publicationYear": 2016,
+    "dates": [{"date": "2016-12-13", "dateType": "Issued"},
+              {"date": "2016-12-20", "dateType": "Available"}],
+    "descriptions": [{"description": "Deposited under a CC BY licence.",
+                      "descriptionType": "Other"},
+                     {"description": "<p>We study atoms in H<sub>2</sub>.</p>",
+                      "descriptionType": "Abstract"}],
+    "language": "en", "url": "https://repository.example.edu/handle/1/2"})
+
+
+def _fake_http(monkeypatch, routes):
+    """routes: {host: (status, json)}; records every URL asked for."""
+    calls = []
+
+    def get(url, **kw):
+        calls.append(url)
+        status, body = routes[httpx_host(url)]
+        return types.SimpleNamespace(status_code=status, json=lambda: body)
+    monkeypatch.setattr(md, "_get", get)
+    return calls
+
+
+def httpx_host(url):
+    return url.split("/")[2]
+
+
+def test_crossref_miss_falls_back_to_datacite(monkeypatch):
+    calls = _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                                     "api.datacite.org": (200, THESIS)})
+    item = md.fetch_doi("https://doi.org/10.9999/thesis.1")
+    assert [httpx_host(u) for u in calls] == ["api.crossref.org", "api.datacite.org"]
+    assert item["itemType"] == "thesis"
+    assert item["creators"] == [{"creatorType": "author", "firstName": "Jane",
+                                 "lastName": "Doe"}]
+    assert item["university"] == "Example University"   # not the research group
+    assert "publisher" not in item
+    assert item["date"] == "2016-12-13"
+    assert item["abstractNote"] == "We study atoms in H_2."
+    assert item["extra"] == "abstract-source: datacite"
+    assert item["libraryCatalog"] == "DataCite"
+    assert "thesisType" not in item
+
+
+def test_text_dissertation_dated_by_publication_year(monkeypatch):
+    # a scan put online decades later: "Available" is not the thesis's date
+    rec = _datacite({
+        "types": {"resourceTypeGeneral": "Text", "resourceType": "Dissertation"},
+        "creators": [{"name": "Poe, Ann", "nameType": "Personal"}],
+        "titles": [{"title": "Codes"}], "publisher": "Example Institute",
+        "publicationYear": 1997,
+        "dates": [{"date": "2004-07-16", "dateType": "Available"}]})
+    _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                             "api.datacite.org": (200, rec)})
+    item = md.fetch_doi("10.9999/thesis.2")
+    assert item["itemType"] == "thesis" and item["date"] == "1997"
+    assert item["university"] == "Example Institute"
+    assert item["creators"][0] == {"creatorType": "author", "firstName": "Ann",
+                                   "lastName": "Poe"}
+    assert "extra" not in item                          # no abstract, no stamp
+
+
+def test_datacite_software_uses_zotero_field_names(monkeypatch):
+    rec = _datacite({
+        "types": {"resourceTypeGeneral": "Software"},
+        "creators": [{"name": "Example Project", "nameType": "Organizational"}],
+        "titles": [{"title": "simtool"}], "publisher": "Zenodo",
+        "publicationYear": 2019, "version": "1.2.0", "dates": []})
+    _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                             "api.datacite.org": (200, rec)})
+    item = md.fetch_doi("10.9999/zenodo.3")
+    assert item["itemType"] == "computerProgram"
+    assert item["creators"] == [{"creatorType": "programmer", "name": "Example Project"}]
+    assert item["company"] == "Zenodo" and item["versionNumber"] == "1.2.0"
+
+
+def test_unmapped_datacite_type_is_an_error(monkeypatch):
+    rec = _datacite({"types": {"resourceTypeGeneral": "Image"},
+                     "titles": [{"title": "A figure"}]})
+    _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                             "api.datacite.org": (200, rec)})
+    with pytest.raises(md.MetadataError, match="DataCite type 'Image'.*--file"):
+        md.fetch_doi("10.9999/fig.4")
+
+
+def test_doi_in_neither_registry_says_so(monkeypatch):
+    _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                             "api.datacite.org": (404, {})})
+    with pytest.raises(md.MetadataError,
+                       match="not in CrossRef or DataCite.*--file"):
+        md.fetch_doi("10.99999/d.other.2023.000001")
+
+
+def test_crossref_outage_does_not_fall_back(monkeypatch):
+    calls = _fake_http(monkeypatch, {"api.crossref.org": (503, {})})
+    with pytest.raises(md.MetadataError, match="HTTP 503"):
+        md.fetch_doi("10.9999/x.5")
+    assert len(calls) == 1
+
+
+def test_arxiv_datacite_doi_points_to_create_arxiv(monkeypatch):
+    calls = _fake_http(monkeypatch, {})
+    with pytest.raises(md.MetadataError, match="create --arxiv 1706.03762"):
+        md.fetch_doi("10.48550/arXiv.1706.03762")
+    assert calls == []
+
+
+def test_datacite_preprint_is_never_a_version_of_record(monkeypatch):
+    rec = _datacite({"types": {"resourceTypeGeneral": "Preprint"},
+                     "creators": [], "titles": [{"title": "Draft"}],
+                     "publisher": "Example Archive", "publicationYear": 2024})
+    _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                             "api.datacite.org": (200, rec)})
+    item = md.fetch_doi("10.9999/pre.6")
+    assert item["repository"] == "Example Archive"
+    assert md.repository_record_reason(item)
+
+
+def test_crossref_dissertation_publisher_lands_in_university(monkeypatch):
+    msg = {"message": {"type": "dissertation", "title": ["A Thesis"],
+                       "publisher": "Example University",
+                       "issued": {"date-parts": [[2020]]}}}
+    _fake_http(monkeypatch, {"api.crossref.org": (200, msg)})
+    item = md.fetch_doi("10.9999/diss.7")
+    assert item["university"] == "Example University" and "publisher" not in item
+
+
+def test_no_editor_role_on_types_without_one(monkeypatch):
+    rec = {"data": {"attributes": dict(
+        THESIS["data"]["attributes"],
+        contributors=[{"name": "Roe, Richard", "nameType": "Personal",
+                       "contributorType": "Editor"}])}}
+    _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                             "api.datacite.org": (200, rec)})
+    item = md.fetch_doi("10.9999/thesis.8")
+    assert [c["creatorType"] for c in item["creators"]] == ["author"]
+
+
+def test_text_needs_a_whole_word_to_be_a_thesis(monkeypatch):
+    rec = _datacite({"types": {"resourceTypeGeneral": "Text",
+                               "resourceType": "Synthesis report"},
+                     "titles": [{"title": "Review"}]})
+    _fake_http(monkeypatch, {"api.crossref.org": (404, {}),
+                             "api.datacite.org": (200, rec)})
+    with pytest.raises(md.MetadataError, match="DataCite type 'Text'"):
+        md.fetch_doi("10.9999/text.9")
+
+
+@pytest.mark.parametrize("itype", ["dataset", "computerProgram"])
+def test_a_data_or_code_doi_never_upgrades_an_arxiv_preprint(monkeypatch, itype):
+    # an author can put the paper's Zenodo deposit in arXiv's DOI field
+    monkeypatch.setattr(md, "fetch_doi", lambda doi: {"itemType": itype,
+                                                      "title": "Code for X"})
+    with pytest.raises(md.NotVersionOfRecord, match=itype):
+        md._journal_record({"DOI": "10.9999/zenodo.10", "url": "u"}, "2401.00001")
