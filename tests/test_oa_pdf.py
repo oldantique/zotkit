@@ -1,6 +1,6 @@
 """Offline tests for `create --doi --oa-pdf` (#16): Unpaywall lookup shapes,
 and the owner's stop rule — only the best open-access PDF, one attempt, and
-the first refusal stops every further download. HTTP and the Zotero client
+a refusal ends every further download from that host. HTTP and the Zotero client
 are faked; nothing is downloaded."""
 import types
 
@@ -104,25 +104,25 @@ def _new(n, title=None):
             for i in range(n)]
 
 
-def test_first_refusal_stops_every_further_download(http, capsys):
-    new = _new(3)
-    http.routes["unpaywall"] = [_resp(200, json=_unpaywall("https://a.example/0.pdf")),
-                                _resp(200, json=_unpaywall("https://b.example/1.pdf"))]
-    http.routes["a.example"] = [_resp(200, PDF)]
+def test_a_refusal_ends_that_host_only(http, capsys):
+    new = _new(4)
+    http.routes["unpaywall"] = [_resp(200, json=_unpaywall("https://b.example/0.pdf")),
+                                _resp(200, json=_unpaywall("https://b.example/1.pdf")),
+                                _resp(200, json=_unpaywall("https://a.example/2.pdf")),
+                                _resp(200, json=_unpaywall("https://b.example/3.pdf"))]
     http.routes["b.example"] = [_resp(403, b"Forbidden", "text/html")]
+    http.routes["a.example"] = [_resp(200, PDF)]
     zot = FakeZot()
-    assert cli._oa_attach(zot, new) is False
+    assert cli._oa_attach(zot, new) is False             # exit 1: a refusal happened
     out = capsys.readouterr()
-    assert zot.attached == [("K0", "Full Text PDF")]
-    assert zot.extra == [("K0", "oa-pdf: cc-by · publisher · publishedVersion · "
-                                "https://a.example/0.pdf")]
-    assert "oa-pdf K1: STOPPED — PDF download failed: HTTP 403" in out.err
-    assert "oa-pdf K2: not attempted — stopped after b.example refused" in out.out
-    # nothing else was asked of anyone: no retry, no other location, no 3rd lookup
-    assert http.seen == ["https://api.unpaywall.org/v2/10.9999/p0",
-                         "https://a.example/0.pdf",
-                         "https://api.unpaywall.org/v2/10.9999/p1",
-                         "https://b.example/1.pdf"]
+    assert "oa-pdf K0: STOPPED — PDF download failed: HTTP 403" in out.err
+    assert "oa-pdf K1: not attempted — b.example refused earlier" in out.out
+    assert "oa-pdf K3: not attempted — b.example refused earlier" in out.out
+    assert zot.attached == [("K2", "Full Text PDF")]     # another host goes on
+    assert zot.extra == [("K2", "oa-pdf: cc-by · publisher · publishedVersion · "
+                                "https://a.example/2.pdf")]
+    # the refusing host was asked exactly once: no retry, no other location
+    assert [u for u in http.seen if "b.example" in u] == ["https://b.example/0.pdf"]
 
 
 def test_no_oa_copy_is_not_a_failure(http, capsys):

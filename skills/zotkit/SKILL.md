@@ -129,8 +129,8 @@ zotkit create --doi 10.21468/SciPostPhys.2.1.003 --oa-pdf            # dry run: 
 #     `oa-pdf: would download <url> (cc-by, publisher, publishedVersion)` or
 #     `oa-pdf: none — …`; add --apply to create + attach as "Full Text PDF"
 #   --oa-pdf takes ONLY Unpaywall's best open-access PDF. If a download is refused
-#   (403, rate limit, bot wall / captcha / login page) it prints `STOPPED`, stops
-#   all further downloads, and exits 1. Do NOT retry, try another URL, or fetch
+#   (403, rate limit, bot wall / captcha / login page) it prints `STOPPED`, makes
+#   no further attempts at that host in the run (other hosts go on), and exits 1. Do NOT retry, try another URL, or fetch
 #   the paper yourself — report it; the owner files a full-text request instead.
 #   Without --oa-pdf, attach a PDF manually afterwards;
 #   a DOI CrossRef doesn't know is looked up at DataCite (theses, datasets,

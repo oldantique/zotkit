@@ -152,9 +152,9 @@ only when that location has a direct PDF link, downloads it and attaches it as
 Unpaywall only and shows what it would download and from where; it fetches no
 PDF. Nothing else is ever tried: no subscription route, proxy or login, no other
 OA location, no scraping of a landing page. A download that is refused (a 403, a
-rate limit, a bot wall or login page instead of a PDF) is reported and stops
-every further download in that run, with no retry. The items are still created,
-and the exit code is 1. "No open-access copy" is reported, not an error.
+rate limit, a bot wall or login page instead of a PDF) is reported, with no
+retry, and that host gets no further download attempts in the run; downloads
+from other hosts go on. The items are still created, and the exit code is 1. "No open-access copy" is reported, not an error.
 
 **Duplicates**: with arXiv ids or DOIs in hand, the existence check is
 `zotkit find --id <id…>` (or the ids on stdin, one per line). It answers locally,

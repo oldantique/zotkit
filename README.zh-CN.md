@@ -73,7 +73,8 @@ zotkit create --doi 10.1038/nature14539  # 按 DOI 抓元信息:先查 CrossRef,
                                          #   (论文/数据集/软件;不下 PDF;同样可一次给多个 DOI)
 zotkit create --doi <doi> --oa-pdf --apply   # 另外挂上合法开放获取 PDF(经 Unpaywall;
                                          #   只取其 best_oa_location 的 PDF 链接;遇到 403、
-                                         #   验证页或非 PDF 立即停止,不重试、不换路径)
+                                         #   验证页或非 PDF 即停止该网站的下载,不重试、
+                                         #   不换路径;其他网站照常)
 zotkit create --file papers.json         # 从 JSON 批量建条目(默认演练,加 --apply 才执行)
                                          # 建条目默认按 DOI / 标题查重并跳过重复项;
                                          #   演练输出会直接标出「已在库中,key 是哪个」,

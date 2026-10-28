@@ -66,8 +66,8 @@ a release.
   `test_export.py` (_rekey + provenance header + faked HTTP),
   `test_fetch.py` (attachment-key resolution, why-nothing-saved errors + exit 1),
   `test_oa_pdf.py` (`create --oa-pdf`: Unpaywall lookup shapes, the stop rule —
-  one attempt, no retry on 429, a bot wall's HTML is a refusal, the first refusal
-  stops every later download),
+  one attempt, no retry on 429, a bot wall's HTML is a refusal, a refusal ends
+  that host's downloads for the run while other hosts go on),
   `test_attach.py` (show's stored/missing/linked check without a download,
   `attach --title` / `--verify` on both storage branches against faked HTTP),
   `test_fetch_warning.py` (git-worktree detection on tmp repos), and

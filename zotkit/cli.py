@@ -205,18 +205,16 @@ def _pdf_name(d: dict) -> str:
 
 def _oa_attach(zot, new: list[dict]) -> bool:
     """`create --doi --oa-pdf --apply`: for each created item, download the
-    best open-access PDF and attach it. The first refusal (bot wall, captcha,
-    403, non-PDF, network error) stops every further download — no retry, no
-    other route. Returns False if a download was refused."""
+    best open-access PDF and attach it. A refusal (bot wall, captcha, 403,
+    non-PDF, network error) ends all downloads from that host for the run;
+    other hosts go on. No retry, no other route. Returns False if any
+    download was refused."""
     import tempfile
     from .metadata import (MetadataError, download_pdf, oa_describe,
                            oa_extra_line, oa_location)
-    stopped = None
+    refused: set[str] = set()
     for c in new:  # each carries its own DOI: titles can repeat ("Editorial")
         key = c["key"]
-        if stopped:
-            print(f"  oa-pdf {key}: not attempted — stopped after {stopped}")
-            continue
         try:
             loc = oa_location(c.get("DOI") or "")
         except MetadataError as e:
@@ -225,12 +223,15 @@ def _oa_attach(zot, new: list[dict]) -> bool:
         if "none" in loc:
             print(f"  oa-pdf {key}: none — {loc['none']}")
             continue
+        if loc["host"] in refused:
+            print(f"  oa-pdf {key}: not attempted — {loc['host']} refused earlier")
+            continue
         with tempfile.TemporaryDirectory() as td:
             pdf = Path(td) / _pdf_name(c)
             try:
                 download_pdf(loc["url"], pdf, retry=False)
             except MetadataError as e:
-                stopped = f"{loc['host']} refused"
+                refused.add(loc["host"])
                 print(f"error: oa-pdf {key}: STOPPED — {e}. No other route is "
                       "tried; get the full text another way (e.g. a full-text "
                       "request)", file=sys.stderr)
@@ -239,7 +240,7 @@ def _oa_attach(zot, new: list[dict]) -> bool:
         zot.append_extra(key, oa_extra_line(loc))
         print(f"  oa-pdf {key}: attached {info['attachment_key']} from {loc['host']} "
               f"({oa_describe(loc)})")
-    return stopped is None
+    return not refused
 
 
 def _verify(zot, att_key: str, path) -> bool:
@@ -421,8 +422,8 @@ def main(argv=None):
                    help="with --arxiv --apply: skip downloading/attaching the PDF")
     p.add_argument("--oa-pdf", action="store_true",
                    help="with --doi: attach a legal open-access PDF when Unpaywall "
-                        "lists one (dry run shows what it would download; the "
-                        "first refusal stops all further downloads)")
+                        "lists one (dry run shows what it would download; a "
+                        "refusal ends all downloads from that host)")
     p.add_argument("--collection", help="with --arxiv/--doi: file the item here")
     p.add_argument("--tags", help="with --arxiv/--doi: comma-separated tags, "
                                   "e.g. field:ml,status:to-read")

@@ -72,8 +72,9 @@ zotkit cite KEY [KEY...]             # short citation per key (local, read-only)
 zotkit create --arxiv <id|url> ...   # fetch arXiv metadata; --apply attaches PDFs too
 zotkit create --doi <doi> ...        # fetch CrossRef/DataCite metadata (no PDF; attach manually)
 zotkit create --doi <doi> ... --oa-pdf   # + attach the legal open-access PDF via
-                                     #   Unpaywall; the first refusal stops all
-                                     #   downloads (exit 1) — never work around it
+                                     #   Unpaywall; a refusal stops all downloads
+                                     #   from that host (exit 1) — never work
+                                     #   around it
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
                                      # dedup (DOI/title) is the default: the dry run
