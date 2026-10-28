@@ -121,8 +121,7 @@ zotkit backup                            # 全库 JSON 备份(批量操作前必
 | **zotkit**(本仓库) | 无头 Python CLI + 库。哪儿都能跑,不需要开 Zotero 客户端。 |
 | **[zotkit-reader](https://github.com/oldantique/zotkit-reader)** | Zotero 阅读器侧边栏,在你正读的 PDF 旁边嵌入 Codex/Claude 助手。由 [@ChanceSiyuan](https://github.com/ChanceSiyuan) 维护。 |
 
-两者共享名字和理念,但不共享代码:zotkit-reader 可以通过 MCP 调用 zotkit 做全库操作,
-但谁都不要求另一个必须装上。
+两者共享名字和理念,但不共享代码,各自独立可用。
 
 ## 想连文献库一起整理?
 
