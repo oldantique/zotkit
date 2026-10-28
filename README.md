@@ -439,8 +439,7 @@ This project is not affiliated with or endorsed by Zotero.
   yet supported ([#4](https://github.com/oldantique/zotkit/issues/4)).
 - Not planned: arbitrary-URL scraping (translation-server territory), SSRN/CNKI
   scraping, and an overwrite mode for `enrich` — fill-empty-only is the contract.
-- Planned work is tracked as [GitHub issues](https://github.com/oldantique/zotkit/issues),
-  including the MCP server wrapper ([#8](https://github.com/oldantique/zotkit/issues/8)).
+- Planned work is tracked as [GitHub issues](https://github.com/oldantique/zotkit/issues).
 
 ## License
 
