@@ -159,3 +159,4 @@ def test_attachment_lookup_failure_does_not_fail_the_key(capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "  attachments: could not list (" in out and USER_ID not in out
+

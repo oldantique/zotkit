@@ -59,6 +59,9 @@ Copy [`.env.example`](.env.example) to `./.env`, `~/.config/zotkit/env`, or any 
 
 After filling it in, run **`zotkit doctor`** — it validates the config file, API
 access, and attachment storage, and tells you exactly what to fix if anything fails.
+It also warns, without failing, when Zotero's global schema (item types, fields,
+creator types) has moved past the version this zotkit release was verified
+against.
 
 Optionally, copy [`conventions.example.toml`](conventions.example.toml) to
 `conventions.toml` next to your `.env` to define a namespaced tag taxonomy
@@ -90,6 +93,8 @@ zotkit create --arxiv 2401.12345 1706.03762 math/0211159 --apply   # batch: one 
                                             #   request, PDFs politely spaced ≥3 s apart
 zotkit create --doi 10.1038/nature14539     # fetch CrossRef/DataCite metadata (no PDF —
                                             #   usually paywalled; attach manually after)
+zotkit create --doi 10.21468/SciPostPhys.2.1.003 --oa-pdf --apply   # …and attach the
+                                            #   legal open-access PDF, if there is one
 
 zotkit create --file papers.json            # batch from JSON: dry-run preview —
                                             #   flags items already in the library
@@ -135,9 +140,21 @@ batches use one arXiv metadata request and space PDF downloads per arXiv's terms
 of use, so callers (humans or agents) never pace themselves. A bad id fails
 alone, not the batch; the exit code is non-zero only if something failed.
 Fetching metadata from arbitrary web pages is out of scope (zotkit stays a
-daemon-free CLI — no translation-server). CrossRef requests identify themselves
-to the polite pool with a contact address; that should be reachable, so if you
+daemon-free CLI — no translation-server). CrossRef and Unpaywall requests identify
+themselves with a contact address; that should be reachable, so if you
 distribute a tool built on zotkit, set your own via `ZOTKIT_MAILTO`.
+
+**Open-access PDFs** (`create --doi … --oa-pdf`, opt-in): zotkit asks
+[Unpaywall](https://unpaywall.org) for the DOI's best open-access location and,
+only when that location has a direct PDF link, downloads it and attaches it as
+"Full Text PDF". The parent gets an append-only Extra line recording the source:
+`oa-pdf: <license> · <host type> · <version> · <url>`. The dry run looks up
+Unpaywall only and shows what it would download and from where; it fetches no
+PDF. Nothing else is ever tried: no subscription route, proxy or login, no other
+OA location, no scraping of a landing page. A download that is refused (a 403, a
+rate limit, a bot wall or login page instead of a PDF) is reported and stops
+every further download in that run, with no retry. The items are still created,
+and the exit code is 1. "No open-access copy" is reported, not an error.
 
 **Duplicates**: with arXiv ids or DOIs in hand, the existence check is
 `zotkit find --id <id…>` (or the ids on stdin, one per line). It answers locally,
@@ -352,9 +369,15 @@ Instead of `--key`, `--all` runs over every top-level scholarly item and
 `--missing abstract` / `--missing doi` / `--missing abbreviation` (repeatable)
 over just the gaps — batching and arXiv/CrossRef rate limiting stay internal, so
 no pacing or batch-splitting on the caller's side. **`zotkit audit`** is the
-read-only companion: counts and key lists for missing abstracts, missing DOI/arXiv
-id, missing PDF attachments, `abstract-source` stamp hygiene, and journal
-abbreviations (`--json` for agents). An item whose only PDFs are supplementary
+read-only companion: counts and key lists for missing abstracts, missing
+identifiers, missing PDF attachments, `abstract-source` stamp hygiene, and journal
+abbreviations (`--json` for agents). Only paper types are checked (journal
+articles, conference papers, preprints, books and chapters, theses, reports,
+manuscripts, patents, standards). Webpages, blog posts, documents, presentations
+and other types are listed once, under "non-paper items", instead of sitting in
+the missing-abstract/identifier/PDF lists for good, and `enrich --all` skips them.
+An identifier is whatever fits the type: a DOI, an arXiv id, an ISBN, or a patent
+number. An item whose only PDFs are supplementary
 material (Supplementary Information, a Peer Review File, Nature's `…_MOESM1_ESM`,
 Science's `…_sm.pdf`) is listed separately as "only supplementary PDFs", since its
 article PDF is still missing. The check reads the attachment's title, or its

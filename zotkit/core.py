@@ -224,6 +224,12 @@ def _md5_file(p: Path) -> str:
     return h.hexdigest()
 
 
+# Zotero's global schema version (item types, fields, creator types) that
+# zotkit's writes were last verified against. `doctor` warns when the server's
+# is newer. Bump only after re-verifying create / enrich / attach on a temp item.
+SCHEMA_BASELINE = 42
+
+
 class Zot:
     """Unified library interface: search, create, tag, move, attach, fetch, backup."""
 
@@ -399,7 +405,7 @@ class Zot:
             tmpl["collections"] = [ck] if ck else []
             payloads.append(tmpl)
             meta.append({"title": d.get("title"), "collection": d.get("collection"),
-                         "file_path": d.get("file_path")})
+                         "file_path": d.get("file_path"), "DOI": d.get("DOI")})
 
         created, mi = [], iter([m for m in meta if "skipped" not in m])
         for i in range(0, len(payloads), 50):
@@ -439,6 +445,13 @@ class Zot:
         it = self.z.item(item_key)
         kept = [t for t in it["data"].get("tags", []) if not t["tag"].startswith("status:")]
         it["data"]["tags"] = kept + [{"tag": tag}]
+        self.z.update_item(it)
+
+    def append_extra(self, item_key: str, line: str) -> None:
+        """Add one line to an item's Extra; existing lines are never touched."""
+        it = self.z.item(item_key)
+        extra = it["data"].get("extra") or ""
+        it["data"]["extra"] = f"{extra}\n{line}" if extra else line
         self.z.update_item(it)
 
     def move(self, item_key: str, collection: str, *, add: bool = False) -> None:

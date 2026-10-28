@@ -182,6 +182,66 @@ def _attachment_rows(zot, item) -> list[dict] | str:
         return _short_api_error(e)
 
 
+def _oa_dry(d: dict) -> None:
+    """`create --doi --oa-pdf` dry run: Unpaywall metadata only, no PDF."""
+    from .metadata import MetadataError, oa_describe, oa_location
+    try:
+        loc = oa_location(d["DOI"])
+    except MetadataError as e:
+        print(f"  oa-pdf: lookup failed — {e}")
+        return
+    if "none" in loc:
+        print(f"  oa-pdf: none — {loc['none']}")
+    else:
+        print(f"  oa-pdf: would download {loc['url']} ({oa_describe(loc)})")
+
+
+def _pdf_name(d: dict) -> str:
+    """'<Author> - <year> - <title>.pdf', the way Zotero names files."""
+    parts = [_first_author(d), _year(d), str(d.get("title") or "")[:60]]
+    name = " - ".join(p for p in parts if p) or "article"
+    return re.sub(r'[\\/:*?"<>|\s]+', " ", name).strip() + ".pdf"
+
+
+def _oa_attach(zot, new: list[dict]) -> bool:
+    """`create --doi --oa-pdf --apply`: for each created item, download the
+    best open-access PDF and attach it. The first refusal (bot wall, captcha,
+    403, non-PDF, network error) stops every further download — no retry, no
+    other route. Returns False if a download was refused."""
+    import tempfile
+    from .metadata import (MetadataError, download_pdf, oa_describe,
+                           oa_extra_line, oa_location)
+    stopped = None
+    for c in new:  # each carries its own DOI: titles can repeat ("Editorial")
+        key = c["key"]
+        if stopped:
+            print(f"  oa-pdf {key}: not attempted — stopped after {stopped}")
+            continue
+        try:
+            loc = oa_location(c.get("DOI") or "")
+        except MetadataError as e:
+            print(f"  oa-pdf {key}: lookup failed — {e}")
+            continue
+        if "none" in loc:
+            print(f"  oa-pdf {key}: none — {loc['none']}")
+            continue
+        with tempfile.TemporaryDirectory() as td:
+            pdf = Path(td) / _pdf_name(c)
+            try:
+                download_pdf(loc["url"], pdf, retry=False)
+            except MetadataError as e:
+                stopped = f"{loc['host']} refused"
+                print(f"error: oa-pdf {key}: STOPPED — {e}. No other route is "
+                      "tried; get the full text another way (e.g. a full-text "
+                      "request)", file=sys.stderr)
+                continue
+            info = zot.attach(key, pdf, title="Full Text PDF")
+        zot.append_extra(key, oa_extra_line(loc))
+        print(f"  oa-pdf {key}: attached {info['attachment_key']} from {loc['host']} "
+              f"({oa_describe(loc)})")
+    return stopped is None
+
+
 def _verify(zot, att_key: str, path) -> bool:
     """`attach --verify`: True when the stored copy matches the local file."""
     why = zot.verify_attachment(att_key, path) if att_key else "attachment key unknown"
@@ -274,8 +334,26 @@ def _doctor() -> int:
             return 1
     else:
         print("✓ attachments: Zotero Storage mode (no WEBDAV_* configured)")
+    print(_schema_check())
     print("all good ✓")
     return 0
+
+
+def _schema_check() -> str:
+    """doctor's schema line: a warning when Zotero's global schema has moved
+    past the version zotkit was verified against — never a failure."""
+    import httpx
+    from .core import SCHEMA_BASELINE
+    try:
+        r = httpx.get("https://api.zotero.org/schema", timeout=30)
+        version = int(r.json()["version"])
+    except Exception as e:
+        return f"⚠ Zotero schema: could not check ({type(e).__name__})"
+    if version > SCHEMA_BASELINE:
+        return (f"⚠ Zotero schema: version {version} is newer than the {SCHEMA_BASELINE} "
+                "zotkit was verified against — new or renamed fields may be dropped "
+                "or rejected on write; check the zotkit releases for an update")
+    return f"✓ Zotero schema: version {version} (verified baseline {SCHEMA_BASELINE})"
 
 
 def main(argv=None):
@@ -335,6 +413,10 @@ def main(argv=None):
     p.add_argument("--loose-tags", action="store_true", help="warn instead of error on tag violations")
     p.add_argument("--no-pdf", action="store_true",
                    help="with --arxiv --apply: skip downloading/attaching the PDF")
+    p.add_argument("--oa-pdf", action="store_true",
+                   help="with --doi: attach a legal open-access PDF when Unpaywall "
+                        "lists one (dry run shows what it would download; the "
+                        "first refusal stops all further downloads)")
     p.add_argument("--collection", help="with --arxiv/--doi: file the item here")
     p.add_argument("--tags", help="with --arxiv/--doi: comma-separated tags, "
                                   "e.g. field:ml,status:to-read")
@@ -472,6 +554,9 @@ def main(argv=None):
         return 1 if failed else 0
 
     elif a.cmd == "create":
+        if a.oa_pdf and not a.doi:
+            print("error: --oa-pdf works with --doi only", file=sys.stderr)
+            return 1
         pdfs: dict[str, tuple[str, str]] = {}  # title -> (arXiv id, pdf url)
         failures: list[tuple[str, str]] = []   # (identifier, why)
         if a.file:
@@ -532,6 +617,8 @@ def main(argv=None):
                         print("  !! " + "; ".join(problems))
                     if dup:
                         print(f"  {dup}")
+                    elif a.oa_pdf:
+                        _oa_dry(d)
                     continue
                 flag = ("  !! " + "; ".join(problems)) if problems else ""
                 print(f"  [dry] {d.get('collection')} | {d.get('title','')[:60]}{flag}")
@@ -585,7 +672,10 @@ def main(argv=None):
                         continue
                     info = zot.attach(key, pdf)
                 print(f"attached {info['filename']} ({info['storage']})")
-        if a.doi and new:
+        if a.oa_pdf and new:
+            if not _oa_attach(zot, new):
+                failures.append(("oa-pdf", "an open-access download was refused"))
+        elif a.doi and new:
             hint = new[0]["key"] if len(new) == 1 else "<key>"
             print("no PDF downloaded (publisher PDFs are usually paywalled) — "
                   f"attach one with: zotkit attach --key {hint} --file <file>")

@@ -121,7 +121,15 @@ zotkit create --doi doi1 doi2 --apply                   # DOIs batch the same wa
 #     !! already in library as AB12CD34 — --apply will skip it (use --no-dedup to force)
 #   Do NOT run one `find --any` per candidate. That loop is what made agents
 #   time out.
-#   DOI mode never downloads a PDF (paywalls) — attach one manually afterwards;
+#   DOI mode downloads no PDF unless you add --oa-pdf:
+zotkit create --doi 10.21468/SciPostPhys.2.1.003 --oa-pdf            # dry run: shows
+#     `oa-pdf: would download <url> (cc-by, publisher, publishedVersion)` or
+#     `oa-pdf: none — …`; add --apply to create + attach as "Full Text PDF"
+#   --oa-pdf takes ONLY Unpaywall's best open-access PDF. If a download is refused
+#   (403, rate limit, bot wall / captcha / login page) it prints `STOPPED`, stops
+#   all further downloads, and exits 1. Do NOT retry, try another URL, or fetch
+#   the paper yourself — report it; the owner files a full-text request instead.
+#   Without --oa-pdf, attach a PDF manually afterwards;
 #   a DOI CrossRef doesn't know is looked up at DataCite (theses, datasets,
 #   software); unknown types, and DOIs in neither registry (e.g. CNKI), error
 #   out: fall back to --file for those. arXiv DOIs (10.48550/arXiv.*) → use --arxiv
@@ -162,6 +170,9 @@ zotkit enrich --key AB12CD34 --doi 10.1103/x.y --rebuild-record   # same, when a
 zotkit audit                                   # read-only report: missing abstracts /
 zotkit audit --json                            #   DOIs / PDFs, abstract-source hygiene,
                                                #   journal abbreviations
+#   "non-paper items": webpages, blog posts, documents, presentations… — listed,
+#   not checked for abstract/identifier/PDF; don't try to "fix" them. A patent's
+#   patentNumber and a book's/thesis's ISBN count as identifiers.
 #   "only supplementary PDFs": the item has SI / peer-review PDFs but no article
 #   PDF — treat it like missing a PDF. If an article PDF was misjudged (its title
 #   looks like SI), the owner can give the attachment a plain title ("Full Text PDF").

@@ -28,6 +28,7 @@ Create the credentials file from [.env.example](.env.example) at `./.env`,
 
 After writing the .env, run `zotkit doctor` — it validates config, API access, and
 attachment storage, and says what to fix. Don't proceed until it prints "all good".
+A "⚠ Zotero schema" line is a warning, not a failure: mention it to the user.
 
 Optionally set up tag conventions from
 [conventions.example.toml](conventions.example.toml) — do this WITH the user; read
@@ -69,6 +70,9 @@ zotkit cite KEY [KEY...]             # short citation per key (local, read-only)
                                      #   "Laughlin, Phys. Rev. Lett. 50, 1395 (1983)"
 zotkit create --arxiv <id|url> ...   # fetch arXiv metadata; --apply attaches PDFs too
 zotkit create --doi <doi> ...        # fetch CrossRef/DataCite metadata (no PDF; attach manually)
+zotkit create --doi <doi> ... --oa-pdf   # + attach the legal open-access PDF via
+                                     #   Unpaywall; the first refusal stops all
+                                     #   downloads (exit 1) — never work around it
 zotkit create --file x.json          # batch from JSON
                                      # all three: dry-run; add --apply to execute
                                      # dedup (DOI/title) is the default: the dry run
@@ -86,6 +90,8 @@ zotkit enrich --missing abstract|doi|abbreviation | --all
 zotkit audit [--json]                # read-only library health report; items
                                      #   whose only PDFs are SI / peer-review files
                                      #   get their own bucket (article PDF missing);
+                                     #   non-paper types (webpage, blogPost, …) are
+                                     #   listed once as "non-paper", not as gaps;
                                      #   journal
                                      #   abbreviations: "registered" fixes vs
                                      #   "candidate (rule-derived)", plus every

@@ -71,6 +71,9 @@ zotkit create --arxiv id1 id2 id3 --apply  # 批量:元信息合并一次请求,
                                          #   PDF 下载自动按 arXiv 限速间隔
 zotkit create --doi 10.1038/nature14539  # 按 DOI 抓元信息:先查 CrossRef,没有再查 DataCite
                                          #   (论文/数据集/软件;不下 PDF;同样可一次给多个 DOI)
+zotkit create --doi <doi> --oa-pdf --apply   # 另外挂上合法开放获取 PDF(经 Unpaywall;
+                                         #   只取其 best_oa_location 的 PDF 链接;遇到 403、
+                                         #   验证页或非 PDF 立即停止,不重试、不换路径)
 zotkit create --file papers.json         # 从 JSON 批量建条目(默认演练,加 --apply 才执行)
                                          # 建条目默认按 DOI / 标题查重并跳过重复项;
                                          #   演练输出会直接标出「已在库中,key 是哪个」,
@@ -86,7 +89,8 @@ zotkit enrich --missing abstract --apply # 批量:只跑缺摘要的条目(还�
                                          #   / abbreviation / --all;限速在内部,
                                          #   调用方无需分批睡眠)
 zotkit audit                             # 只读体检报告:缺摘要/缺 DOI/缺 PDF
-                                         #   (只有补充材料 PDF 的条目单独列出)/
+                                         #   (只有补充材料 PDF 的条目单独列出;网页、博客、
+                                         #   文档、演示等非论文条目只列一次,不计入缺项)/
                                          #   abstract-source 戳的健康度/期刊缩写
                                          #   (--json 给 agent)
                                          # 期刊缩写一律存带点的 ISO 4。只有登记形式

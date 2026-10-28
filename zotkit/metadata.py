@@ -28,9 +28,10 @@ import httpx
 
 from . import __version__, journals
 
-# CrossRef's polite pool wants a reachable contact; $ZOTKIT_MAILTO overrides
-# the default (distributors of zotkit-based tools: please set your own).
-CONTACT = f"mailto:{os.environ.get('ZOTKIT_MAILTO', 'ccmuuc@gmail.com')}"
+# CrossRef's polite pool and Unpaywall want a reachable contact; $ZOTKIT_MAILTO
+# overrides the default (distributors of zotkit-based tools: set your own).
+MAILTO = os.environ.get('ZOTKIT_MAILTO', 'ccmuuc@gmail.com')
+CONTACT = f"mailto:{MAILTO}"
 USER_AGENT = f"zotkit/{__version__} (https://github.com/oldantique/zotkit; {CONTACT})"
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
@@ -103,11 +104,14 @@ class MetadataError(RuntimeError):
 # minimum seconds between requests to the same host (arXiv terms of use: 3 s,
 # covering the export API and PDF downloads; CrossRef polite pool: 1 s)
 _MIN_INTERVAL = {"export.arxiv.org": 3.0, "arxiv.org": 3.0, "api.crossref.org": 1.0,
-                 "api.datacite.org": 1.0}
+                 "api.datacite.org": 1.0, "api.unpaywall.org": 1.0}
 _next_ok: dict[str, float] = {}
 
 
-def _get(url: str, **kw) -> httpx.Response:
+def _get(url: str, *, retry: bool = True, **kw) -> httpx.Response:
+    """GET with per-host pacing. A 429 is retried once after Retry-After,
+    unless `retry` is off: an open-access download must stop at the first
+    refusal, so it sees the 429 itself."""
     host = httpx.URL(url).host
     wait = _next_ok.get(host, 0.0) - time.monotonic()
     if wait > 0:
@@ -115,7 +119,7 @@ def _get(url: str, **kw) -> httpx.Response:
     try:
         r = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=30,
                       follow_redirects=True, **kw)
-        if r.status_code == 429:  # rate-limited: honor Retry-After once, then give up
+        if r.status_code == 429 and retry:  # honor Retry-After once, then give up
             wait = min(int(r.headers.get("retry-after") or 5), 30)
             time.sleep(wait)
             r = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=30,
@@ -385,9 +389,10 @@ def fetch_arxiv(id_or_url: str) -> tuple[dict, str]:
     return res["item"], res["pdf_url"]
 
 
-def download_pdf(url: str, dest) -> None:
-    """Download a PDF to `dest`, refusing anything that isn't actually a PDF."""
-    r = _get(url)
+def download_pdf(url: str, dest, *, retry: bool = True) -> None:
+    """Download a PDF to `dest`, refusing anything that isn't actually a PDF
+    (a bot wall or login page answers 200 with HTML)."""
+    r = _get(url, retry=retry)
     if r.status_code != 200:
         raise MetadataError(f"PDF download failed: HTTP {r.status_code} from {url}")
     if not r.content.startswith(b"%PDF"):
@@ -395,6 +400,46 @@ def download_pdf(url: str, dest) -> None:
                             f"(got {r.headers.get('content-type', 'unknown type')})")
     with open(dest, "wb") as f:
         f.write(r.content)
+
+
+# ---------- open-access PDFs (Unpaywall) ----------
+# Only Unpaywall's best_oa_location, only its direct PDF link, one attempt.
+# The caller stops all further downloads at the first refusal (owner's rule):
+# no retry, no other location, no landing-page scraping, no browser UA.
+
+def oa_location(doi: str) -> dict:
+    """→ {"url", "host", "license", "host_type", "version"} for the DOI's best
+    open-access PDF, or {"none": why} when there is no legal OA PDF to get."""
+    r = _get(f"https://api.unpaywall.org/v2/{quote(doi, safe='/')}",
+             params={"email": MAILTO})
+    if r.status_code == 422:
+        raise MetadataError("Unpaywall wants a real contact address — set "
+                            "ZOTKIT_MAILTO to your email")
+    if r.status_code == 404:
+        return {"none": "Unpaywall has no record of this DOI"}
+    if r.status_code != 200:
+        raise MetadataError(f"Unpaywall returned HTTP {r.status_code} for '{doi}'")
+    j = r.json()
+    best = j.get("best_oa_location") or {}
+    if not j.get("is_oa") or not best:
+        return {"none": "no open-access copy"}
+    if not best.get("url_for_pdf"):
+        page = best.get("url_for_landing_page") or best.get("url") or "?"
+        return {"none": f"the open-access copy is a web page, not a PDF ({page})"}
+    return {"url": best["url_for_pdf"], "host": httpx.URL(best["url_for_pdf"]).host,
+            "license": best.get("license") or "unknown",
+            "host_type": best.get("host_type") or "unknown",
+            "version": best.get("version") or "unknown"}
+
+
+def oa_describe(loc: dict) -> str:
+    return f"{loc['license']}, {loc['host_type']}, {loc['version']}"
+
+
+def oa_extra_line(loc: dict) -> str:
+    """The append-only Extra line recording where an attached OA PDF came from."""
+    return (f"oa-pdf: {loc['license']} · {loc['host_type']} · {loc['version']} · "
+            f"{loc['url']}")
 
 
 # ---------- CrossRef DOI ----------

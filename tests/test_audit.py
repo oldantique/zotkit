@@ -162,3 +162,33 @@ def test_only_supplementary_bucket():
     b = audit(zot)["buckets"]
     assert b["only-supplementary-pdf"] == ["SIONLY11"]
     assert b["missing-pdf"] == ["NOPDF111"]          # meaning unchanged
+
+
+# ---------- non-paper types and type-appropriate identifiers (#7) ----------
+
+def test_non_paper_items_get_their_own_bucket_only():
+    tops = [_top("WEB11111", itype="webpage"), _top("BLOG1111", itype="blogPost"),
+            _top("DOC11111", itype="document"), _top("TALK1111", itype="presentation"),
+            _top("PAPER111", doi="10.1/a")]
+    zot = types.SimpleNamespace(
+        listing=lambda kind: list({"top": tops, "attachments": []}[kind]))
+    rep = audit(zot)
+    assert rep["buckets"]["non-paper"] == ["WEB11111", "BLOG1111", "DOC11111", "TALK1111"]
+    assert rep["keys"] == ["PAPER111"]          # enrich --all's work set
+    assert rep["total"] == 1
+    for b, ks in rep["buckets"].items():
+        if b != "non-paper":
+            assert not set(ks) & {"WEB11111", "BLOG1111", "DOC11111", "TALK1111"}, b
+
+
+def test_type_appropriate_identifiers():
+    tops = [dict(_top("PAT11111", itype="patent"), **{}),
+            _top("BOOK1111", itype="book"), _top("THES1111", itype="thesis"),
+            _top("THES2222", itype="thesis")]
+    tops[0]["data"]["patentNumber"] = "US 1,234,567 B2"
+    tops[1]["data"]["ISBN"] = "978-0-00-000000-2"
+    tops[2]["data"]["ISBN"] = "978-0-00-000000-3"
+    zot = types.SimpleNamespace(
+        listing=lambda kind: list({"top": tops, "attachments": []}[kind]))
+    # a thesis with no identifier of any kind is still reported
+    assert audit(zot)["buckets"]["missing-identifier"] == ["THES2222"]

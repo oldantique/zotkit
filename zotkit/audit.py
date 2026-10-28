@@ -1,5 +1,9 @@
 """zotkit.audit — read-only health report over top-level scholarly items.
 
+Only paper types are checked for abstract / identifier / PDF; webpages, blog
+posts, documents, presentations and the like are listed in their own
+`non-paper` bucket instead, so the paper buckets hold only what can be fixed.
+
 No writes, no network beyond the Zotero API. One full item sweep plus one
 attachment sweep (a per-item /children walk would be one request per item);
 `enrich --all` / `--missing` reuse the same report to pick their work set.
@@ -14,6 +18,11 @@ from .enrich import _STAMP, _find_arxiv_id
 
 # top-level entries that aren't scholarly records
 _NON_SCHOLARLY = {"attachment", "note", "annotation"}
+
+# the types audited for abstract / identifier / PDF (an allow-list: any other
+# type goes to the non-paper bucket instead of sitting in those for good)
+PAPER_TYPES = {"journalArticle", "conferencePaper", "preprint", "book", "bookSection",
+               "thesis", "report", "manuscript", "patent", "standard"}
 
 # a supplementary PDF's title or filename: "Supplementary Information",
 # "Supplemental_Material", "supp_pub", "Peer Review File", Nature's
@@ -36,13 +45,21 @@ def is_supplementary(att: dict) -> bool:
 # bucket key -> human label, in report order
 BUCKETS = {
     "missing-abstract": "missing abstract",
-    "missing-identifier": "missing DOI / arXiv id",
+    "missing-identifier": "missing identifier (DOI / arXiv id / ISBN / patent number)",
     "missing-pdf": "missing PDF attachment",
     "only-supplementary-pdf": "only supplementary PDFs (article PDF missing)",
     "unstamped-abstract": "abstract without abstract-source stamp",
     "stale-stamp": "abstract-source stamp but no abstract",
     "journal-abbreviation": "journal abbreviation to fix (enrich can)",
+    "non-paper": "non-paper items (not checked for abstract / identifier / PDF)",
 }
+
+
+def has_identifier(d: dict) -> bool:
+    """A DOI, an arXiv id, an ISBN (books, theses, reports, …) or a patent
+    number: whatever identifies an item of its type."""
+    return any((d.get(f) or "").strip() for f in ("DOI", "ISBN", "patentNumber")) \
+        or bool(_find_arxiv_id(d))
 
 
 def audit(zot) -> dict[str, Any]:
@@ -71,12 +88,15 @@ def audit(zot) -> dict[str, Any]:
         if d.get("itemType") in _NON_SCHOLARLY:
             continue
         key = it["key"]
+        if d.get("itemType") not in PAPER_TYPES:
+            buckets["non-paper"].append(key)
+            continue
         keys.append(key)
         abstract = d.get("abstractNote", "")
         stamped = bool(_STAMP.search(d.get("extra", "")))
         if not abstract:
             buckets["missing-abstract"].append(key)
-        if not (d.get("DOI") or "").strip() and not _find_arxiv_id(d):
+        if not has_identifier(d):
             buckets["missing-identifier"].append(key)
         if key not in pdf_parents:
             buckets["missing-pdf"].append(key)

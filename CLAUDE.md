@@ -38,6 +38,11 @@ README — keep docs and code consistent with it.
    the next patch version, and mark the failed release's body as not on PyPI.
 7. Close the GitHub issues the release shipped, with a comment naming the version.
 
+`SCHEMA_BASELINE` (`zotkit/core.py`) is the Zotero global-schema version the
+writes were last verified against; `doctor` warns past it. When it warns, verify
+create / enrich / attach on a temp item against the new schema, then bump it in
+a release.
+
 ## Tests
 
 - `tests/` is the offline pytest suite, filed **by module, never by release**
@@ -46,7 +51,8 @@ README — keep docs and code consistent with it.
   + `fetch_arxiv_batch` against a canned feed + the CrossRef → DataCite fallback
   and its type/field mapping), `test_enrich.py` (`plan_enrich`
   VoR gate, the `--doi` same-paper gate, the "source has no abstract" note + its
-  status invariant, `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing, supplementary-PDF titles from real libraries),
+  status invariant, `set_abstract` guard/force/stamp matrix), `test_audit.py` (bucketing, non-paper types, type-appropriate identifiers,
+  supplementary-PDF titles from real libraries),
   `test_find.py` (--any/--abstract matching, hit annotations, snippet shape),
   `test_lookup.py` (`find --id`: id parsing, every place an item carries an
   identifier, one line per input), `test_journals.py` (ISO 4 normaliser: source
@@ -56,8 +62,12 @@ README — keep docs and code consistent with it.
   corrupt-file and disabled fallbacks),
   `test_dedup.py` (dedup_maps/duplicate_key + skipped-meta keys),
   `test_show.py` (one-line format, attachment lines, sanitized errors, --verbose),
+  `test_doctor.py` (schema version vs `SCHEMA_BASELINE`: ok / warn / unreachable),
   `test_export.py` (_rekey + provenance header + faked HTTP),
   `test_fetch.py` (attachment-key resolution, why-nothing-saved errors + exit 1),
+  `test_oa_pdf.py` (`create --oa-pdf`: Unpaywall lookup shapes, the stop rule —
+  one attempt, no retry on 429, a bot wall's HTML is a refusal, the first refusal
+  stops every later download),
   `test_attach.py` (show's stored/missing/linked check without a download,
   `attach --title` / `--verify` on both storage branches against faked HTTP),
   `test_fetch_warning.py` (git-worktree detection on tmp repos), and
